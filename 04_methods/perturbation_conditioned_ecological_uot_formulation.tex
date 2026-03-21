@@ -1,0 +1,807 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm,mathtools,bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!50!black,
+  citecolor=blue!50!black,
+  urlcolor=blue!50!black
+}
+
+\setlist[itemize]{topsep=4pt,itemsep=2pt,leftmargin=1.6em}
+\setlist[enumerate]{topsep=4pt,itemsep=2pt,leftmargin=1.8em}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\G}{\mathcal{G}}
+\newcommand{\1}{\mathbf{1}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\Tzero}{T_0}
+\newcommand{\Pfour}{\mathrm{P4}}
+\newcommand{\Psixty}{\mathrm{P60}}
+\newcommand{\KL}{\mathrm{KL}}
+\newcommand{\Sink}{\mathrm{Sink}_{\varepsilon}}
+\DeclareMathOperator{\DirMult}{DirMult}
+\DeclareMathOperator{\diag}{diag}
+\DeclareMathOperator{\argmin}{argmin}
+\DeclareMathOperator{\supp}{supp}
+
+\theoremstyle{plain}
+\newtheorem{proposition}{Proposition}
+\newtheorem{remark}{Remark}
+
+\title{Perturbation-Conditioned Ecological Unbalanced Transport Formulation for Longitudinal Perturb-seq}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note gives a self-contained formulation of a perturbation-conditioned ecological unbalanced transport model for longitudinal Perturb-seq with asymmetric observations. The experimental design motivates two coupled but non-identical components: an abundance model using matched pre-injection library measurements at $\Tzero$, and a state-transport model using guide-labeled single-cell transcriptomic snapshots at $\Pfour$ and $\Psixty$. We introduce the full absolute population density, derive the induced equations for abundance and conditional state densities, show how the relative-abundance dynamics reduce to a replicator equation, and then incorporate ecological frequency dependence through a low-rank programme-level payoff acting primarily in the growth channel. The document is written pedagogically: every major quantity is defined explicitly, each equation is interpreted in words, and the modelling choices are justified from basic principles before optional extensions are introduced.
+\end{abstract}
+
+\tableofcontents
+
+\section{Introduction and problem statement}
+
+\subsection{What problem is being modelled?}
+
+We consider a longitudinal Perturb-seq setting in which the available measurements are not symmetric across time. At the pre-injection stage $\Tzero$, we observe matched guide-library composition, typically as bulk guide counts or proportions. At later time points $\Pfour$ and $\Psixty$, we observe guide-labeled single-cell transcriptomic snapshots. Thus, the data contain
+\begin{itemize}
+    \item an \emph{exposure measurement} at $\Tzero$ that tells us how much of each perturbation entered the experiment, and
+    \item \emph{state-resolved single-cell measurements} at $\Pfour$ and $\Psixty$ that tell us which transcriptomic states are occupied by cells carrying each perturbation.
+\end{itemize}
+
+This distinction matters immediately. Because single-cell RNA sequencing is destructive, we never observe the same cell twice. Therefore, the temporal problem is fundamentally a \emph{distributional} problem: one must explain how a population of cells observed at one time gives rise to a later population observed at another time. This is precisely the setting in which transport-based formulations are natural.
+
+At the same time, simple mass-preserving transport is not sufficient. Different perturbations can expand, shrink, or disappear over time. In biological terms, cell populations proliferate, die, self-renew, differentiate, or lose competitive fitness. Hence, the relevant transport problem is \emph{unbalanced}: mass is allowed to change.
+
+Finally, the biological reading of the system suggests that perturbation fitness is not purely intrinsic. A perturbation can be favored or disfavored depending on the surrounding population composition and on mediator variables such as inflammatory programmes or microenvironmental context. For that reason, it is useful to augment transport with an \emph{ecological} or \emph{frequency-dependent} selection term.
+
+\subsection{Why the formulation must be asymmetric}
+
+A common first impulse is to write one state-space dynamical system from $\Tzero$ to $\Pfour$ to $\Psixty$. That would be appropriate only if transcriptomic cell states were observed at all three time points. Here they are not. The pre-injection time point $\Tzero$ provides only guide abundance information, not transcriptomic state measurements. Therefore, the clean formulation is:
+\begin{enumerate}
+    \item abundance dynamics from $\Tzero \to \Pfour \to \Psixty$;
+    \item state transport only from $\Pfour \to \Psixty$.
+\end{enumerate}
+
+This does \emph{not} make the model less joint. It remains joint because the same perturbation-conditioned quantities influence both abundance change and transcriptomic redistribution. What changes is that the jointness is \emph{asymmetric}: abundance is modelled on the full interval, while state transport is only imposed where transcriptomic states are actually observed.
+
+\subsection{High-level modelling goal}
+
+The goal is to learn a perturbation-conditioned dynamical system that explains, at the same time,
+\begin{itemize}
+    \item which perturbations become enriched or depleted relative to the matched input library,
+    \item how cells move in latent transcriptomic space from $\Pfour$ to $\Psixty$ under each perturbation,
+    \item how selection reshapes the internal distribution of states within each perturbation, and
+    \item how the ecological composition of the full population modulates perturbation fitness.
+\end{itemize}
+
+The core idea is that abundance change and state redistribution should not be estimated as unrelated post hoc summaries. Instead, both should be consequences of the same perturbation-conditioned dynamical law.
+
+\section{Basic mathematical objects and notation}
+
+\subsection{Indices, spaces, and times}
+
+We write
+\begin{itemize}
+    \item $g \in \G$ for a perturbation index. In the main formulation, $g$ is best interpreted at the \emph{gene} level, with sgRNAs treated as technical or hierarchical replicates of the targeted gene.
+    \item $x \in \R^d$ for a latent transcriptomic state. In practice, $x$ can be obtained from PCA, a variational latent space, or another low-dimensional representation of the single-cell transcriptome.
+    \item $t$ for continuous time. We regard the state-resolved interval as $t \in [4,60]$, corresponding to $\Pfour$ and $\Psixty$.
+\end{itemize}
+
+We will also use $u \in \{4,60\}$ when writing discrete observation models at the measured time points.
+
+\subsection{Population-level decomposition}
+
+The cleanest way to formulate the model is to begin with the \emph{absolute perturbation-specific state density}
+\begin{equation}
+\rho_g(x,t) \ge 0,
+\end{equation}
+which represents the amount of population mass carried by perturbation $g$ near latent state $x$ at time $t$.
+
+From $\rho_g$, define the \emph{absolute abundance}
+\begin{equation}
+ n_g(t) = \int_{\R^d} \rho_g(x,t)\,\dd x,
+ \label{eq:abs_abundance}
+\end{equation}
+which is the total mass or effective population size of perturbation $g$.
+
+Next define the \emph{conditional state density within perturbation $g$}
+\begin{equation}
+ p_g(x,t) = \frac{\rho_g(x,t)}{n_g(t)},
+ \qquad \int_{\R^d} p_g(x,t)\,\dd x = 1.
+ \label{eq:conditional_density}
+\end{equation}
+This quantity describes the \emph{shape} of the state distribution for perturbation $g$, independent of how many cells of that perturbation are present overall.
+
+Finally define the \emph{relative abundance}
+\begin{equation}
+ f_g(t) = \frac{n_g(t)}{\sum_{h\in\G} n_h(t)}.
+ \label{eq:relative_abundance}
+\end{equation}
+This is the perturbation frequency, namely the fraction of all perturbed cells that belong to perturbation $g$.
+
+Combining these definitions gives
+\begin{equation}
+\rho_g(x,t) = n_g(t)\,p_g(x,t),
+\qquad
+n_g(t) = N(t)f_g(t),
+\qquad
+N(t)=\sum_{h\in\G} n_h(t).
+\label{eq:rho_factorization}
+\end{equation}
+
+This decomposition is conceptually central:
+\begin{itemize}
+    \item $n_g(t)$ tells us how much of perturbation $g$ is present in total,
+    \item $p_g(x,t)$ tells us where that perturbation lives in state space,
+    \item $f_g(t)$ tells us how common that perturbation is relative to all others,
+    \item $\rho_g(x,t)$ combines abundance and state composition.
+\end{itemize}
+
+\subsection{A notation table}
+
+\begin{center}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.20\linewidth} >{\raggedright\arraybackslash}p{0.72\linewidth}}
+\toprule
+Symbol & Meaning \\
+\midrule
+$\rho_g(x,t)$ & absolute perturbation-specific state density \\
+$n_g(t)$ & absolute abundance of perturbation $g$ \\
+$p_g(x,t)$ & conditional state density within perturbation $g$ \\
+$f_g(t)$ & relative abundance of perturbation $g$ \\
+$v_g(x,t)$ & perturbation-conditioned drift field in latent state space \\
+$\sigma$ & diffusion scale (possibly replaced by state-dependent diffusion in extensions) \\
+$r_g(x,t)$ & local fitness or local growth/depletion field \\
+$\bar r_g(t)$ & perturbation-averaged fitness, obtained by integrating $r_g$ against $p_g$ \\
+$\ell_{g,b}$ & matched $\Tzero$ library frequency of perturbation $g$ in batch $b$ \\
+$\zeta_g(t)$ & log-enrichment relative to matched input library \\
+$\eta(x)$ & soft assignment of state $x$ to ecological programmes \\
+$q(t)$ & population-level ecological composition \\
+$m_t$ & mediator vector summarizing contextual variables (for example programme scores or microenvironmental covariates) \\
+$a_g$ & low-dimensional embedding of perturbation $g$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\section{State-resolved dynamics on the interval $[4,60]$}
+
+\subsection{Full absolute-density equation}
+
+On the state-resolved interval $t \in [4,60]$, we model the absolute density $\rho_g$ by the transport--diffusion--growth equation
+\begin{equation}
+\partial_t \rho_g(x,t)
++
+\nabla_x\cdot\big(\rho_g(x,t)\,v_g(x,t)\big)
+=
+\frac{\sigma^2}{2}\,\Delta_x \rho_g(x,t)
++
+r_g(x,t)\rho_g(x,t).
+\label{eq:full_pde}
+\end{equation}
+
+This single equation is the backbone of the formulation.
+
+\paragraph{Interpretation of each term.}
+\begin{itemize}
+    \item $\partial_t\rho_g$ measures how the perturbation-specific population density changes over time.
+    \item $\nabla_x\cdot(\rho_g v_g)$ is the transport term. The drift field $v_g(x,t)$ determines the directed motion of cells in latent state space.
+    \item $\frac{\sigma^2}{2}\Delta_x \rho_g$ is the diffusion term. It captures stochastic spread or unresolved variability in cell-state dynamics.
+    \item $r_g(x,t)\rho_g$ is the local growth or depletion term. Where $r_g$ is positive, local mass expands; where $r_g$ is negative, local mass shrinks.
+\end{itemize}
+
+\paragraph{Why this is an unbalanced transport model.}
+Classical mass-preserving transport would omit the reaction term $r_g\rho_g$ and require total mass to be conserved. Here we intentionally allow mass to change, because perturbations can alter net population size through proliferation, survival, depletion, or competitive disadvantage. Thus, \eqref{eq:full_pde} is an \emph{unbalanced} transport model.
+
+\subsection{Boundary information for the state equation}
+
+Because transcriptomic states are observed only at $\Pfour$ and $\Psixty$, the initial condition for state transport is taken from the empirical $\Pfour$ guide-resolved single-cell distribution:
+\begin{equation}
+ p_g(\cdot,4)=\widehat p_g^{(4)}(\cdot),
+ \label{eq:p4_boundary}
+\end{equation}
+where $\widehat p_g^{(4)}$ denotes the empirical or smoothed guide-conditioned density estimated from the $\Pfour$ data.
+
+No transcriptomic boundary condition is imposed at $\Tzero$. This is not a modelling omission; it is a reflection of the experimental design.
+
+\section{Deriving abundance and within-perturbation state dynamics}
+
+The full PDE in \eqref{eq:full_pde} is useful, but it hides two qualitatively different phenomena:
+\begin{enumerate}
+    \item the overall expansion or depletion of perturbation $g$;
+    \item the internal reshaping of the state distribution within perturbation $g$.
+\end{enumerate}
+
+The factorization $\rho_g=n_gp_g$ separates these phenomena cleanly.
+
+\subsection{Guide-averaged fitness}
+
+Define the perturbation-averaged fitness
+\begin{equation}
+\bar r_g(t) = \int_{\R^d} r_g(x,t) p_g(x,t)\,\dd x.
+\label{eq:avg_fitness}
+\end{equation}
+This is the average of the local fitness field $r_g(x,t)$ across the current state composition of perturbation $g$.
+
+\subsection{Absolute abundance dynamics}
+
+Integrating \eqref{eq:full_pde} over $x$ and assuming standard no-flux boundary conditions or sufficiently fast decay at infinity yields the abundance equation.
+
+\begin{proposition}[Absolute abundance evolution]
+Under the factorization $\rho_g=n_gp_g$ and suitable boundary conditions,
+\begin{equation}
+\dot n_g(t)=n_g(t)\,\bar r_g(t).
+\label{eq:ng_dynamics}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Integrate \eqref{eq:full_pde} over $\R^d$:
+\[
+\frac{\dd}{\dd t}\int \rho_g(x,t)\,\dd x
++
+\int \nabla_x\cdot\big(\rho_g(x,t)v_g(x,t)\big)\,\dd x
+=
+\frac{\sigma^2}{2}\int \Delta_x\rho_g(x,t)\,\dd x
++
+\int r_g(x,t)\rho_g(x,t)\,\dd x.
+\]
+The divergence and Laplacian terms vanish under the boundary assumptions. Therefore,
+\[
+\dot n_g(t)=\int r_g(x,t)\rho_g(x,t)\,\dd x.
+\]
+Substitute $\rho_g(x,t)=n_g(t)p_g(x,t)$ to obtain
+\[
+\dot n_g(t)=n_g(t)\int r_g(x,t)p_g(x,t)\,\dd x = n_g(t)\bar r_g(t).
+\]
+\end{proof}
+
+\paragraph{Interpretation.}
+Equation \eqref{eq:ng_dynamics} says that the total abundance of perturbation $g$ changes at its average fitness rate. If $\bar r_g(t)>0$, perturbation $g$ expands; if $\bar r_g(t)<0$, it depletes.
+
+\subsection{Conditional state-density dynamics}
+
+Substituting $\rho_g=n_gp_g$ into \eqref{eq:full_pde} and using \eqref{eq:ng_dynamics} yields the normalized state equation.
+
+\begin{proposition}[Conditional density evolution]
+The within-perturbation state density obeys
+\begin{equation}
+\partial_t p_g(x,t)
++
+\nabla_x\cdot\big(p_g(x,t)v_g(x,t)\big)
+=
+\frac{\sigma^2}{2}\Delta_x p_g(x,t)
++
+\big(r_g(x,t)-\bar r_g(t)\big)p_g(x,t).
+\label{eq:pg_dynamics}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Write \eqref{eq:full_pde} as
+\[
+\partial_t(n_gp_g)+\nabla_x\cdot(n_gp_g v_g)=\frac{\sigma^2}{2}\Delta_x(n_gp_g)+r_g n_gp_g.
+\]
+Because $n_g$ depends only on $t$,
+\[
+\dot n_g p_g+n_g\partial_t p_g+n_g\nabla_x\cdot(p_gv_g)=\frac{\sigma^2}{2}n_g\Delta_x p_g+r_g n_gp_g.
+\]
+Divide by $n_g$:
+\[
+\frac{\dot n_g}{n_g}p_g+\partial_t p_g+\nabla_x\cdot(p_gv_g)=\frac{\sigma^2}{2}\Delta_x p_g+r_g p_g.
+\]
+Using \eqref{eq:ng_dynamics}, we have $\dot n_g/n_g=\bar r_g$, which gives \eqref{eq:pg_dynamics}.
+\end{proof}
+
+\paragraph{Interpretation.}
+Equation \eqref{eq:pg_dynamics} is easy to misread, so its meaning should be stated carefully.
+\begin{itemize}
+    \item The drift term still governs directed motion in state space.
+    \item The diffusion term still governs stochastic spreading.
+    \item The fitness contribution is now \emph{centered}: $r_g(x,t)-\bar r_g(t)$.
+\end{itemize}
+
+The centering is essential because $p_g(\cdot,t)$ is a \emph{conditional} density and must stay normalized. Therefore, only \emph{relative fitness within perturbation $g$} can reshape $p_g$. The population-wide mean fitness $\bar r_g(t)$ is removed from the shape equation because it belongs to total abundance change, not internal redistribution.
+
+\begin{remark}[Separation of roles]
+The pair of equations \eqref{eq:ng_dynamics} and \eqref{eq:pg_dynamics} produces a clean division of labour:
+\begin{align*}
+\dot n_g(t)=n_g(t)\bar r_g(t)
+&\quad\text{describes total expansion or depletion,}\\
+\partial_t p_g + \nabla\cdot(p_gv_g)=\frac{\sigma^2}{2}\Delta p_g +(r_g-\bar r_g)p_g
+&\quad\text{describes internal state reshaping.}
+\end{align*}
+This separation is one of the strongest advantages of the formulation.
+\end{remark}
+
+\section{Relative abundance and replicator dynamics}
+
+Absolute abundances $n_g(t)$ are useful, but in most perturbation screens the scientifically salient quantity is the relative abundance $f_g(t)$, because enrichment and depletion are inherently comparative.
+
+\subsection{Replicator equation}
+
+Define $N(t)=\sum_{h\in\G} n_h(t)$ and $f_g(t)=n_g(t)/N(t)$ as in \eqref{eq:relative_abundance}. Then:
+
+\begin{proposition}[Replicator dynamics]
+The relative abundance satisfies
+\begin{equation}
+\dot f_g(t)
+=
+f_g(t)\left(\bar r_g(t)-\sum_{h\in\G}f_h(t)\bar r_h(t)\right).
+\label{eq:replicator}
+\end{equation}
+\end{proposition}
+
+\begin{proof}
+Differentiate $f_g(t)=n_g(t)/N(t)$:
+\[
+\dot f_g(t)=\frac{\dot n_g(t)}{N(t)}-\frac{n_g(t)\dot N(t)}{N(t)^2}
+=f_g(t)\left(\frac{\dot n_g(t)}{n_g(t)}-\frac{\dot N(t)}{N(t)}\right).
+\]
+Now
+\[
+\frac{\dot n_g(t)}{n_g(t)}=\bar r_g(t),
+\qquad
+\frac{\dot N(t)}{N(t)}=\sum_{h\in\G} f_h(t)\bar r_h(t),
+\]
+which gives \eqref{eq:replicator}.
+\end{proof}
+
+\paragraph{Interpretation.}
+Equation \eqref{eq:replicator} is the precise mathematical point where frequency dynamics become game-like. Perturbation $g$ grows in \emph{relative} abundance only if its average fitness exceeds the population-average fitness. If it does worse than average, its frequency decreases.
+
+This is not a metaphor. It is exactly the classical replicator structure, now derived from the unbalanced transport formulation.
+
+\section{Observation model for matched-library-normalized guide abundance}
+
+\subsection{Why $\Tzero$ enters as an offset}
+
+The matched library at $\Tzero$ tells us how much of each guide or gene entered the system before any in vivo selection occurred. Therefore, $\Tzero$ should appear as an \emph{exposure offset}, not as a latent transcriptomic state.
+
+Let $\ell_{g,b}$ denote the observed frequency of perturbation $g$ in matched pre-injection library batch $b$. For sample $s$ observed at time $u\in\{4,60\}$ and matched to batch $b(s)$, define the expected perturbation fraction
+\begin{equation}
+\pi_{gs}(u)
+=
+\frac{\ell_{g,b(s)}\exp\{\zeta_g(u)\}}
+{\sum_{h\in\G}\ell_{h,b(s)}\exp\{\zeta_h(u)\}}.
+\label{eq:pi_obs}
+\end{equation}
+
+Here $\zeta_g(u)$ is the log-enrichment or depletion of perturbation $g$ relative to the matched input library.
+
+\paragraph{Interpretation.}
+Equation \eqref{eq:pi_obs} separates two distinct sources of variation:
+\begin{itemize}
+    \item $\ell_{g,b(s)}$: how much perturbation $g$ was initially present in the experiment,
+    \item $\zeta_g(u)$: how much perturbation $g$ has expanded or depleted by time $u$ relative to that starting amount.
+\end{itemize}
+
+This separation is important because a perturbation that is frequent at $\Psixty$ might simply have been frequent already at $\Tzero$, whereas a perturbation with modest final frequency may still be strongly enriched relative to a low initial exposure.
+
+\subsection{Count likelihood}
+
+Let $y_{\cdot s}(u)$ denote the observed vector of guide or perturbation counts in sample $s$ at time $u$, and let $N_s$ be the total number of guide-assigned cells. A convenient overdispersed likelihood is
+\begin{equation}
+ y_{\cdot s}(u) \sim \DirMult\!\left(N_s,\phi,\pi_{\cdot s}(u)\right),
+ \label{eq:dirichlet_multinomial}
+\end{equation}
+where $\phi$ controls overdispersion.
+
+\paragraph{Why use an overdispersed model?}
+A multinomial likelihood assumes that once the expected proportions are fixed, all remaining variation is pure sampling noise. That is typically too restrictive for perturbation experiments, where additional variability arises from library preparation, capture efficiency, replicate-specific fluctuations, and compositional uncertainty. The Dirichlet--multinomial retains the multinomial mean structure while allowing extra dispersion.
+
+\subsection{Continuous-time interpretation of enrichment}
+
+Write the absolute abundance in the form
+\begin{equation}
+ n_g(t)=\ell_g\exp\{\zeta_g(t)\},
+ \label{eq:zeta_n_relation}
+\end{equation}
+where $\ell_g$ denotes the matched input abundance reference for perturbation $g$.
+
+Differentiating \eqref{eq:zeta_n_relation} yields
+\[
+\dot n_g(t)=n_g(t)\dot\zeta_g(t).
+\]
+Comparing with \eqref{eq:ng_dynamics}, we obtain
+\begin{equation}
+\dot\zeta_g(t)=\bar r_g(t).
+\label{eq:zeta_dot}
+\end{equation}
+
+\paragraph{Interpretation.}
+The log-enrichment changes at the average fitness rate. Thus $\zeta_g(t)$ is not merely a statistical nuisance parameter; it is the time-integrated effect of the perturbation's average fitness.
+
+\section{Ecological game: frequency-dependent selection through programme-level interactions}
+
+\subsection{Why game theory enters here}
+
+The replicator equation \eqref{eq:replicator} already shows that the model has the structure of frequency-dependent competition whenever the average fitnesses $\bar r_g(t)$ depend on the current population composition. In other words, game theory enters once fitness is made context dependent.
+
+In this setting, context dependence should not be interpreted as direct pairwise combat between named perturbations. A more realistic biological interpretation is that perturbations alter how well cells in certain ecological programmes perform under the current population composition and mediator environment.
+
+\subsection{Programme-level strategies}
+
+Classical evolutionary games are formulated on a small set of strategies. Continuous transcriptomic state space $x\in\R^d$ is too high-dimensional to play that role directly. We therefore introduce a bridge from cell state to a small number of ecological programmes.
+
+Let
+\begin{equation}
+\eta(x) \in \Delta^{K-1}
+\label{eq:eta_simplex}
+\end{equation}
+denote a soft assignment of state $x$ to $K$ ecological programmes, where $\Delta^{K-1}$ is the probability simplex. Thus, each coordinate $\eta_k(x)$ is nonnegative and $\sum_{k=1}^K \eta_k(x)=1$.
+
+\paragraph{Interpretation.}
+A cell is not forced into a single hard class. Instead, $\eta(x)$ can encode partial membership in several programmes. This is especially useful when continuous developmental or inflammatory gradients blur sharp cell-state boundaries.
+
+\subsection{Population-level ecological composition}
+
+The global ecological composition is defined as
+\begin{equation}
+q(t)=\sum_{g\in\G} f_g(t)\int_{\R^d} \eta(x)p_g(x,t)\,\dd x.
+\label{eq:q_of_t}
+\end{equation}
+
+The vector $q(t)\in\Delta^{K-1}$ describes which ecological programmes are currently abundant in the whole population.
+
+\paragraph{Interpretation.}
+Equation \eqref{eq:q_of_t} first averages programme membership within each perturbation using $p_g$, then averages across perturbations using their relative abundances $f_g$. Thus $q(t)$ is a population-level ecological summary.
+
+\subsection{Mediator variables}
+
+Let
+\begin{equation}
+ m_t \in \R^M
+ \label{eq:mediators}
+\end{equation}
+be a vector of mediator variables summarizing contextual quantities not fully captured by $q(t)$ alone. Depending on the application, $m_t$ may represent programme scores, cell-type abundances, cytokine activity, or other microenvironmental features.
+
+The point of $m_t$ is not to create an arbitrary catch-all variable. Its role is to let the fitness landscape respond to relevant context that is measured or inferable from the data but is not fully specified by the programme mixture $q(t)$.
+
+\subsection{Drift parameterization}
+
+A conservative perturbation-conditioned drift parameterization is
+\begin{equation}
+ v_g(x,t)=v_0(x,t)+u_\theta(x,a_g),
+ \label{eq:drift_param}
+\end{equation}
+where
+\begin{itemize}
+    \item $v_0(x,t)$ is a shared baseline drift field,
+    \item $a_g\in\R^R$ is a low-dimensional embedding of perturbation $g$,
+    \item $u_\theta(x,a_g)$ is a perturbation-dependent deformation of the baseline drift.
+\end{itemize}
+
+This structure allows perturbations to alter the direction of movement in latent state space without introducing a separate unconstrained drift field for every perturbation.
+
+\subsection{Fitness parameterization}
+
+We write the local fitness as
+\begin{equation}
+ r_g(x,t)=r_0(x,t)+\beta_g+\Phi\big(x,a_g,q(t),m_t\big),
+ \label{eq:fitness_param}
+\end{equation}
+where
+\begin{itemize}
+    \item $r_0(x,t)$ is a shared state-dependent baseline fitness,
+    \item $\beta_g$ is a perturbation-specific state-independent fitness shift,
+    \item $\Phi$ is an ecological interaction term.
+\end{itemize}
+
+\paragraph{Important consequence.}
+Because $\beta_g$ is independent of $x$, it contributes to $\bar r_g(t)$ and hence to abundance change, but it cancels inside $r_g(x,t)-\bar r_g(t)$ in the conditional state equation \eqref{eq:pg_dynamics}. Therefore, a constant perturbation-level advantage changes \emph{how much} of perturbation $g$ survives or expands, but does not by itself reshape the internal state composition.
+
+\subsection{Low-rank ecological payoff}
+
+The ecological payoff is defined by
+\begin{equation}
+\Phi\big(x,a_g,q,m\big)
+=
+\eta(x)^\top
+\left(
+P_0(m)+\sum_{r=1}^{R} a_{gr}P_r(m)
+\right)q,
+\label{eq:phi_compact}
+\end{equation}
+where each $P_r(m)\in\R^{K\times K}$ is a programme-by-programme payoff matrix that may itself depend on the mediator state $m$.
+
+Expanded entrywise,
+\begin{equation}
+\Phi\big(x,a_g,q,m\big)
+=
+\sum_{k=1}^{K}\sum_{\ell=1}^{K}
+\eta_k(x)
+\left[
+P_0(m)+\sum_{r=1}^{R}a_{gr}P_r(m)
+\right]_{k\ell}
+q_{\ell}.
+\label{eq:phi_entrywise}
+\end{equation}
+
+\paragraph{Interpretation.}
+Equation \eqref{eq:phi_entrywise} has a direct ecological reading:
+\begin{itemize}
+    \item $\eta_k(x)$ says how much the current cell behaves like programme $k$,
+    \item $q_\ell$ says how common programme $\ell$ is in the surrounding population,
+    \item the matrix entry $(k,\ell)$ says how cells in programme $k$ fare when programme $\ell$ is abundant,
+    \item the perturbation embedding $a_g$ modulates that interaction in a structured low-dimensional way.
+\end{itemize}
+
+\subsection{Why the game is low-rank}
+
+A dense perturbation-by-perturbation interaction matrix is statistically inappropriate here. If there are $|\G|$ perturbations, then a fully dense pairwise interaction model already contains $|\G|^2$ coefficients before any state dependence is added. That is difficult to justify when only one state-resolved interval is observed.
+
+The low-rank structure in \eqref{eq:phi_compact} is not merely a convenience. It is a substantive assumption that many perturbations project onto a smaller number of ecological consequences. In applications motivated by convergent transcriptional programmes, that is usually the scientifically more plausible statement.
+
+\subsection{Why ecology should enter growth before drift}
+
+With only one transcriptomically resolved interval $\Pfour\to\Psixty$, a fully flexible ecological effect in both drift and growth is weakly identifiable. A region of state space may become more populated because cells drifted there, because those cells preferentially grew there, or because both happened.
+
+Abundance enrichment and depletion are observed more directly than full drift structure. For that reason, the most defensible core model puts ecology primarily into the fitness channel through $\Phi$ in \eqref{eq:fitness_param}, while keeping drift comparatively simpler through \eqref{eq:drift_param}.
+
+A more aggressive extension can be written as
+\begin{equation}
+ v_g(x,t)=v_0(x,t)+u_\theta(x,a_g)+\lambda_v\nabla_x\Phi\big(x,a_g,q(t),m_t\big),
+ \qquad 0<\lambda_v\ll 1,
+ \label{eq:drift_extension}
+\end{equation}
+but this should be treated as optional and strongly regularized.
+
+\section{Structural constraints}
+
+\subsection{No guide switching}
+
+A cell does not change its perturbation label during the transport from $\Pfour$ to $\Psixty$. Therefore, the transport cost must be block-diagonal across perturbations. One convenient way to encode this is
+\begin{equation}
+ c\big((x,g),(x',h)\big)=\|x-x'\|^2 + \infty\cdot \1\{g\neq h\}.
+ \label{eq:block_cost}
+\end{equation}
+
+This means that state transport is allowed only within the same perturbation. Distinct perturbations interact only through the ecological composition $q(t)$ and the mediator variables $m_t$.
+
+\subsection{Absolute versus relative identifiability}
+
+Only \emph{relative} abundance and \emph{relative} fitness are identified.
+
+First, adding the same constant to all perturbation log-enrichments does not change the normalized fractions in \eqref{eq:pi_obs}. Likewise, the replicator equation depends only on fitness differences relative to the population average.
+
+Second, the low-rank factorization in \eqref{eq:phi_compact} has an inherent scale ambiguity. Multiplying $a_g$ by a constant and dividing the matrices $P_r(m)$ by the same constant leaves the product unchanged. Hence the model requires centering or scale constraints.
+
+A convenient set of constraints is
+\begin{equation}
+\sum_{g\in\mathcal C} w_g\beta_g = 0,
+\label{eq:control_centering}
+\end{equation}
+for a designated control set $\mathcal C$, and
+\begin{equation}
+\frac{1}{|\G|}\sum_{g\in\G} a_g = 0,
+\qquad
+\frac{1}{|\G|}\sum_{g\in\G}\|a_g\|^2 = 1.
+\label{eq:embedding_scale}
+\end{equation}
+
+\subsection{Biological regime specificity}
+
+If one wishes to analyse a pre-malignant epithelial phase jointly with a later tumour phase, it is usually inappropriate to assume that a single stationary ecological payoff governs both. A safe extension is to let the baseline fields or payoff matrices be regime-specific:
+\begin{equation}
+P_r^{\mathrm{pre}}(m),\qquad P_r^{\mathrm{tum}}(m),
+\label{eq:regime_specific}
+\end{equation}
+or, more generally, to use a piecewise or regime-conditioned parameterization.
+
+\section{Training objective}
+
+\subsection{Core loss}
+
+A convenient training objective is
+\begin{equation}
+\mathcal L
+=
+\mathcal L_{\mathrm{count}}
++\lambda_{\mathrm{state}}\mathcal L_{\mathrm{state}}
++\lambda_{\mathrm{act}}\mathcal L_{\mathrm{act}}
++\lambda_{\mathrm{aux}}\mathcal L_{\mathrm{aux}}
++\lambda_{\mathrm{reg}}\mathcal R.
+\label{eq:total_loss}
+\end{equation}
+
+The individual terms are as follows.
+
+\paragraph{Count loss.}
+The abundance-fitting term matches observed guide or perturbation counts at $\Pfour$ and $\Psixty$ relative to the matched input library:
+\begin{equation}
+\mathcal L_{\mathrm{count}}
+=
+\sum_{u\in\{4,60\}}\sum_s
+-\log p\big(y_{\cdot s}(u)\mid \pi_{\cdot s}(u)\big).
+\label{eq:count_loss}
+\end{equation}
+When using the Dirichlet--multinomial model, this is the negative log-likelihood induced by \eqref{eq:dirichlet_multinomial}.
+
+\paragraph{State loss.}
+The state-fitting term compares the predicted $\Psixty$ conditional distributions with the observed ones:
+\begin{equation}
+\mathcal L_{\mathrm{state}}
+=
+\sum_{g\in\G}
+\Sink\big(\widehat p_g^{(60)},p_g(\cdot,60)\big).
+\label{eq:state_loss}
+\end{equation}
+The entropic Sinkhorn divergence is a natural choice because it directly measures discrepancy between distributions in state space and is compatible with OT-style geometry.
+
+\paragraph{Action regularization.}
+To discourage unnecessarily complex dynamics, one can penalize the integrated magnitude of drift and growth:
+\begin{equation}
+\mathcal L_{\mathrm{act}}
+=
+\sum_{g\in\G}
+\int_{4}^{60}\!\int_{\R^d}
+\left(
+\frac{1}{2}\|v_g(x,t)\|^2 + \frac{\alpha}{2}|r_g(x,t)|^2
+\right)
+\rho_g(x,t)\,\dd x\,\dd t.
+\label{eq:action_loss}
+\end{equation}
+This encourages the inferred dynamics to explain the data with minimal kinetic and growth complexity.
+
+\paragraph{Auxiliary losses.}
+The term $\mathcal L_{\mathrm{aux}}$ may encode additional summary information such as programme scores, cell-type fractions, or other experimentally motivated statistics. These losses are optional; they should be used only when they correspond to measurements or summary quantities that the model is genuinely expected to reproduce.
+
+\paragraph{Regularization.}
+The term $\mathcal R$ collects generic penalties such as
+\begin{itemize}
+    \item low-rank penalties on ecological parameters,
+    \item smoothness penalties in $x$ and $t$,
+    \item control-guide centering constraints,
+    \item sgRNA-to-gene hierarchical shrinkage.
+\end{itemize}
+
+\subsection{Interpretation of the training objective}
+
+The full loss in \eqref{eq:total_loss} has a simple high-level meaning.
+\begin{itemize}
+    \item $\mathcal L_{\mathrm{count}}$ fits abundance dynamics.
+    \item $\mathcal L_{\mathrm{state}}$ fits state redistribution.
+    \item $\mathcal L_{\mathrm{act}}$ prevents the model from using unnecessarily large drift and growth fields.
+    \item $\mathcal L_{\mathrm{aux}}$ injects additional experimentally observable structure, when available.
+    \item $\mathcal R$ stabilizes parameters and improves identifiability.
+\end{itemize}
+
+Together, these terms ensure that abundance enrichment and transcriptomic state redistribution are explained by one perturbation-conditioned dynamical system rather than by disconnected downstream analyses.
+
+\section{Optional extensions}
+
+\subsection{Abundance-only early phase from $\Tzero$ to $\Pfour$}
+
+If one wishes to model the interval $[0,4]$ more explicitly without inventing unobserved transcriptomic states, the defensible extension is an abundance-only early phase:
+\begin{equation}
+\dot\zeta_g(t)=\beta_g^{E}+a_g^\top B_E q^E(t),
+\qquad t\in[0,4],
+\label{eq:early_phase_abundance}
+\end{equation}
+where $q^E(t)$ is a low-dimensional ecological summary defined at the abundance level.
+
+This extension preserves the asymmetry of the observed data: it enriches the abundance model before $\Pfour$ without pretending that transcriptomic state trajectories were observed at $\Tzero$.
+
+\subsection{Hierarchical sgRNA model}
+
+When several sgRNAs target the same gene, it is often preferable to share a gene-level core effect while allowing reagent-level deviations. Let $j$ index sgRNAs nested within gene $g$. Then one may write
+\begin{equation}
+\beta_{gj}=\beta_g+b_{gj},
+\qquad b_{gj}\sim\mathcal N(0,\tau_\beta^2),
+\label{eq:sg_beta}
+\end{equation}
+and
+\begin{equation}
+a_{gj}=a_g+\epsilon_{gj},
+\qquad \epsilon_{gj}\sim\mathcal N(0,\tau_a^2 I).
+\label{eq:sg_embedding}
+\end{equation}
+
+This treats sgRNAs as noisy replicates around a gene-level effect, which is usually more stable than fitting every guide fully independently.
+
+\subsection{State-dependent diffusion}
+
+The scalar diffusion coefficient $\sigma$ in \eqref{eq:full_pde} is the simplest choice. A richer alternative is a state-dependent diffusion tensor $D_g(x,t)$:
+\begin{equation}
+\partial_t \rho_g + \nabla\cdot(\rho_g v_g)
+=
+\nabla\cdot\big(D_g(x,t)\nabla\rho_g\big)+r_g\rho_g.
+\label{eq:state_dependent_diffusion}
+\end{equation}
+This can capture heterogeneous stochasticity across regions of state space, but it also introduces additional identifiability burden. Therefore, the scalar model is a reasonable starting point unless the data strongly support more flexible diffusion.
+
+\section{Practical interpretation for implementation}
+
+To implement the model in practice, one may proceed in the following order.
+
+\begin{enumerate}
+    \item Choose a latent transcriptomic space $x\in\R^d$ from the $\Pfour$ and $\Psixty$ single-cell data.
+    \item Aggregate sgRNAs to gene-level perturbations or define a hierarchical sgRNA model.
+    \item Estimate the empirical conditional distributions $\widehat p_g^{(4)}$ and $\widehat p_g^{(60)}$.
+    \item Construct matched-library offsets $\ell_{g,b}$ from the $\Tzero$ library data.
+    \item Define ecological programmes through an interpretable mapping $\eta(x)$.
+    \item Parameterize the baseline drift $v_0$, perturbation drift shift $u_\theta$, baseline fitness $r_0$, and low-rank ecological payoff $\Phi$.
+    \item Fit the model by minimizing \eqref{eq:total_loss} subject to the structural constraints and centering conditions.
+    \item Inspect both abundance-level outputs ($\zeta_g$, $f_g$) and state-level outputs ($p_g(\cdot,t)$, $q(t)$, programme contributions, and inferred fitness fields).
+\end{enumerate}
+
+The conceptual sequence is equally simple:
+\begin{center}
+\fbox{%
+\parbox{0.92\linewidth}{%
+$\Tzero$ gives exposure; $\Pfour$ and $\Psixty$ give state-resolved snapshots; transport explains where cells move; unbalanced growth explains how much each perturbation expands or depletes; and ecological payoffs explain why fitness depends on the current population composition and mediator context.}%
+}
+\end{center}
+
+\section{What the formulation does and does not claim}
+
+This note is deliberately about formulation rather than about a maximal novelty claim. The model should be interpreted as a \emph{specific coupling} of several well-motivated ingredients:
+\begin{itemize}
+    \item state transport for destructive snapshot data,
+    \item unbalanced dynamics for changing population mass,
+    \item matched-library normalization for perturbation abundance,
+    \item frequency-dependent ecological fitness at the programme level.
+\end{itemize}
+
+What is important is not any one of these components in isolation, but the way they are tied together in an asymmetric Perturb-seq setting where the initial time point is abundance-resolved but not state-resolved.
+
+\section{Conclusion}
+
+The perturbation-conditioned ecological unbalanced transport model can be summarized in one sentence:
+
+\begin{quote}
+Use the matched $\Tzero$ guide library as an exposure offset for abundance dynamics, use $\Pfour$ and $\Psixty$ as state-resolved boundaries for transcriptomic transport, decompose the full perturbation-specific density into abundance and conditional state shape, and let a low-rank programme-level ecological payoff modulate perturbation fitness through the growth channel.
+\end{quote}
+
+The reason this formulation is useful is that it keeps the modelling faithful to the data-generating process. It does not invent unmeasured transcriptomic states at $\Tzero$; it does not force mass conservation when clones obviously expand or contract; and it does not treat perturbation enrichment and state redistribution as unrelated summaries. Instead, one perturbation-conditioned dynamical system explains both abundance change and cell-state evolution, while still leaving room for ecological frequency dependence when the biology suggests it.
+
+\begin{thebibliography}{9}
+
+\bibitem{renz2024}
+Peter F. Renz, Umesh Ghoshdastider, Simona Baghai Sain, \emph{et al.}
+\newblock In vivo single-cell CRISPR uncovers distinct TNF programmes in tumour evolution.
+\newblock \emph{Nature}, 632:419--427, 2024.
+
+\bibitem{schiebinger2019}
+Geoffrey Schiebinger, Jian Shu, Marcin Tabaka, \emph{et al.}
+\newblock Optimal-transport analysis of single-cell gene expression identifies developmental trajectories in reprogramming.
+\newblock \emph{Cell}, 176(4):928--943, 2019.
+
+\bibitem{moscot2025}
+Dominik Klein, Giovanni Palla, Marius Lange, \emph{et al.}
+\newblock Mapping cells through time and space with moscot.
+\newblock \emph{Nature}, 638:1065--1075, 2025.
+
+\bibitem{scdiffeq2025}
+Michael E. Vinyard, Anders W. Rasmussen, Ruitong Li, \emph{et al.}
+\newblock Learning cell dynamics with neural differential equations.
+\newblock \emph{Nature Machine Intelligence}, 7:1969--1984, 2025.
+
+\bibitem{perturbgen2026}
+Kevin Chi Hao Ly, Adib Miraki Feriz, Tomoya Isobe, \emph{et al.}
+\newblock Predicting how perturbations reshape cellular trajectories with PerturbGen.
+\newblock bioRxiv, 2026.03.04.709254, 2026.
+
+\bibitem{wfrmfm2026}
+Xinyu Wang, Ruoyu Wang, Qiangwei Peng, Peijie Zhou, and Tiejun Li.
+\newblock WFR-MFM: One-step inference for dynamic unbalanced optimal transport.
+\newblock arXiv:2601.20606, 2026.
+
+\end{thebibliography}
+
+\end{document}
