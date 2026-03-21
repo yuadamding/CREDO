@@ -53,7 +53,7 @@
 \maketitle
 
 \begin{abstract}
-We formulate the $P4 \to P60$ perturb-seq problem as inference of a perturbation-indexed family of finite-measure-valued stochastic processes on a latent cell-state space. The biological motivation is that a perturbation can alter at least three coupled aspects of tumour evolution: directional progression through cell-state space, stochastic heterogeneity around that progression, and net expansion or depletion of the perturbed population. Because single-cell RNA sequencing is destructive, the observed data are snapshot distributions rather than tracked single-cell trajectories. This motivates a weighted stochastic differential equation formulation in a shared latent space. For each perturbation $g \in \Gcal$, the observed $P4$ cells and guide-abundance scale define an initial finite measure $\mu_0^g=M_g^0p_0^g$, while the observed $P60$ cells and guide-abundance scale define a terminal finite measure $\nu_1^g=M_g^1p_1^g$. The model is control anchored: control perturbations are represented by the zero embedding and therefore follow the baseline continuation law of the same coefficient networks. The model is also mean-field coupled: all perturbation-specific populations jointly determine a low-dimensional tissue context, and this context feeds back into the perturbation-conditioned dynamics. Mathematically, the resulting system is a reaction--drift--diffusion McKean--Vlasov model in latent space, implemented as a weighted neural stochastic differential equation with three separate control-anchored neural networks for directional movement, stochastic dispersion, and multiplicative growth or depletion. The predicted terminal finite measures are fitted to data with a single entropic unbalanced optimal-transport discrepancy, because terminal geometry and terminal abundance are two aspects of the same endpoint measure rather than two independent targets. Coarse cell-population labels may be used to build interpretable tissue-context summaries, but they are not required for the core endpoint supervision. The learned object is an effective interval generator for the single observed interval $P4 \to P60$; it is not claimed to be the unique microscopic biological law between the two snapshots.
+We formulate the $P4 \to P60$ perturb-seq problem as inference of a perturbation-indexed family of finite-measure-valued stochastic processes on a latent cell-state space. The biological motivation is that a perturbation can alter at least three coupled aspects of tumour evolution: directional progression through cell-state space, stochastic heterogeneity around that progression, and net expansion or depletion of the perturbed population. Because single-cell RNA sequencing is destructive, the observed data are snapshot distributions rather than tracked single-cell trajectories. This motivates a weighted stochastic differential equation formulation in a shared latent space. For each perturbation $g \in \Gcal$, the observed $P4$ cells and guide-abundance scale define an initial finite measure $\mu_0^g=M_g^0p_0^g$, while the observed $P60$ cells and guide-abundance scale define a terminal finite measure $\nu_1^g=M_g^1p_1^g$. The model is control anchored: control perturbations are represented by the zero embedding and therefore evaluate the baseline coefficient fields of the same networks. The model is also mean-field coupled: perturbation-specific populations jointly determine a low-dimensional tissue context, and this context feeds back into the perturbation-conditioned dynamics. Mathematically, the resulting system is a reaction--drift--diffusion McKean--Vlasov model in latent space, with three separate control-anchored neural networks for directional movement, stochastic dispersion, and multiplicative growth or depletion. The theoretical object is a law-level family of finite measures, while the weighted particle system is a numerical approximation to that family. The predicted terminal finite measures are fitted to data with a single entropic unbalanced optimal-transport discrepancy, because terminal geometry and terminal abundance are two aspects of the same endpoint measure rather than two independent targets. Coarse cell-population labels may be used to build interpretable tissue-context summaries, but they are not required for the core endpoint supervision. The learned object is an effective interval generator for the single observed interval $P4 \to P60$; it is not claimed to be the unique microscopic biological law between the two snapshots.
 \end{abstract}
 
 \tableofcontents
@@ -97,7 +97,7 @@ a_g=0
 
 \subsection{Why mean-field tissue context is biologically plausible}
 
-A perturbation can act cell-intrinsically, but the evolving tissue composition can also feed back on cell behavior. In a tumour setting, the current mixture of epithelial states, immune states, and signaling-related features can alter the effective continuation law. This motivates a mean-field interaction layer: the coefficient fields are allowed to depend not only on the current cell state and perturbation identity, but also on low-dimensional summaries of the current global population.
+A perturbation can act cell-intrinsically, but the evolving tissue composition can also feed back on cell behavior. In a tumour setting, the current mixture of epithelial states, immune states, and signaling-related features can alter the effective continuation law. This motivates a mean-field interaction layer: the coefficient fields are allowed to depend not only on the current cell state and perturbation identity, but also on low-dimensional summaries of the current population.
 
 \subsection{What the model should estimate}
 
@@ -111,7 +111,7 @@ where $t=0$ corresponds to $P4$ and $t=1$ corresponds to $P60$. The same model s
     \item how much total perturbation-specific mass survives, expands, or depletes.
 \end{enumerate}
 
-\section{Explicit introduction to the SDE}
+\section{Explicit introduction to the weighted SDE}
 
 \subsection{What an SDE is}
 
@@ -135,7 +135,7 @@ b(Z_t,t)\,\Delta t
 +
 \sigma(Z_t,t)\sqrt{\Delta t}\,\xi_t,
 \qquad
-\xi_t \sim \mathcal{N}(0,I).
+\xi_t\sim\mathcal{N}(0,I).
 \label{eq:sde_increment}
 \end{equation}
 Thus, the drift term determines the average direction of motion, while the diffusion term determines the size and orientation of stochastic spread around that direction.
@@ -183,19 +183,9 @@ together with
 
 The perturbation index $g$ appears because different perturbations modify the continuation law. The dependence on $\mu_t$ appears because the current tissue context can feed back on the dynamics through a mean-field summary of the evolving population.
 
-\subsection{From a single weighted particle to a population measure}
+\subsection{From a representative trajectory to a finite measure}
 
-A single weighted particle does not represent the full perturbation-specific population. To represent the population, we initialize many particles at the observed $P4$ cells and then evolve them jointly. The perturbation-specific population at time $t$ is the weighted empirical measure
-\begin{equation}
-\mu_t^g
-=
-\frac{M_g^0}{n_g^0}
-\sum_{i=1}^{n_g^0}
-w_t^{g,i}\,\delta_{Z_t^{g,i}}.
-\label{eq:conceptual_population_measure}
-\end{equation}
-
-This measure-valued object is the main mathematical prediction of the model. It contains both the terminal state allocation and the terminal perturbation mass.
+A single weighted trajectory does not represent the full perturbation-specific population. The theoretical model therefore evolves a \emph{law-level finite measure} $\mu_t^g$ obtained by averaging over representative weighted trajectories. The particle system introduced later is a numerical approximation to this law-level object rather than the definition of the model itself.
 
 \section{Notation table}
 
@@ -229,22 +219,28 @@ $n_g^0,n_g^1$ & integers & Numbers of observed $P4$ and $P60$ cells under pertur
 $p_0^g,p_1^g$ & probability measures & Empirical probability measures of the observed latent states at $P4$ and $P60$.\\
 $M_g^0,M_g^1$ & positive scalars & Relative perturbation masses on the guide-abundance scale at $P4$ and $P60$.\\
 $\mu_0^g,\nu_1^g$ & finite measures & Initial and observed terminal finite measures, $\mu_0^g=M_g^0p_0^g$ and $\nu_1^g=M_g^1p_1^g$.\\
-$\mu_t^g$ & finite measure & Predicted perturbation-specific population measure at time $t$.\\
-$\bar\mu_t$ & finite measure & Total population measure $\sum_{g\in\Gcal}\mu_t^g$.\\
+$\mu_t^g$ & finite measure & Law-level predicted perturbation-specific population measure at time $t$.\\
+$\hat\mu_t^{g,N_g}$ & random finite measure & Weighted empirical particle approximation to $\mu_t^g$.\\
+$\bar\mu_t$ & finite measure & Total law-level population measure $\sum_{g\in\Gcal}\mu_t^g$.\\
 $\bar M(t)$ & positive scalar & Total mass $\bar\mu_t(\Zcal)$.\\
+$N_g$ & integer & Number of particles used numerically for perturbation $g$.\\
 $a_g$ & vector in $\R^r$ & Perturbation embedding; controls satisfy $a_g=0$.\\
 $\omega$ & map $\Zcal\to\simplex^{K-1}$ & Optional coarse membership map used for interpretable context summaries.\\
 $\phi$ & map $\Zcal\to\R^J$ & Optional mediator or signaling feature map.\\
 $q_t$ & vector in $\simplex^{K-1}$ & Optional global coarse composition summary.\\
 $s_t$ & vector in $\R^J$ & Optional global mediator summary.\\
 $c_t$ & vector in $\R^L$ & Low-dimensional mean-field tissue-context vector.\\
+$\hat c_t$ & vector in $\R^L$ & Numerical approximation to $c_t$ computed from particles.\\
 $\gamma(t)$ & vector in $\R^{d_t}$ & Time embedding.\\
 $u_t(z;\mu_t)$ & vector & Shared network input built from latent state, time, and tissue context.\\
 $b_g$ & vector field & Drift field governing directional movement.\\
 $\sigma_g$ & matrix field & Diffusion map governing stochastic dispersion.\\
 $r_g$ & scalar field & Growth or reaction field governing multiplicative expansion or depletion.\\
-$W_t^{g,i}$ & Brownian motion & Stochastic forcing for particle $i$ under perturbation $g$.\\
+$W_t^g$ & Brownian motion & Brownian motion for a representative perturbation-$g$ trajectory.\\
+$W_t^{g,i}$ & Brownian motion & Brownian motion for particle $i$ under perturbation $g$.\\
+$Z_t^g$ & stochastic process & Representative latent state trajectory under perturbation $g$.\\
 $Z_t^{g,i}$ & stochastic process & Latent state trajectory of particle $i$ under perturbation $g$.\\
+$w_t^g$ & positive process & Representative perturbation-$g$ particle weight.\\
 $w_t^{g,i}$ & positive process & Weight of particle $i$ under perturbation $g$.\\
 $\hat M_g^1$ & scalar & Predicted terminal mass $\mu_1^g(\Zcal)$.\\
 $\hat p_1^g$ & probability measure & Predicted terminal normalized state distribution $\mu_1^g/\hat M_g^1$.\\
@@ -311,7 +307,7 @@ p_1^g
 The numbers of sequenced cells and the guide-abundance measurements need not be on the same scale. Accordingly, we distinguish:
 \begin{itemize}[leftmargin=2em]
     \item \emph{state samples}: $n_g^0$ and $n_g^1$, used to define $p_0^g$ and $p_1^g$;
-    \item \emph{guide-abundance masses}: $M_g^0>0$ and $M_g^1>0$, representing relative perturbation abundance at $P4$ and $P60$ on the guide-abundance scale.
+    \item \emph{guide-abundance masses}: $M_g^0>0$ and $M_g^1>0$, representing normalized relative perturbation abundance at $P4$ and $P60$ on a guide-abundance scale.
 \end{itemize}
 
 The initial and observed terminal finite measures are
@@ -327,6 +323,13 @@ This is the key endpoint object. For each perturbation $g$, the observed termina
     \item terminal geometry in latent state space through $p_1^g$, and
     \item terminal abundance on the guide-abundance scale through $M_g^1$.
 \end{enumerate}
+
+\paragraph{Interpretive caveat.}
+The quantities $M_g^0$ and $M_g^1$ should be read as abundance proxies on a normalized guide-abundance scale rather than as exact absolute clone sizes. The finite measures in \cref{eq:mass_scaled_measures} are therefore effective endpoint targets. If one wants to propagate mass uncertainty explicitly, one may introduce latent true masses together with an observation model for the abundance readout, but that extension is not required for the core formulation here.
+
+\subsection{Practical support requirement}
+
+The formulas in \cref{eq:empirical_prob_measures} assume $n_g^0,n_g^1>0$. In practice, perturbations with extremely small transcriptomic support should be filtered, pooled across sgRNAs targeting the same gene, or handled with a partial observation model that uses guide abundance without a full state-resolved endpoint distribution. The exposition below assumes sufficient single-cell support at both endpoints for the perturbations that are modeled.
 
 \subsection{Optional interpretable tissue summaries}
 
@@ -359,19 +362,22 @@ The formulation rests on the following explicit assumptions.
     The pooled latent representation $\Zcal$ is sufficiently informative that the $P4\to P60$ interval can be described by an effective Markovian dynamics on $\Zcal$.
 
     \item \textbf{Within-perturbation exchangeability.}
-    For each perturbation $g$, conditional on latent state and the shared tissue context, the joint law of cells carrying $g$ is invariant under permutation of cell indices. Thus, cells with the same perturbation are modeled as interchangeable particles, and the perturbation-specific empirical measure is the sufficient population-level state.
+    For each perturbation $g$, conditional on latent state and the shared tissue context, the joint law of cells carrying $g$ is invariant under permutation of cell indices. Thus, cells with the same perturbation are modeled as interchangeable particles, and the perturbation-specific population law is the sufficient population-level state.
 
     \item \textbf{Relative-mass interpretation.}
-    The masses $M_g^0$ and $M_g^1$ are treated as guide-abundance-scale masses and are therefore comparable across perturbations after normalization, even though they are distinct from the number of sequenced single-cell transcriptomes.
+    The masses $M_g^0$ and $M_g^1$ are treated as guide-abundance-scale abundance proxies and are therefore comparable across perturbations after normalization, even though they are distinct from the number of sequenced single-cell transcriptomes.
 
     \item \textbf{Mean-field closure.}
-    The effect of the global tissue context on any cell is approximated through low-dimensional aggregate summaries of the joint population rather than through explicit pairwise interactions between all individual cells.
+    The effect of the tissue context on any cell is approximated through low-dimensional aggregate summaries of the joint population rather than through explicit pairwise interactions between all individual cells.
 
     \item \textbf{Control anchoring.}
-    Control perturbations define the baseline continuation law. Perturbation effects are represented as low-dimensional deviations away from that baseline rather than as fully unrelated dynamics for each perturbation.
+    Control perturbations define the baseline continuation law at the coefficient level. Perturbation effects are represented as low-dimensional deviations away from that baseline rather than as fully unrelated dynamics for each perturbation.
 
     \item \textbf{Effective-interval identifiability.}
     Because only two state-resolved time points are used, the learned dynamics are interpreted as an effective generator on $[0,1]$, not as a uniquely identified microscopic law at all intermediate times.
+
+    \item \textbf{Pooled-context approximation.}
+    When replicate-specific tissue context is not explicitly modeled, the single context vector $c_t$ is interpreted as an effective screen-average environment rather than as the literal within-animal environment experienced by every cell.
 \end{enumerate}
 
 \section{Control anchoring and mean-field tissue context}
@@ -394,14 +400,14 @@ a_g = 0
 \label{eq:control_zero}
 \end{equation}
 
-If several sgRNAs target the same gene, one may optionally introduce
+Many perturb-seq experiments use multiple sgRNAs for the same target. In that setting, a hierarchical decomposition is often preferable:
 \begin{equation}
 a_{gr} = a_g + \delta_{gr},
 \qquad
 \delta_{gr}\in\R^r,
 \label{eq:guide_hierarchy}
 \end{equation}
-with shrinkage of $\delta_{gr}$ toward zero. For the core formulation below, a single perturbation-level embedding $a_g$ is sufficient.
+with shrinkage of $\delta_{gr}$ toward zero. For expositional simplicity, the main formulas below use a single perturbation-level embedding $a_g$.
 
 \subsection{Joint population and total mass}
 
@@ -426,7 +432,10 @@ c_t = \Psi_{\theta_c}(\mu_t)\in\R^L,
 \end{equation}
 where $\Psi_{\theta_c}$ is a context map from the current joint population law to a low-dimensional summary.
 
-This expression is the precise mathematical content of the mean-field coupling: the coefficient fields are allowed to depend on the current population only through the context vector $c_t$.
+This expression is the precise mathematical content of the mean-field coupling: the coefficient fields are allowed to depend on the current population only through the context vector $c_t$. The no-context baseline is recovered by setting
+\[
+c_t \equiv 0.
+\]
 
 \subsection{One interpretable choice of context map}
 
@@ -457,6 +466,9 @@ c_t = \Psi_{\theta_c}(q_t,s_t)\in\R^L.
 \end{equation}
 
 This implementation keeps the mean-field layer interpretable in terms of coarse population composition and mediator features, but the core formulation does not require this particular choice.
+
+\paragraph{Sample-specific extension.}
+If the data include distinct mice, tumours, or experimental batches, a more faithful extension is to index populations and contexts by sample $s$, for example through $(\mu_{s,t}^g)_g$ and $c_{s,t}=\Psi_{\theta_c}(\mu_{s,t})$. The pooled version in \cref{eq:generic_context,eq:interpretable_context} should then be interpreted as an effective screen-average context.
 
 \subsection{Time embedding and common network input}
 
@@ -609,72 +621,60 @@ The bounded $\tanh$ form stabilizes training because the particle weights depend
 
 \subsection{Exact control anchor}
 
-Because controls satisfy $a_g=0$, \cref{eq:drift_total,eq:disp_preact,eq:growth_preact} imply that control perturbations follow the baseline continuation law produced by
+Because controls satisfy $a_g=0$, \cref{eq:drift_total,eq:disp_preact,eq:growth_preact} imply that, \emph{conditional on the shared context trajectory $c_t$}, control perturbations evaluate the baseline coefficient fields
 \[
-\beta_b(\cdot),\qquad
-\beta_\sigma(\cdot),\qquad
+\beta_b(\cdot),
+\qquad
+\beta_\sigma(\cdot),
+\qquad
 \beta_r(\cdot).
 \]
+This is an exact coefficient-level anchor. It should not be confused with the stronger claim that controls evolve in a perturbation-free global environment, because the shared context $c_t$ can itself depend on the full perturbation mixture.
 
-\subsection{Particle system}
+\subsection{Law-level representative process}
 
-For each perturbation $g$ and each observed $P4$ cell $x_{gi}$, define a stochastic trajectory $Z_t^{g,i}$ and a positive weight $w_t^{g,i}$ by
+For each perturbation $g$, let $(Z_t^g,w_t^g)$ denote a representative weighted trajectory solving
 \begin{equation}
-\dd Z_t^{g,i}
+\dd Z_t^g
 =
-b_g\big(Z_t^{g,i},t;\mu_t\big)\,\dd t
+b_g\big(Z_t^g,t;\mu_t\big)\,\dd t
 +
-\sigma_g\big(Z_t^{g,i},t;\mu_t\big)\,\dd W_t^{g,i},
+\sigma_g\big(Z_t^g,t;\mu_t\big)\,\dd W_t^g,
 \qquad
-Z_0^{g,i}=x_{gi},
-\label{eq:particle_sde}
+Z_0^g \sim p_0^g,
+\label{eq:law_sde}
 \end{equation}
 \begin{equation}
-\frac{\dd}{\dd t}\log w_t^{g,i}
+\frac{\dd}{\dd t}\log w_t^g
 =
-r_g\big(Z_t^{g,i},t;\mu_t\big),
+r_g\big(Z_t^g,t;\mu_t\big),
 \qquad
-w_0^{g,i}=1.
-\label{eq:weight_ode}
+w_0^g=1,
+\label{eq:law_weight}
 \end{equation}
-Here $W_t^{g,i}$ is a $d$-dimensional Brownian motion.
+where $W_t^g$ is a $d$-dimensional Brownian motion.
 
-Therefore
+The perturbation-specific law-level finite measure is then defined by
 \begin{equation}
-w_t^{g,i}
+\int_{\Zcal} f(z)\,\mu_t^g(\dd z)
 =
-\exp\!\left(
-\int_0^t r_g\big(Z_s^{g,i},s;\mu_s\big)\,\dd s
-\right).
-\label{eq:weight_solution}
+M_g^0\,\E\!\left[w_t^g f(Z_t^g)\right]
+\qquad
+\text{for every bounded measurable } f:\Zcal\to\R.
+\label{eq:law_measure_def}
 \end{equation}
-
-\subsection{Population measure induced by the particle system}
-
-The perturbation-specific population measure is
-\begin{equation}
-\mu_t^g
-=
-\frac{M_g^0}{n_g^0}
-\sum_{i=1}^{n_g^0}
-w_t^{g,i}\,\delta_{Z_t^{g,i}}
-\in\Mplus(\Zcal).
-\label{eq:mu_tg}
-\end{equation}
-In particular, the predicted terminal mass is
+In particular, taking $f\equiv 1$ gives the predicted terminal mass
 \begin{equation}
 \hat M_g^1
 =
 \mu_1^g(\Zcal)
 =
-\frac{M_g^0}{n_g^0}
-\sum_{i=1}^{n_g^0}w_1^{g,i}.
+M_g^0\,\E\!\left[w_1^g\right].
 \label{eq:pred_terminal_mass}
 \end{equation}
+At $t=0$, \cref{eq:law_measure_def} recovers $\mu_0^g=M_g^0p_0^g$.
 
-This weighted empirical measure is the central predicted object.
-
-\subsection{Weak measure form}
+\subsection{Weak measure form at the law level}
 
 For every smooth test function $f:\Zcal\to\R$,
 \begin{equation}
@@ -682,11 +682,11 @@ For every smooth test function $f:\Zcal\to\R$,
 =
 \int_{\Zcal}
 \left[
-b_g(z,t;\mu_t)\cdot \nabla f(z)
-+
-\frac{1}{2}\tr\!\left(D_g(z,t;\mu_t)\nabla^2 f(z)\right)
-+
-r_g(z,t;\mu_t)f(z)
+ b_g(z,t;\mu_t)\cdot \nabla f(z)
+ +
+ \frac{1}{2}\tr\!\left(D_g(z,t;\mu_t)\nabla^2 f(z)\right)
+ +
+ r_g(z,t;\mu_t)f(z)
 \right]
 \mu_t^g(\dd z),
 \label{eq:weak_form}
@@ -708,11 +708,83 @@ r_g(\cdot,t;\mu_t)\mu_t^g.
 \label{eq:fokker_planck}
 \end{equation}
 
+\subsection{Particle approximation}
+
+The weighted particle system is a numerical approximation to the law-level measure $\mu_t^g$. For each perturbation $g$, let $\{(Z_t^{g,i},w_t^{g,i})\}_{i=1}^{N_g}$ solve
+\begin{equation}
+\dd Z_t^{g,i}
+=
+b_g\big(Z_t^{g,i},t;\hat\mu_t\big)\,\dd t
++
+\sigma_g\big(Z_t^{g,i},t;\hat\mu_t\big)\,\dd W_t^{g,i},
+\label{eq:particle_sde}
+\end{equation}
+\begin{equation}
+\frac{\dd}{\dd t}\log w_t^{g,i}
+=
+r_g\big(Z_t^{g,i},t;\hat\mu_t\big),
+\qquad
+w_0^{g,i}=1,
+\label{eq:particle_weight}
+\end{equation}
+with empirical measure
+\begin{equation}
+\hat\mu_t^{g,N_g}
+=
+\frac{M_g^0}{N_g}
+\sum_{i=1}^{N_g}
+w_t^{g,i}\,\delta_{Z_t^{g,i}}
+\in\Mplus(\Zcal).
+\label{eq:particle_measure}
+\end{equation}
+Here $\hat\mu_t=(\hat\mu_t^{g,N_g})_{g\in\Gcal}$ denotes the current family of empirical measures.
+
+The simplest implementation takes $N_g=n_g^0$ and initializes the particles at the observed $P4$ cells,
+\[
+Z_0^{g,i}=x_{gi}.
+\]
+Then \cref{eq:particle_measure} matches the observed initial finite measure exactly at the numerical level.
+
+\subsection{Empirical weak form and martingale fluctuation}
+
+Because \cref{eq:particle_measure} is a random empirical measure, its dynamics are not purely deterministic. For every smooth test function $f:\Zcal\to\R$,
+\begin{equation}
+\dd \int_{\Zcal} f(z)\,\hat\mu_t^{g,N_g}(\dd z)
+=
+\left[
+\int_{\Zcal}
+\left(
+ b_g\cdot \nabla f
+ +
+ \frac{1}{2}\tr(D_g\nabla^2 f)
+ +
+ r_g f
+\right)
+\hat\mu_t^{g,N_g}(\dd z)
+\right]\dd t
++
+\dd M_t^{g,f,N_g},
+\label{eq:empirical_weak_form}
+\end{equation}
+where the martingale term is
+\begin{equation}
+\dd M_t^{g,f,N_g}
+=
+\frac{M_g^0}{N_g}
+\sum_{i=1}^{N_g}
+w_t^{g,i}\,\nabla f\!\left(Z_t^{g,i}\right)^\top
+\sigma_g\big(Z_t^{g,i},t;\hat\mu_t\big)
+\dd W_t^{g,i}.
+\label{eq:martingale_term}
+\end{equation}
+Thus, the deterministic weak form in \cref{eq:weak_form} and the formal reaction--drift--diffusion equation in \cref{eq:fokker_planck} apply to the law-level measure $\mu_t^g$, whereas the empirical particle approximation satisfies the same drift part plus a martingale fluctuation term.
+
 \subsection{Regularity conditions}
 
-For well-posedness of the particle system, we assume:
+For well-posedness of the law-level model and its particle approximation, we assume:
 \begin{enumerate}[label=(R\arabic*),leftmargin=2.8em]
-    \item the outputs of the three networks are measurable in $(t,\mu)$ and locally Lipschitz in $z$;
+    \item the outputs of the three coefficient networks are measurable in $(t,\eta)$, where $\eta$ denotes the finite-dimensional context argument, and are locally Lipschitz in $z$;
+    \item the context map depends on $\mu_t$ through a bounded finite-dimensional summary and is locally Lipschitz in that summary;
     \item $\sigma_{\min}>0$ and $r_{\max}<\infty$ are fixed constants;
     \item whenever interpretable summaries $\omega$ and $\phi$ are used, they are bounded.
 \end{enumerate}
@@ -791,20 +863,25 @@ Let $c(z,z')$ be the latent ground cost, typically
 \[
 c(z,z')=\norm{z-z'}_2^2.
 \]
+Because the OT loss is sensitive to latent geometry, this cost should be evaluated in a scaled or whitened latent space whenever the coordinates have strongly unequal variance. More general Mahalanobis or learned costs can also be substituted.
+
 For finite measures $\alpha,\beta\in\Mplus(\Zcal)$, define
 \begin{equation}
+\begin{aligned}
 \UOT_{\varepsilon,\tau}(\alpha,\beta)
 =
 \min_{\pi\in\Mplus(\Zcal\times\Zcal)}
-\left\{
+\Bigg\{&
 \int_{\Zcal\times\Zcal}c(z,z')\,\pi(\dd z,\dd z')
 +
 \varepsilon\,\KL(\pi\,\|\,\alpha\otimes\beta)
-+
+\\
+&+
 \tau\,\KL(\pi_1\,\|\,\alpha)
 +
 \tau\,\KL(\pi_2\,\|\,\beta)
-\right\},
+\Bigg\},
+\end{aligned}
 \label{eq:uot_def}
 \end{equation}
 where $\pi_1,\pi_2$ are the marginals of $\pi$.
@@ -833,7 +910,7 @@ To reduce entropic bias, define
 
 \subsection{Primary endpoint loss}
 
-The primary endpoint loss is
+The model-level endpoint loss is
 \begin{equation}
 \mathcal{L}_{\mathrm{end}}
 =
@@ -844,12 +921,30 @@ The primary endpoint loss is
 \end{equation}
 where $\alpha_g^{\mathrm{end}}$ are user-chosen weights.
 
+In computation, this loss is approximated by replacing $\mu_1^g$ with the particle measure $\hat\mu_1^{g,N_g}$:
+\begin{equation}
+\widehat{\mathcal{L}}_{\mathrm{end}}
+=
+\sum_{g\in\Gcal}
+\alpha_g^{\mathrm{end}}
+\,\SDunb_{\varepsilon,\tau}\!\left(\hat\mu_1^{g,N_g},\nu_1^g\right).
+\label{eq:L_end_particle}
+\end{equation}
+
 This loss is the central reason to formulate the endpoint as a finite-measure problem. It jointly penalizes:
 \begin{itemize}[leftmargin=2em]
     \item mismatch in terminal state geometry,
     \item mismatch in total terminal mass,
     \item and mismatch in the tradeoff between latent movement and mass change.
 \end{itemize}
+
+\subsection{Model-side growth versus loss-side mass relaxation}
+
+The reaction field $r_g$ and the unbalanced OT relaxation parameter $\tau$ both influence how terminal mass mismatch is resolved, but they play different roles.
+
+The field $r_g$ belongs to the forward biological model: it determines how perturbation-specific mass evolves along the interval. By contrast, the KL marginal relaxation in \cref{eq:uot_def} belongs to the endpoint discrepancy: it allows imperfect agreement between predicted and observed finite measures when guide-abundance calibration is noisy, when the finite-particle approximation is imperfect, or when strict balanced transport is too rigid.
+
+Because only a single interval is observed, these two mechanisms are only partially identifiable from endpoints alone. This is one reason to bound and regularize $r_g$ and to choose $\tau$ conservatively rather than allowing the loss to absorb all mass mismatch.
 
 \subsection{Optional auxiliary composition diagnostic}
 
@@ -939,11 +1034,12 @@ A generic parameter penalty is
 
 \subsection{Why strong regularization is necessary}
 
-From only two state-resolved time points, drift, diffusion, and growth are not equally identifiable. In practice:
+From only two state-resolved time points, drift, diffusion, growth, and context feedback are not equally identifiable. In practice:
 \begin{itemize}[leftmargin=2em]
     \item drift carries the main burden of explaining large-scale state change;
     \item diffusion should remain relatively simple and strongly regularized;
-    \item growth must be bounded because it exponentiates into the particle weights.
+    \item growth must be bounded because it exponentiates into the particle weights;
+    \item context effects should remain low-dimensional and well constrained.
 \end{itemize}
 These are not merely numerical choices; they are part of the effective interval modeling assumptions.
 
@@ -972,6 +1068,8 @@ The default main formulation takes
 \]
 or very small.
 
+In numerical training, $\mathcal{L}_{\mathrm{end}}$ is replaced by its particle approximation $\widehat{\mathcal{L}}_{\mathrm{end}}$ from \cref{eq:L_end_particle}.
+
 \section{Numerical approximation and training}
 
 \subsection{Euler--Maruyama approximation}
@@ -984,15 +1082,15 @@ t_\ell=\ell\Delta t,
 \qquad
 \ell=0,\dots,L-1.
 \]
-Using \cref{eq:particle_sde,eq:weight_ode}, a standard Euler--Maruyama update is
+Using \cref{eq:particle_sde,eq:particle_weight}, a standard Euler--Maruyama update is
 \begin{equation}
 Z_{\ell+1}^{g,i}
 =
 Z_{\ell}^{g,i}
 +
-b_g\!\left(Z_\ell^{g,i},t_\ell;\mu_{t_\ell}\right)\Delta t
+b_g\!\left(Z_\ell^{g,i},t_\ell;\hat\mu_{t_\ell}\right)\Delta t
 +
-\sigma_g\!\left(Z_\ell^{g,i},t_\ell;\mu_{t_\ell}\right)\sqrt{\Delta t}\,\xi_\ell^{g,i},
+\sigma_g\!\left(Z_\ell^{g,i},t_\ell;\hat\mu_{t_\ell}\right)\sqrt{\Delta t}\,\xi_\ell^{g,i},
 \label{eq:em_state}
 \end{equation}
 \begin{equation}
@@ -1000,7 +1098,7 @@ w_{\ell+1}^{g,i}
 =
 w_{\ell}^{g,i}
 \exp\!\left(
-r_g\!\left(Z_\ell^{g,i},t_\ell;\mu_{t_\ell}\right)\Delta t
+r_g\!\left(Z_\ell^{g,i},t_\ell;\hat\mu_{t_\ell}\right)\Delta t
 \right),
 \label{eq:em_weight}
 \end{equation}
@@ -1013,40 +1111,50 @@ where
 
 If the interpretable context construction \cref{eq:q_t,eq:s_t,eq:interpretable_context} is used, then at each step one recomputes
 \begin{equation}
-q_{t_\ell}
+\hat{\bar M}(t_\ell)
 =
-\frac{1}{\bar M(t_\ell)}
 \sum_{g\in\Gcal}
-\frac{M_g^0}{n_g^0}
-\sum_{i=1}^{n_g^0}
+\hat\mu_{t_\ell}^{g,N_g}(\Zcal)
+=
+\sum_{g\in\Gcal}
+\frac{M_g^0}{N_g}\sum_{i=1}^{N_g} w_\ell^{g,i},
+\label{eq:discrete_total_mass}
+\end{equation}
+\begin{equation}
+\hat q_{t_\ell}
+=
+\frac{1}{\hat{\bar M}(t_\ell)}
+\sum_{g\in\Gcal}
+\frac{M_g^0}{N_g}
+\sum_{i=1}^{N_g}
 w_\ell^{g,i}\,\omega(Z_\ell^{g,i}),
 \label{eq:discrete_q}
 \end{equation}
 \begin{equation}
-s_{t_\ell}
+\hat s_{t_\ell}
 =
-\frac{1}{\bar M(t_\ell)}
+\frac{1}{\hat{\bar M}(t_\ell)}
 \sum_{g\in\Gcal}
-\frac{M_g^0}{n_g^0}
-\sum_{i=1}^{n_g^0}
+\frac{M_g^0}{N_g}
+\sum_{i=1}^{N_g}
 w_\ell^{g,i}\,\phi(Z_\ell^{g,i}),
 \label{eq:discrete_s}
 \end{equation}
-and then set
+and then sets
 \begin{equation}
-c_{t_\ell}=\Psi_{\theta_c}(q_{t_\ell},s_{t_\ell}).
+\hat c_{t_\ell}=\Psi_{\theta_c}(\hat q_{t_\ell},\hat s_{t_\ell}).
 \label{eq:discrete_c}
 \end{equation}
-If a different context map is used, one updates $c_{t_\ell}$ according to that construction instead.
+If a different context map is used, one updates $\hat c_{t_\ell}$ according to that construction instead.
 
 \subsection{Discrete terminal measures}
 
-At the terminal step $t_L=1$, the predicted finite measure is
+At the terminal step $t_L=1$, the particle approximation to the predicted finite measure is
 \begin{equation}
-\mu_1^g
+\hat\mu_1^{g,N_g}
 =
-\frac{M_g^0}{n_g^0}
-\sum_{i=1}^{n_g^0}
+\frac{M_g^0}{N_g}
+\sum_{i=1}^{N_g}
 w_L^{g,i}\,\delta_{Z_L^{g,i}},
 \label{eq:mu_terminal_discrete}
 \end{equation}
@@ -1058,7 +1166,7 @@ while the observed terminal measure is
 \sum_{j=1}^{n_g^1}\delta_{y_{gj}}.
 \label{eq:nu_terminal_discrete}
 \end{equation}
-The discrete unbalanced OT problem underlying \cref{eq:L_end} is then built from the cost matrix
+The discrete unbalanced OT problem underlying \cref{eq:L_end_particle} is then built from the cost matrix
 \[
 C_{ij}^g = c(Z_L^{g,i},y_{gj}).
 \]
@@ -1068,10 +1176,11 @@ C_{ij}^g = c(Z_L^{g,i},y_{gj}).
 A practical training loop is:
 \begin{enumerate}[label=(\arabic*),leftmargin=2.2em]
     \item construct the shared latent space $\Zcal$ from pooled $P4$ and $P60$ data;
+    \item choose normalized guide-abundance masses $M_g^0,M_g^1$ and, if needed, filter or pool perturbations with insufficient state support;
     \item initialize particles at the observed $P4$ cells for each perturbation;
     \item jointly simulate all perturbation-indexed populations from $t=0$ to $t=1$ using \cref{eq:em_state,eq:em_weight};
-    \item compute the terminal measures $\mu_1^g$ and the derived summaries $\hat M_g^1$, $\hat p_1^g$, and optionally $\hat q_{g,1}$;
-    \item evaluate the primary endpoint loss \cref{eq:L_end} and the regularizers \cref{eq:R_emb,eq:R_mod,eq:R_disp,eq:R_nn};
+    \item compute the terminal empirical measures $\hat\mu_1^{g,N_g}$ and the derived summaries $\hat M_g^1$, $\hat p_1^g$, and optionally $\hat q_{g,1}$;
+    \item evaluate the approximate endpoint loss \cref{eq:L_end_particle} and the regularizers \cref{eq:R_emb,eq:R_mod,eq:R_disp,eq:R_nn};
     \item optionally evaluate \cref{eq:L_comp_aux} for diagnosis or weak auxiliary regularization;
     \item update parameters by stochastic gradient descent.
 \end{enumerate}
@@ -1088,7 +1197,7 @@ The central endpoint object is
 \[
 \mu_1^g,
 \]
-which jointly encodes terminal abundance and terminal state allocation.
+which jointly encodes terminal abundance and terminal state allocation. In practice, this object is accessed numerically through its particle approximation $\hat\mu_1^{g,N_g}$.
 
 \subsection{Predicted abundance effect}
 
@@ -1130,7 +1239,7 @@ Because controls correspond to $a_g=0$, one may also compare:
     \item evolution under $a_g$, and
     \item evolution under $a=0$,
 \end{enumerate}
-starting from the same initial state distribution. This directly quantifies the perturbation effect relative to the control continuation law.
+starting from the same initial state distribution and the same chosen context protocol. This directly quantifies the perturbation effect relative to the control continuation law.
 
 \section{What this model is, and is not}
 
@@ -1155,18 +1264,18 @@ The model is suitable for counterfactual simulation within the support of the ob
 The formulation can be summarized compactly as follows:
 
 \begin{quote}
-For each perturbation $g$, start from the observed $P4$ finite measure $\mu_0^g=M_g^0p_0^g$, evolve a weighted particle system in latent space under a control-anchored perturbation-conditioned McKean--Vlasov neural SDE whose drift, stochastic dispersion, and growth are modeled by three separate neural networks conditioned on latent state, time, and low-dimensional tissue context, and fit the resulting terminal finite measure $\mu_1^g$ to the observed $P60$ finite measure $\nu_1^g=M_g^1p_1^g$ by a single unbalanced optimal-transport discrepancy.
+For each perturbation $g$, start from the observed $P4$ finite measure $\mu_0^g=M_g^0p_0^g$, define a law-level weighted McKean--Vlasov SDE in latent space whose drift, stochastic dispersion, and growth are modeled by three separate control-anchored neural networks conditioned on latent state, time, and low-dimensional tissue context, approximate that law numerically by a weighted particle system, and fit the resulting terminal finite measure $\mu_1^g$ to the observed $P60$ finite measure $\nu_1^g=M_g^1p_1^g$ by a single unbalanced optimal-transport discrepancy.
 \end{quote}
 
 Equivalently, the model has five layers:
 \begin{enumerate}[label=(\arabic*),leftmargin=2.2em]
-    \item a \emph{biological mechanism layer}, which separates movement, stochastic spread, and growth/depletion;
-    \item an \emph{SDE layer}, which evolves latent cell states;
-    \item a \emph{weight layer}, which evolves perturbation-specific mass;
+    \item a \emph{biological mechanism layer}, which separates movement, stochastic spread, and abundance change;
+    \item a \emph{law-level SDE layer}, which defines the reaction--drift--diffusion finite-measure dynamics;
+    \item a \emph{particle approximation layer}, which provides a trainable Monte Carlo approximation to the law-level dynamics;
     \item a \emph{mean-field context layer}, which feeds back low-dimensional tissue information;
     \item an \emph{endpoint loss layer}, which compares predicted and observed terminal finite measures by unbalanced optimal transport.
 \end{enumerate}
 
-This is the explicit formal version of the $P4 \to P60$ control-anchored mean-field neural differential equation formulation after placing the biology first, explicitly introducing the SDE, and then giving the detailed finite-measure model and loss function.
+This is the revised formal version of the $P4 \to P60$ control-anchored mean-field neural differential equation formulation after making the law-versus-particle distinction explicit, clarifying the role of mass proxies and unbalanced endpoint fitting, and preserving the biology-first presentation.
 
 \end{document}
