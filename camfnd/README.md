@@ -1,19 +1,22 @@
 # CAMFND: Control-Anchored Mean-Field Neural Differential Equations
 
-A four-step computational framework for analyzing tumor cell evolution from Perturb-seq data. CAMFND models cell populations as finite measures evolving under stochastic differential dynamics, learning perturbation-specific drift, diffusion, and growth coefficients from paired initial/terminal snapshots (P4 → P60 developmental stages).
+CAMFND is a compact Python package for learning perturbation dynamics from endpoint data using finite measures, particle simulators, and transport-based objectives.
 
-## Overview
+The current codebase has three main layers:
 
-Perturb-seq experiments produce paired cell-state snapshots at two time points across multiple perturbation conditions. CAMFND treats each condition's cell population as a **finite measure** — a discrete approximation carrying both support atoms (cell positions in latent space) and weights (guide-abundance masses) — and learns the SDE coefficients that best transport the initial measure to the terminal one.
+1. a synthetic benchmark pipeline for validating the data contract, simulator, and benchmark-path models
+2. a direct multidimensional full-path simulator and trainer for the newer full model
+3. comparison and reporting utilities, including visualization and optional `scDiffEq` benchmarking helpers
 
-The pipeline is organized as four sequential steps:
+## Core Workflows
 
-| Step | Name | Description |
-|------|------|-------------|
-| **1** | Data Contract + Benchmark | Define the finite-measure data structure; generate the Stage-I benchmark dataset |
-| **2** | Euler-Maruyama Simulator | Verify ground-truth SDE dynamics via particle simulation |
-| **3** | Stage-I Learnable Model | Learn perturbation-specific coefficients with unbalanced OT loss (no screen context) |
-| **4** | Stage-II Context-Aware Model | Extend Stage-I with screen-level occupancy context coupling between perturbations |
+| Workflow | Main entry point | Purpose |
+| --- | --- | --- |
+| Benchmark pipeline | `camfnd.pipeline.run_full_pipeline` | Run the compact four-phase synthetic benchmark |
+| Visualization report | `camfnd.visualization.run_pipeline_with_visualizations` | Render a full figure report for the benchmark phases |
+| Direct full-path evaluation | `camfnd.evaluation.evaluate_full_model` | Evaluate the multidimensional `full_joint_sim.py` path directly |
+| Direct simulator case suite | `camfnd.evaluation.evaluate_full_joint_sim_cases` | Stress-test `FullJointSimulator` on analytic and invariance cases |
+| External comparisons | `camfnd.evaluation.evaluate_camfnd_vs_scdiffeq_*` | Compare CAMFND against `scDiffEq` on adapted datasets |
 
 ## Installation
 
@@ -22,43 +25,63 @@ conda activate ml1
 cd /home/yding1995/opscc_sc/tumor_evo
 ```
 
-The `camfnd` package is importable directly from this directory (no separate install required). All dependencies are available in the `ml1` conda environment.
+The package is importable directly from this tree; no separate install step is required in the current environment.
 
 ## Quick Start
 
-### Run the full pipeline
+### CLI
+
+Run the full benchmark pipeline:
 
 ```bash
-conda run -n ml1 python3 -m camfnd --output-dir ./outputs
+conda run -n ml1 python -m camfnd --output-dir ./outputs
 ```
 
-For a fast iteration (smaller benchmark configs):
+Run a faster small-config version:
 
 ```bash
-conda run -n ml1 python3 -m camfnd --fast --output-dir ./outputs
+conda run -n ml1 python -m camfnd --fast --output-dir ./outputs
 ```
 
-Run only specific steps:
+Run only selected benchmark phases:
 
 ```bash
-conda run -n ml1 python3 -m camfnd --steps 1 2 --output-dir ./outputs
+conda run -n ml1 python -m camfnd --steps 1 2 --output-dir ./outputs
 ```
+
+The CLI still accepts numeric `--steps` for backward compatibility, but outputs are saved under the semantic phase names:
+
+- `data_contract`
+- `simulator_validation`
+- `single_screen_model`
+- `multiscreen_context_model`
 
 ### Python API
 
 ```python
 from camfnd.pipeline import run_full_pipeline
+from camfnd.data import SingleScreenBenchmarkConfig, MultiscreenBenchmarkConfig
+from camfnd.training import SingleScreenTrainConfig, MultiscreenContextTrainConfig
 
-result = run_full_pipeline(output_dir="./outputs", verbose=True)
-print(
-    result.data_contract.ok,
-    result.simulator_validation.ok,
-    result.single_screen_model.ok,
-    result.multiscreen_context_model.ok,
+result = run_full_pipeline(
+    single_screen_config=SingleScreenBenchmarkConfig(),
+    multiscreen_config=MultiscreenBenchmarkConfig(),
+    single_screen_train_config=SingleScreenTrainConfig(),
+    multiscreen_train_config=MultiscreenContextTrainConfig(),
+    output_dir="./outputs",
+    verbose=True,
 )
+
+print(result.data_contract.ok)
+print(result.simulator_validation.ok)
+print(result.single_screen_model.ok)
+print(result.multiscreen_context_model.ok)
+print(result.all_pass)
 ```
 
-### Visualization API
+### Visualization Pipeline
+
+Run the benchmark and generate a visualization report in one call:
 
 ```python
 from camfnd.visualization import run_pipeline_with_visualizations
@@ -67,175 +90,290 @@ viz = run_pipeline_with_visualizations(
     pipeline_output_dir="./outputs",
     visualization_output_dir="./visualizations",
 )
+
 print(viz.artifacts.report_path)
+print(viz.artifacts.manifest_path)
 ```
 
-To render figures from an existing `PipelineResult`:
+Render figures from an existing `PipelineResult`:
 
 ```python
 from camfnd.visualization import generate_pipeline_visualizations
 
 artifacts = generate_pipeline_visualizations(result, "./visualizations")
-print(artifacts.manifest_path)
+print(artifacts.report_path)
 ```
 
-The figure design is documented in [`VISUALIZATION_PIPELINE.md`](/home/yding1995/opscc_sc/tumor_evo/camfnd/VISUALIZATION_PIPELINE.md).
+The visualization design is documented in [`VISUALIZATION_PIPELINE.md`](VISUALIZATION_PIPELINE.md).
+
+### Direct Full-Path Evaluation
+
+The benchmark pipeline is intentionally compact and synthetic. The direct full-path evaluator targets the newer multidimensional simulator and coefficient model:
+
+```python
+from camfnd.evaluation import evaluate_full_model, evaluate_full_joint_sim_cases
+
+full_eval = evaluate_full_model()
+case_suite = evaluate_full_joint_sim_cases()
+
+print(full_eval.ok)
+print(case_suite.ok)
+```
+
+The detailed math-and-code walkthrough for the full simulator is in [`FULL_JOINT_SIMULATION_GUIDE.md`](FULL_JOINT_SIMULATION_GUIDE.md).
+
+### Optional `scDiffEq` Comparisons
+
+The repo also contains comparison utilities for adapted `scDiffEq` datasets:
+
+```python
+from camfnd.evaluation import (
+    evaluate_camfnd_vs_scdiffeq_larry_4to6,
+    evaluate_camfnd_vs_scdiffeq_additional_datasets,
+)
+```
+
+These evaluators are optional benchmarking tools, not part of the core synthetic benchmark pipeline.
+
+## Output Layout
+
+When `run_full_pipeline(..., output_dir=...)` is used, CAMFND writes:
+
+- `data_contract/`
+- `simulator_validation/`
+- `single_screen_model/`
+- `multiscreen_context_model/`
+- `pipeline_summary.json`
+
+When `generate_pipeline_visualizations(...)` is used, CAMFND writes:
+
+- `overview/`
+- `data_contract/`
+- `simulator_validation/`
+- `single_screen_model/`
+- `multiscreen_context_model/`
+- `VISUALIZATION_REPORT.md`
+- `visualization_manifest.json`
 
 ## Package Structure
 
-```
+```text
 camfnd/
 ├── data/
-│   ├── contract.py          # Core data structures: FiniteMeasure, EndpointProblem, PerturbSeqDynamicsData
-│   ├── single_screen_benchmark.py  # Single-screen benchmark generator (4 perturbations, closed-form OU)
-│   └── multiscreen_benchmark.py    # Multi-screen benchmark generator (5 perturbations, joint dynamics)
+│   ├── contract.py
+│   ├── single_screen_benchmark.py
+│   └── multiscreen_benchmark.py
 ├── numerics/
-│   ├── particles_np.py      # NumPy ParticleState for deterministic simulation
-│   ├── particles_torch.py   # PyTorch TorchParticleState for learnable simulation
-│   ├── truth_coeffs.py      # Ground-truth SDE coefficient dataclass (Stage1SDECoefficients)
-│   └── euler_maruyama.py    # Euler-Maruyama integrator (Step 2 reference simulator)
+│   ├── euler_maruyama.py
+│   ├── particles_np.py
+│   ├── particles_torch.py
+│   └── truth_coeffs.py
 ├── models/
-│   ├── embeddings.py        # ControlAnchoredEmbeddingStore (exact zero anchor for controls)
-│   ├── time_embedding.py    # Fourier time feature map
-│   ├── sinkhorn.py          # Unbalanced Sinkhorn OT divergence loss
-│   ├── context_map.py       # OccupancyContextMap (soft right-occupancy screen summary)
-│   └── coeff_nets.py        # ControlAnchoredStage1Model / ControlAnchoredStage2Model
+│   ├── coeff_nets.py
+│   ├── context_map.py
+│   ├── embeddings.py
+│   ├── full_coeff_nets.py
+│   ├── full_context_map.py
+│   ├── sinkhorn.py
+│   └── time_embedding.py
 ├── simulation/
-│   ├── single_screen_sim.py         # LearnedStage1Simulator (no context)
-│   └── multiscreen_context_sim.py   # LearnedStage2JointSimulator (with context)
+│   ├── single_screen_sim.py
+│   ├── multiscreen_context_sim.py
+│   └── full_joint_sim.py
 ├── training/
-│   ├── single_screen_model.py       # Stage1TrainConfig, train_stage1_model
-│   └── multiscreen_context_model.py # Stage2TrainConfig, train_stage2_model
+│   ├── single_screen_model.py
+│   ├── multiscreen_context_model.py
+│   └── full_model.py
 ├── evaluation/
-│   ├── data_contract.py              # Data contract acceptance checks
-│   ├── simulator_validation.py       # Simulator exactness, stability, convergence
-│   ├── single_screen_model.py        # Single-screen model benchmark + ablations
-│   └── multiscreen_context_model.py  # Multi-screen model vs no-context ablation
+│   ├── data_contract.py
+│   ├── simulator_validation.py
+│   ├── single_screen_model.py
+│   ├── multiscreen_context_model.py
+│   ├── full_model.py
+│   ├── full_joint_sim_cases.py
+│   ├── scdiffeq_larry.py
+│   ├── scdiffeq_larry_4to6_compare.py
+│   └── scdiffeq_additional_datasets.py
 ├── visualization/
-│   ├── __init__.py                   # Visualization exports
-│   └── pipeline.py                   # Figure builders + report pipeline
-├── pipeline.py              # run_full_pipeline() end-to-end runner
-└── cli.py                   # python -m camfnd CLI
+│   ├── __init__.py
+│   └── pipeline.py
+├── pipeline.py
+├── cli.py
+└── scripts/
+    └── fetch_scdiffeq_datasets.sh
 ```
 
-## Core Concepts
+## Conceptual Model
 
 ### Finite Measures
 
-The fundamental data unit is a **finite measure** `μ = Σᵢ wᵢ δ(zᵢ)` where `zᵢ` are latent-space cell positions and `wᵢ > 0` are guide-abundance weights (not cell counts). The total mass `M = Σᵢ wᵢ` can differ across perturbations, capturing guide-induced changes in cell proliferation or death.
+The fundamental data object is a finite measure
 
-### Stochastic Dynamics
+\[
+\mu = \sum_i w_i \delta(z_i),
+\]
 
-Cells evolve under an Ornstein-Uhlenbeck SDE:
+where:
 
-```
-dz  = κ(θ_g − z) dt + σ_g dW          (position)
-d(log w) = ρ_g dt                       (mass growth)
-```
+- `z_i` are latent-state support points
+- `w_i > 0` are guide-abundance weights
+- total mass can vary across perturbations and screens
 
-Parameters are perturbation-specific (`_g` subscript) with shared mean-reversion rate `κ`. Stage-II adds a screen-level context term:
+This separates biological abundance from raw cell count and is the core data-contract idea in [`data/contract.py`](data/contract.py).
 
-```
-dz = κ(θ_g − z) dt + η · c_{s,t} dt + σ_g dW
-```
+### Benchmark Path Dynamics
 
-where `c_{s,t}` is the soft right-occupancy of the screen computed across all perturbations.
+The compact synthetic benchmark uses a 1D Ornstein-Uhlenbeck-style reference process:
 
-### Control-Anchored Embeddings
+\[
+dz = \kappa(\theta_g - z)\,dt + \sigma_g\,dW,
+\]
+\[
+d(\log w) = \rho_g\,dt.
+\]
 
-Each perturbation is represented by a learnable embedding `a_g ∈ Rᵈ`. All **control** perturbations are hard-fixed to `a_g = 0`, making coefficient differences interpretable relative to the unperturbed baseline. Non-controls receive a one-hot initialization when `d ≥ n_perturbations`.
+The multiscreen benchmark adds a screen-level context term:
 
-### Loss Function
+\[
+dz = \kappa(\theta_g - z)\,dt + \eta\,c_{s,t}\,dt + \sigma_g\,dW.
+\]
 
-Training minimizes an **unbalanced Sinkhorn divergence** (UOT) between predicted terminal particles and observed terminal measures, plus auxiliary moment penalties on mass, mean, and variance:
+This path is implemented by:
 
-```
-L = UOT(μ̂_terminal, μ_terminal) + λ_mass·(M̂−M)² + λ_mean·(m̂−m)² + λ_var·(v̂−v)²
-```
+- [`simulation/single_screen_sim.py`](simulation/single_screen_sim.py)
+- [`simulation/multiscreen_context_sim.py`](simulation/multiscreen_context_sim.py)
 
-Stage-II adds a screen-delta loss penalizing errors in the cross-screen mean shift per perturbation.
+### Full Path Dynamics
 
-## Benchmarks
+The direct full model generalizes to multidimensional latent states and a learned sample-level mean-field context:
 
-### Stage-I Benchmark
+- simulator: [`simulation/full_joint_sim.py`](simulation/full_joint_sim.py)
+- coefficient model: [`models/full_coeff_nets.py`](models/full_coeff_nets.py)
+- context map: [`models/full_context_map.py`](models/full_context_map.py)
 
-Four perturbations on a single screen: `ctrl`, `drift` (shifted mean), `diff` (increased diffusion), `react` (reduced mass). Ground-truth uses closed-form OU terminal moments.
+This is the path evaluated by [`evaluation/full_model.py`](evaluation/full_model.py), not by the compact benchmark pipeline.
 
-**Acceptance criteria (Step 1):**
-- `drift` terminal mean > `ctrl` terminal mean
-- `diff` terminal variance > `ctrl` terminal variance
-- `react` terminal mass < `ctrl` terminal mass
+### Control-Anchored Coefficients
 
-**Ablations tested (Step 3):**
-- `no_growth`: growth field disabled — fails on `react` mass recovery
-- `shared_diffusion`: single diffusion across all perturbations — fails on `diff` variance
-- `normalized_only`: normalized OT loss (ignores mass) — fails on `react` mass
+Controls are hard-anchored at zero in the perturbation embedding space, so learned perturbation effects remain interpretable relative to control.
 
-### Stage-II Benchmark
+### Losses
 
-Five perturbations across two screens. Screens differ only in the initial mass of the `driver` perturbation, which modulates the screen-level occupancy context. The context-aware model (`use_context=True`) recovers the cross-screen mean shift; the ablation (`use_context=False`) fails.
+CAMFND uses transport-based endpoint losses together with moment penalties:
 
-## CUDA Acceleration
+- unbalanced Sinkhorn divergence or normalized geometry loss
+- auxiliary mass penalty
+- auxiliary mean penalty
+- auxiliary variance penalty
+- for the multiscreen benchmark, an additional screen-delta mean penalty
 
-CAMFND automatically uses CUDA when available. Both training configs default to `device="auto"`:
+## Built-In Evaluation Suites
 
-```python
-from camfnd.training.single_screen_model import SingleScreenTrainConfig
+### Benchmark Pipeline Phases
 
-# Auto-selects CUDA if available, falls back to CPU
-config = SingleScreenTrainConfig()
-print(config.resolved_device)  # "cuda" or "cpu"
+- `evaluate_data_contract`
+  - checks structural validity and benchmark signatures
+- `evaluate_simulator_validation`
+  - checks initialization exactness, parity with analytic truth, and convergence
+- `evaluate_single_screen_model`
+  - trains the single-screen model and required ablations
+- `evaluate_multiscreen_context_model`
+  - trains the context-aware model and the no-context ablation
 
-# Force a specific device
-config_cpu = SingleScreenTrainConfig(device="cpu")
-config_gpu = SingleScreenTrainConfig(device="cuda")
-```
+### Direct Full-Path Validation
 
-Observed speedup on a single GPU (256-cell benchmark, float64): **~1.8× vs CPU**.
-Speedup scales with dataset size and `particles_per_atom`.
+- `evaluate_full_model`
+  - direct training-and-evaluation harness for the full multidimensional path
+- `evaluate_full_joint_sim_cases`
+  - analytic, invariance, and feedback test suite for `FullJointSimulator`
 
-> **Note:** CUDA float64 arithmetic introduces different rounding than CPU for the same seed. Step 4's stochastic threshold tests (designed for CPU) may differ on CUDA; the underlying model training is numerically correct on both devices.
+### External Comparisons
 
-## Evaluation Results
+- `evaluate_camfnd_on_scdiffeq_larry`
+- `evaluate_camfnd_vs_scdiffeq_larry_4to6`
+- `evaluate_camfnd_vs_scdiffeq_larry_4to6_cv`
+- `evaluate_camfnd_vs_scdiffeq_additional_datasets`
 
-All 17 tests pass with CPU parity against the original separate packages:
+These rely on additional external data and are intended for comparative benchmarking rather than core package validation.
 
-```
-Steps 1–2 (data + simulator):  9/9  PASS
-Step 3 (Stage-I model):         4/4  PASS
-Step 4 (Stage-II model):        4/4  PASS
-```
+## Configuration Guide
 
-## Training Configuration
+Preferred public names are the semantic aliases:
 
-### Stage-I (`Stage1TrainConfig`)
+- `SingleScreenBenchmarkConfig`
+- `MultiscreenBenchmarkConfig`
+- `SingleScreenTrainConfig`
+- `MultiscreenContextTrainConfig`
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `epochs` | 60 | Training epochs |
-| `lr` | 0.05 | Adam learning rate |
-| `embedding_dim` | 3 | Perturbation embedding dimension |
-| `n_steps` | 16 | Euler-Maruyama steps during training |
-| `epsilon` | 0.08 | Sinkhorn regularization |
-| `tau` | 0.45 | UOT marginal penalty |
-| `device` | `"auto"` | `"auto"` / `"cpu"` / `"cuda"` |
+The historical `Stage1*` and `Stage2*` names are still exported for compatibility.
 
-### Stage-II (`Stage2TrainConfig`)
+### Single-Screen Benchmark
 
-Inherits all Stage-I parameters plus:
+`SingleScreenBenchmarkConfig` controls:
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `epochs` | 40 | Training epochs |
-| `use_context` | `True` | Enable screen-level context coupling |
-| `aux_screen_delta_mean_weight` | 10.0 | Weight on cross-screen delta loss |
-| `embedding_dim` | 4 | Larger embedding for 5-perturbation catalog |
+- seed and sample id
+- number of observed cells at `P4` and `P60`
+- OU initial mean and variance
+- shared `kappa`
+- whether to infer and store a latent transform
 
-## Project Background
+Default synthetic perturbations:
 
-This framework was developed to analyze OROPHARYNGEAL SQUAMOUS CELL CARCINOMA (OPSCC) tumor evolution through single-cell Perturb-seq experiments. The four-step design separates concerns:
+- `ctrl`
+- `drift`
+- `diff`
+- `react`
 
-1. **Data modeling** (Step 1) ensures the finite-measure contract is satisfied before any learning occurs.
-2. **Ground-truth simulation** (Step 2) validates the SDE dynamics independently of the neural components.
-3. **Single-screen learning** (Step 3) establishes that perturbation-specific coefficients can be recovered without cross-screen information.
-4. **Multi-screen context learning** (Step 4) demonstrates that screen-level occupancy context is necessary and sufficient to explain cross-screen variation.
+### Multiscreen Benchmark
+
+`MultiscreenBenchmarkConfig` adds:
+
+- two screen ids
+- truth-particle count
+- Euler-Maruyama step count
+- context coupling strength `eta`
+- screen-specific initial masses for the `driver` perturbation
+- context-map configuration
+
+Default synthetic perturbations:
+
+- `ctrl`
+- `drift`
+- `diff`
+- `react`
+- `driver`
+
+### Training Configs
+
+`SingleScreenTrainConfig` / `Stage1TrainConfig`
+
+- benchmark-path single-screen training
+- controls network width/depth, number of simulation steps, OT hyperparameters, penalties, and optimizer settings
+
+`MultiscreenContextTrainConfig` / `Stage2TrainConfig`
+
+- benchmark-path multiscreen training
+- adds `use_context` and `aux_screen_delta_mean_weight`
+
+`FullModelTrainConfig`
+
+- multidimensional full-path training
+- adds learned context-map dimensions and hidden sizes for the full model
+
+All training configs support:
+
+- `device="auto" | "cpu" | "cuda"`
+- `dtype="float32" | "float64"`
+
+## CUDA Notes
+
+Training configs use `device="auto"` by default and will select CUDA when available.
+
+Because the synthetic benchmarks use stochastic simulation and floating-point transport losses, CPU and CUDA runs can differ slightly even with the same seed. This is expected; the main effect is usually on tight threshold-based acceptance checks, not on overall model validity.
+
+## Notes
+
+- The benchmark pipeline is intentionally small and synthetic. It is meant to validate mechanics, not to replace the direct full-path evaluator.
+- The direct full path is the combination of [`simulation/full_joint_sim.py`](simulation/full_joint_sim.py), [`training/full_model.py`](training/full_model.py), and [`evaluation/full_model.py`](evaluation/full_model.py).
+- The visualization package is report-oriented and writes static images plus a generated markdown summary.
+- `scDiffEq` comparison utilities assume the external `scDiffEq` environment and downloaded datasets are available.
