@@ -1,0 +1,59 @@
+Loading HNSCC data from /home/yding1995/opscc_sc/scDiffeq/hnscc/GSE235325_P4P60_scdiffeq_compatible.h5ad
+Loaded obs=(303161, 56) latent=(303161, 50)
+Train cells=197530 | Test cells=79819 | Supported perturbations=121 | Controls=['ctrl']
+Training CAPE for 500 epochs ...
+[all] Epoch    0/500 | total=36358.6875 end=36358.5547 weak=0.0000 count=0.0000 reg=0.1314 | t=0.9s
+[all] Epoch   25/500 | total=24559.2617 end=24559.1289 weak=0.0000 count=0.0000 reg=0.1331 | t=20.4s
+[all] Epoch   50/500 | total=18388.8203 end=18388.6836 weak=0.0000 count=0.0000 reg=0.1363 | t=40.8s
+[all] Epoch   75/500 | total=16105.4678 end=16105.3262 weak=0.0000 count=0.0000 reg=0.1411 | t=65.9s
+[all] Epoch  100/500 | total=14671.4326 end=14671.2852 weak=0.0000 count=0.0000 reg=0.1472 | t=84.4s
+[all] Epoch  125/500 | total=13554.5264 end=13554.3711 weak=0.0000 count=0.0000 reg=0.1548 | t=105.5s
+[all] Epoch  150/500 | total=12783.1953 end=12783.0332 weak=0.0000 count=0.0000 reg=0.1617 | t=128.9s
+[all] Epoch  175/500 | total=12268.4541 end=12268.2871 weak=0.0000 count=0.0000 reg=0.1666 | t=150.1s
+[all] Epoch  200/500 | total=11809.8467 end=11809.6758 weak=0.0000 count=0.0000 reg=0.1711 | t=185.1s
+[all] Epoch  225/500 | total=11256.4854 end=11256.3086 weak=0.0000 count=0.0000 reg=0.1765 | t=206.2s
+[all] Epoch  250/500 | total=10989.0820 end=10988.9023 weak=0.0000 count=0.0000 reg=0.1799 | t=222.9s
+[all] Epoch  275/500 | total=10726.0254 end=10725.8398 weak=0.0000 count=0.0000 reg=0.1852 | t=242.4s
+[all] Epoch  300/500 | total=10532.7100 end=10532.5215 weak=0.0000 count=0.0000 reg=0.1889 | t=267.9s
+[all] Epoch  325/500 | total=10236.0957 end=10235.9023 weak=0.0000 count=0.0000 reg=0.1933 | t=291.0s
+[all] Epoch  350/500 | total=10216.7109 end=10216.5137 weak=0.0000 count=0.0000 reg=0.1971 | t=321.1s
+[all] Epoch  375/500 | total=9970.5098 end=9970.3086 weak=0.0000 count=0.0000 reg=0.2011 | t=344.2s
+[all] Epoch  400/500 | total=9847.4766 end=9847.2725 weak=0.0000 count=0.0000 reg=0.2043 | t=360.3s
+[all] Epoch  425/500 | total=9826.6592 end=9826.4521 weak=0.0000 count=0.0000 reg=0.2067 | t=382.7s
+[all] Epoch  450/500 | total=9703.6699 end=9703.4609 weak=0.0000 count=0.0000 reg=0.2089 | t=423.0s
+[all] Epoch  475/500 | total=9649.5498 end=9649.3389 weak=0.0000 count=0.0000 reg=0.2111 | t=452.3s
+Training finished in 470.6s
+Loaded best checkpoint from /home/yding1995/opscc_sc/CAPE/outputs/hnscc_cape_full_wta_vram10gb_20260328_181653/checkpoint_best.pt
+# CAPE HNSCC P4/P60 Run
+
+Output dir: `/home/yding1995/opscc_sc/CAPE/outputs/hnscc_cape_full_wta_vram10gb_20260328_181653`
+Data path: `/home/yding1995/opscc_sc/scDiffeq/hnscc/GSE235325_P4P60_scdiffeq_compatible.h5ad`
+
+- Guide-confident only: `True`
+- WTA column: `Library`
+- Train WTAs: `wta13, wta14, wta15, wta16, wta17, wta18, wta4, wta5, wta6, wta7, wta9`
+- Test WTAs: `wta10, wta11, wta12, wta8`
+- Train particles / steps: `128` / `16`
+- Eval particles / steps: `384` / `24`
+- Eval target atoms per perturbation: `768`
+- Weak-form test functions: `12`
+- Weak loss weight: `0.1`
+- Max train target atoms per perturbation: `768`
+- Supported perturbations: `121`
+- Control ids: `ctrl`
+- Train time (s): `470.6`
+- Train peak GPU allocated / reserved (MB): `7547.0` / `8282.0`
+- Eval peak GPU allocated / reserved (MB): `515.7` / `780.0`
+
+## Train Endpoint Summary
+
+- Mean UOT: `140.6668`
+- Median UOT: `140.0587`
+- Mean mass rel error: `0.3543`
+
+## Test Endpoint Summary
+
+- Mean UOT: `213.2774`
+- Median UOT: `211.0581`
+- Mean mass rel error: `0.5608`
+

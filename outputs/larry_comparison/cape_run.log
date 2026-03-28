@@ -1,0 +1,36 @@
+Loading data …
+Filtered adata: (40490, 2492)
+t=2 undiff: 4199  t=4: 12851  t=6: 23089
+kNN trained on t=6: 23089 cells
+CAPE params: 1,340,619
+Training CAPE 1000 epochs on cuda …
+  epoch    0  sink4=103.5304  sink6=157.9833
+  epoch  100  sink4=37.2645  sink6=43.0022
+  epoch  200  sink4=35.4059  sink6=29.2616
+  epoch  300  sink4=30.0155  sink6=29.2880
+  epoch  400  sink4=31.9010  sink6=29.3788
+  epoch  500  sink4=24.4691  sink6=24.7602
+  epoch  600  sink4=26.8200  sink6=26.3467
+  epoch  700  sink4=26.0191  sink6=24.4814
+  epoch  800  sink4=30.2774  sink6=23.3338
+  epoch  900  sink4=25.9141  sink6=24.0367
+Training done in 20.7s
+CAPE post-training Sinkhorn (PCA, weighted): t4=24.5970, t6=21.5411
+CAPE fate counts (unweighted): {'Undifferentiated': 958, 'Monocyte': 66, 'Neutrophil': 512}
+CAPE fate fractions (weighted): {'Monocyte': '0.043', 'Neutrophil': '0.333', 'Undifferentiated': '0.624'}
+Saved to /home/yding1995/opscc_sc/CAPE/outputs/larry_comparison/results_cape.json
+{
+  "method": "CAPE",
+  "n_epochs": 1000,
+  "n_particles": 512,
+  "latent_dim": 50,
+  "n_params": 1340619,
+  "train_time_s": 20.7,
+  "sink_pca_4": 24.59695816040039,
+  "sink_pca_6": 21.54106330871582,
+  "fate_monocyte": 66,
+  "fate_neutrophil": 512,
+  "fate_undifferentiated": 958,
+  "fate_mono_frac": 0.1142,
+  "fate_mono_frac_weighted": 0.1142
+}

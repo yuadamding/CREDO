@@ -1,0 +1,34 @@
+{
+  "train_time_s": 3.2,
+  "best_checkpoint": "/home/yding1995/opscc_sc/CAPE/outputs/hnscc_cape_full_smoke/checkpoint_best.pt",
+  "train_summary": {
+    "n_perturbations": 121,
+    "mean_uot": 515.9459407585712,
+    "median_uot": 512.470947265625,
+    "mean_mass_rel_error": 0.46308432604904093,
+    "median_mass_rel_error": 0.4686415884500879,
+    "n_controls": 1,
+    "control_mean_uot": 527.43505859375,
+    "control_mean_mass_rel_error": 0.5642034737669478,
+    "n_non_controls": 120,
+    "non_control_mean_uot": 515.8501981099447,
+    "non_control_mean_mass_rel_error": 0.46224166648472503
+  },
+  "test_summary": {
+    "n_perturbations": 121,
+    "mean_uot": 477.4883321967007,
+    "median_uot": 475.1544189453125,
+    "mean_mass_rel_error": 7.8188603574697995,
+    "median_mass_rel_error": 5.963756123527151,
+    "n_controls": 1,
+    "control_mean_uot": 460.83184814453125,
+    "control_mean_mass_rel_error": 5.918868111939829,
+    "n_non_controls": 120,
+    "non_control_mean_uot": 477.62713623046875,
+    "non_control_mean_mass_rel_error": 7.83469362618255
+  },
+  "n_supported_perturbations": 121,
+  "guide_confident_only": true,
+  "data_path": "/home/yding1995/opscc_sc/scDiffeq/hnscc/GSE235325_P4P60_scdiffeq_compatible.h5ad",
+  "output_dir": "/home/yding1995/opscc_sc/CAPE/outputs/hnscc_cape_full_smoke"
+}

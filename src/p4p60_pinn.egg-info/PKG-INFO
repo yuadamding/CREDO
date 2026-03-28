@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: p4p60_pinn
+Version: 0.1.0
+Summary: Perturbation-conditioned weak-form PINN for P4/P60 Perturb-seq cohort
+Requires-Python: >=3.11
+Requires-Dist: torch>=2.1
+Requires-Dist: numpy>=1.26
+Requires-Dist: pandas>=2.1
+Requires-Dist: scipy>=1.11
+Requires-Dist: pydantic>=2.0
+Requires-Dist: geomloss>=0.2.6
+Requires-Dist: anndata>=0.10
+Requires-Dist: tqdm>=4.65
+Requires-Dist: matplotlib>=3.7
+Requires-Dist: seaborn>=0.13
+Requires-Dist: PyYAML>=6.0

@@ -1,0 +1,28 @@
+DEBUG: Initializing Simulation
+DEBUG: Built internal structures
+DEBUG: Setup inputs with ignore list: ['self', '__class__']
+DEBUG: Public attributes specified, setting all others as private
+DEBUG: Setting private attribute: _use_key
+DEBUG: Setting private attribute: _time_key
+DEBUG: Setting private attribute: _N
+DEBUG: Setting private attribute: _device
+DEBUG: Setting private attribute: _args
+DEBUG: Setting private attribute: _kwargs
+DEBUG: Setup inputs with ignore list: ['self', '__class__']
+DEBUG: Public attributes specified, setting all others as private
+DEBUG: Setting private attribute: _diffeq
+DEBUG: Setting private attribute: _adata
+DEBUG: Setting private attribute: _idx
+DEBUG: Setting private attribute: _dt
+DEBUG: Updated args: ()
+DEBUG: Updated kwargs: {}
+DEBUG: Updated 2 existing parameters and added 4 new parameters
+ - Setup inputs with ignore list: ['self', '__class__']
+2026-03-28 15:50:04 - Simulation - DEBUG - Public attributes specified, setting all others as private
+2026-03-28 15:50:04 - Simulation - DEBUG - Setting private attribute: _diffeq
+2026-03-28 15:50:04 - Simulation - DEBUG - Setting private attribute: _adata
+2026-03-28 15:50:04 - Simulation - DEBUG - Setting private attribute: _idx
+2026-03-28 15:50:04 - Simulation - DEBUG - Setting private attribute: _dt
+2026-03-28 15:50:04 - Simulation - DEBUG - Updated args: ()
+2026-03-28 15:50:04 - Simulation - DEBUG - Updated kwargs: {}
+2026-03-28 15:50:04 - Simulation - DEBUG - Updated 2 existing parameters and added 4 new parameters

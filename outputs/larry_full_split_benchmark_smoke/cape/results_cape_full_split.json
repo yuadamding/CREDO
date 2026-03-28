@@ -1,0 +1,93 @@
+{
+  "method": "CAPE",
+  "scope": "full_larry_fixed_split",
+  "data_path": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_splits/larry_package_like_no_download.split_80_10_10.h5ad",
+  "device": "cuda",
+  "torch_version": "2.9.1+cu128",
+  "conda_env": "ml1",
+  "matmul_precision": "high",
+  "tf32_enabled": true,
+  "n_epochs": 1,
+  "n_particles": 512,
+  "latent_dim": 50,
+  "n_params": 1340619,
+  "split_counts": {
+    "train": 104711,
+    "val": 13089,
+    "test": 13087
+  },
+  "train_time_s": 0.2,
+  "eval_time_s": 0.0,
+  "peak_gpu_mem_mb": 78.1,
+  "epochs_curve": [
+    0
+  ],
+  "sinkhorn_train_curve": {
+    "4.0": [
+      117.18627166748047
+    ],
+    "6.0": [
+      175.74203491210938
+    ]
+  },
+  "sinkhorn_val_curve": {
+    "4.0": [
+      95.78619384765625
+    ],
+    "6.0": [
+      200.04400634765625
+    ]
+  },
+  "sink_pca_by_time": {
+    "4.0": 99.40795135498047,
+    "6.0": 165.01492309570312
+  },
+  "t6_pred_label_counts": {
+    "Undifferentiated": 115,
+    "Neutrophil": 6,
+    "Monocyte": 6,
+    "Mast": 1
+  },
+  "t6_true_label_counts": {
+    "Undifferentiated": 1789,
+    "Neutrophil": 1445,
+    "Monocyte": 1072,
+    "Baso": 672,
+    "Mast": 197,
+    "Meg": 136,
+    "Erythroid": 44,
+    "Eos": 35,
+    "Lymphoid": 13,
+    "Ccr7_DC": 9,
+    "pDC": 3
+  },
+  "t6_pred_label_fractions": {
+    "Baso": 0.0,
+    "Ccr7_DC": 0.0,
+    "Eos": 0.0,
+    "Erythroid": 0.0,
+    "Lymphoid": 0.0,
+    "Mast": 0.0078125,
+    "Meg": 0.0,
+    "Monocyte": 0.046875,
+    "Neutrophil": 0.046875,
+    "Undifferentiated": 0.8984375,
+    "pDC": 0.0
+  },
+  "t6_true_label_fractions": {
+    "Baso": 0.12409972299168975,
+    "Ccr7_DC": 0.0016620498614958448,
+    "Eos": 0.006463527239150508,
+    "Erythroid": 0.008125577100646353,
+    "Lymphoid": 0.0024007386888273315,
+    "Mast": 0.03638042474607572,
+    "Meg": 0.025115420129270545,
+    "Monocyte": 0.1979686057248384,
+    "Neutrophil": 0.26685133887349954,
+    "Undifferentiated": 0.3303785780240074,
+    "pDC": 0.000554016620498615
+  },
+  "t6_label_tv_distance": 0.5680589219759926,
+  "evaluation_plan_path": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/cape/evaluation_plan.json",
+  "model_path": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/cape/cape_model_full_split.pt"
+}

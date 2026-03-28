@@ -1,0 +1,42 @@
+Loading split full LARRY data …
+adata: (130887, 2492)
+split_counts: {'train': 104711, 'val': 13089, 'test': 13087}
+Using device=cuda torch=2.9.1+cu128 env=ml1
+train sizes by time: {'2.0': 22600, '4.0': 38799, '6.0': 43312}
+val sizes by time: {'2.0': 2827, '4.0': 4849, '6.0': 5413}
+test sizes by time: {'2.0': 2822, '4.0': 4850, '6.0': 5415}
+CAPE params: 1,340,619
+Training CAPE on train split for 2000 epochs …
+  epoch    0 t4=108.94 t6=182.62
+  epoch  100 t4=56.41 t6=42.55
+  epoch  200 t4=44.65 t6=34.01
+  epoch  300 t4=36.75 t6=34.07
+  epoch  400 t4=35.70 t6=34.74
+  epoch  500 t4=48.73 t6=27.67
+  epoch  600 t4=41.25 t6=28.35
+  epoch  700 t4=41.28 t6=27.85
+  epoch  800 t4=51.31 t6=30.58
+  epoch  900 t4=45.27 t6=25.93
+  epoch 1000 t4=36.95 t6=34.54
+  epoch 1100 t4=40.64 t6=30.16
+  epoch 1200 t4=35.41 t6=25.99
+  epoch 1300 t4=47.65 t6=28.90
+  epoch 1400 t4=39.96 t6=30.46
+  epoch 1500 t4=33.40 t6=26.99
+  epoch 1600 t4=35.30 t6=32.65
+  epoch 1700 t4=32.26 t6=28.09
+  epoch 1800 t4=34.25 t6=26.46
+  epoch 1900 t4=33.99 t6=30.54
+Training done in 563.7s
+# CAPE Full-LARRY Fixed-Split Benchmark
+
+| Metric | Value |
+| --- | ---: |
+| Train time (s) | 563.7 |
+| Eval time (s) | 0.0 |
+| Peak GPU mem (MB) | 909.3 |
+| Sinkhorn t=4 | 35.9071 |
+| Sinkhorn t=6 | 29.6621 |
+| t6 label TV | 0.1703 |
+| Model path | /home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_cape_focus_20260328_173950/cape/cape_model_full_split.pt |
+

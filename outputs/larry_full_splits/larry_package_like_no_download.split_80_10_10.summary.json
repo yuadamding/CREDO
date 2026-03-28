@@ -1,0 +1,25 @@
+{
+  "source_data_path": "/home/yding1995/opscc_sc/scDiffeq/KleinLabData/in_vitro/larry_package_like_no_download.h5ad",
+  "output_h5ad": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_splits/larry_package_like_no_download.split_80_10_10.h5ad",
+  "seed": 0,
+  "stratify_cols": [
+    "Time point",
+    "Cell type annotation"
+  ],
+  "n_cells": 130887,
+  "n_features": 2492,
+  "overall_counts": {
+    "train": {
+      "n_cells": 104711,
+      "fraction": 0.8000106962494365
+    },
+    "val": {
+      "n_cells": 13089,
+      "fraction": 0.10000229205345068
+    },
+    "test": {
+      "n_cells": 13087,
+      "fraction": 0.09998701169711277
+    }
+  }
+}

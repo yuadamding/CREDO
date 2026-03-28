@@ -1,0 +1,97 @@
+{
+  "method": "scDiffeq",
+  "scope": "full_larry_fixed_split",
+  "data_path": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_splits/larry_package_like_no_download.split_80_10_10.h5ad",
+  "device": "cuda",
+  "torch_version": "2.10.0+cu128",
+  "conda_env": "scdiffeq",
+  "matmul_precision": "high",
+  "tf32_enabled": true,
+  "n_epochs": 1,
+  "n_params": 293618,
+  "split_counts": {
+    "train": 104711,
+    "val": 13089,
+    "test": 13087
+  },
+  "train_time_s": 5.8,
+  "eval_time_s": 0.0,
+  "peak_gpu_mem_mb": 2743.4,
+  "epochs_curve": [
+    0
+  ],
+  "sinkhorn_train_curve": {
+    "4.0": [
+      132.6870574951172
+    ],
+    "6.0": [
+      239.7855224609375
+    ]
+  },
+  "sinkhorn_val_curve": {
+    "4.0": [
+      107.22026824951172
+    ],
+    "6.0": [
+      187.8282928466797
+    ]
+  },
+  "sink_pca_by_time": {
+    "4.0": 105.76058197021484,
+    "6.0": 185.9233856201172
+  },
+  "t6_pred_label_counts": {
+    "Undifferentiated": 112,
+    "Neutrophil": 6,
+    "Monocyte": 9,
+    "Mast": 1
+  },
+  "t6_true_label_counts": {
+    "Undifferentiated": 1789,
+    "Neutrophil": 1445,
+    "Monocyte": 1072,
+    "Baso": 672,
+    "Mast": 197,
+    "Meg": 136,
+    "Erythroid": 44,
+    "Eos": 35,
+    "Lymphoid": 13,
+    "Ccr7_DC": 9,
+    "pDC": 3
+  },
+  "t6_pred_label_fractions": {
+    "Baso": 0.0,
+    "Ccr7_DC": 0.0,
+    "Eos": 0.0,
+    "Erythroid": 0.0,
+    "Lymphoid": 0.0,
+    "Mast": 0.0078125,
+    "Meg": 0.0,
+    "Monocyte": 0.0703125,
+    "Neutrophil": 0.046875,
+    "Undifferentiated": 0.875,
+    "pDC": 0.0
+  },
+  "t6_true_label_fractions": {
+    "Baso": 0.12409972299168975,
+    "Ccr7_DC": 0.0016620498614958448,
+    "Eos": 0.006463527239150508,
+    "Erythroid": 0.008125577100646353,
+    "Lymphoid": 0.0024007386888273315,
+    "Mast": 0.03638042474607572,
+    "Meg": 0.025115420129270545,
+    "Monocyte": 0.1979686057248384,
+    "Neutrophil": 0.26685133887349954,
+    "Undifferentiated": 0.3303785780240074,
+    "pDC": 0.000554016620498615
+  },
+  "t6_label_tv_distance": 0.5446214219759927,
+  "evaluation_plan_path": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/scdiffeq/evaluation_plan.json",
+  "model_log_dir": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/scdiffeq/model_logs/LightningSDE-FixedPotential-RegularizedVelocityRatio.larry_full_split_scdiffeq/version_0",
+  "checkpoint_paths": [
+    "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/scdiffeq/model_logs/LightningSDE-FixedPotential-RegularizedVelocityRatio.larry_full_split_scdiffeq/version_0/checkpoints/last.ckpt"
+  ],
+  "last_checkpoint_path": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/scdiffeq/model_logs/LightningSDE-FixedPotential-RegularizedVelocityRatio.larry_full_split_scdiffeq/version_0/checkpoints/last.ckpt",
+  "metrics_path": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/scdiffeq/scdiffeq_training_metrics.csv",
+  "eval_artifact": "/home/yding1995/opscc_sc/CAPE/outputs/larry_full_split_benchmark_smoke/scdiffeq/adata_eval_scdiffeq_full_split.h5ad"
+}
