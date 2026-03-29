@@ -5,7 +5,6 @@ It computes the ecological context, then returns Coefficients and ContextState.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import torch
@@ -22,7 +21,7 @@ class FullDynamicsModel(nn.Module):
     Parameters
     ----------
     perturbation_ids: all perturbation ids (defines ordering)
-    control_ids: subset that are controls (embedding fixed at zero)
+    control_ids: subset that are biological controls
     latent_dim: d
     embedding_dim: r
     n_programs: K
@@ -34,6 +33,8 @@ class FullDynamicsModel(nn.Module):
     r_max: max growth rate
     n_payoff_ranks: ecological payoff ranks
     ecological_growth: enable ecological growth term
+    control_mode: ``anchored`` (exact zero controls), ``free`` (learn controls),
+        or ``soft_ref`` (shared control reference + zero control residual)
     """
 
     def __init__(
@@ -53,10 +54,14 @@ class FullDynamicsModel(nn.Module):
         ecological_growth: bool = False,
         program_centroids: Optional[torch.Tensor] = None,
         program_assignment_scale: float = 1.0,
+        control_mode: str = "soft_ref",
+        control_ref_penalty: float = 5e-4,
     ) -> None:
         super().__init__()
         self.perturbation_ids = perturbation_ids
         self.control_ids = set(control_ids)
+        self.control_mode = control_mode
+        self.anchor_controls = control_mode == "anchored"
         self.latent_dim = latent_dim
         self.embedding_dim = embedding_dim
         if program_centroids is not None:
@@ -77,11 +82,13 @@ class FullDynamicsModel(nn.Module):
             perturbation_ids=perturbation_ids,
             control_ids=list(control_ids),
             embedding_dim=embedding_dim,
+            control_mode=control_mode,
+            control_ref_penalty=control_ref_penalty,
         )
 
         self.context_agg = ContextAggregator(
             latent_dim=latent_dim,
-            n_programs=n_programs,
+            n_programs=self.n_programs,
             mediator_dim=mediator_dim,
             context_dim=context_dim,
             hidden_dim=hidden_dim,
@@ -149,10 +156,18 @@ class FullDynamicsModel(nn.Module):
         """Freeze perturbation embeddings (for control warm-start stage)."""
         if self.embedding.embeddings is not None:
             self.embedding.embeddings.requires_grad_(False)
+        self.freeze_control_reference()
 
     def unfreeze_embeddings(self) -> None:
         if self.embedding.embeddings is not None:
             self.embedding.embeddings.requires_grad_(True)
+        self.unfreeze_control_reference()
+
+    def freeze_control_reference(self) -> None:
+        self.embedding.freeze_reference()
+
+    def unfreeze_control_reference(self) -> None:
+        self.embedding.unfreeze_reference()
 
     def freeze_ecology(self) -> None:
         if self.coeff_nets.ecology is not None:

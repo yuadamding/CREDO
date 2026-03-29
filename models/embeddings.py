@@ -1,9 +1,4 @@
-"""Perturbation embeddings with exact zero control anchor.
-
-The control perturbation always maps to the zero vector.  Non-control
-perturbations learn free embeddings initialised to small random values
-(or one-hot if embedding_dim >= n_non_controls).
-"""
+"""Perturbation embeddings with anchored, free, or soft-reference control modes."""
 from __future__ import annotations
 
 from typing import Dict, List, Optional
@@ -13,16 +8,24 @@ import torch.nn as nn
 
 
 class PerturbationEmbedding(nn.Module):
-    """Learnable perturbation embeddings, controls fixed at zero.
+    """Learnable perturbation embeddings with flexible control handling.
 
     Parameters
     ----------
     perturbation_ids:
         All perturbation ids in order.  This list defines the index mapping.
     control_ids:
-        Subset that are controls.  Their embeddings are always zero.
+        Subset that are biological controls.
     embedding_dim:
         Dimension r of each embedding vector.
+    control_mode:
+        - ``anchored``: controls are fixed at exactly zero
+        - ``free``: controls are treated like ordinary learnable perturbations
+        - ``soft_ref``: a shared reference embedding is learned, and controls have
+          exactly zero residual around that reference
+    control_ref_penalty:
+        Additional L2 penalty weight applied to the shared reference embedding when
+        ``control_mode='soft_ref'``.
     """
 
     def __init__(
@@ -30,11 +33,17 @@ class PerturbationEmbedding(nn.Module):
         perturbation_ids: List[str],
         control_ids: List[str],
         embedding_dim: int,
+        control_mode: str = "soft_ref",
+        control_ref_penalty: float = 5e-4,
     ) -> None:
         super().__init__()
         self.perturbation_ids = perturbation_ids
-        self.control_ids = set(control_ids)
+        self.all_control_ids = set(control_ids)
+        self.control_mode = control_mode
+        self.anchor_controls = control_mode == "anchored"
+        self.control_ids = set(control_ids) if control_mode in {"anchored", "soft_ref"} else set()
         self.embedding_dim = embedding_dim
+        self.control_ref_penalty = float(control_ref_penalty)
 
         self._id_to_idx: Dict[str, int] = {p: i for i, p in enumerate(perturbation_ids)}
 
@@ -43,7 +52,7 @@ class PerturbationEmbedding(nn.Module):
         self._nc_to_local: Dict[str, int] = {p: i for i, p in enumerate(non_ctrl)}
 
         n_nc = len(non_ctrl)
-        # initialise embeddings
+        # initialise residual / free embeddings
         weight = torch.zeros(n_nc, embedding_dim)
         if n_nc > 0:
             if embedding_dim >= n_nc:
@@ -59,6 +68,11 @@ class PerturbationEmbedding(nn.Module):
         else:
             self.register_parameter("embeddings", None)
 
+        if self.control_mode == "soft_ref":
+            self.reference_embedding = nn.Parameter(torch.zeros(embedding_dim))
+        else:
+            self.register_parameter("reference_embedding", None)
+
         # Device sentinel so .to(device) propagates even when embeddings is None
         self.register_buffer("_device_sentinel", torch.zeros(1))
 
@@ -67,14 +81,20 @@ class PerturbationEmbedding(nn.Module):
         device = self._device_sentinel.device
         dtype = self._device_sentinel.dtype
         out = torch.zeros(len(perturbation_ids), self.embedding_dim, device=device, dtype=dtype)
+        if self.reference_embedding is not None:
+            out = out + self.reference_embedding.to(device=device, dtype=dtype).unsqueeze(0)
         for i, pid in enumerate(perturbation_ids):
             if pid not in self.control_ids and self.embeddings is not None:
                 local_idx = self._nc_to_local[pid]
                 out[i] = self.embeddings[local_idx]
-        return out  # controls remain exactly zero
+                if self.reference_embedding is not None:
+                    out[i] = out[i] + self.reference_embedding.to(device=device, dtype=dtype)
+        return out
 
     def control_anchor_is_exact(self) -> bool:
         """Verify that control embeddings are exactly zero (no gradient flow)."""
+        if not self.anchor_controls:
+            return False
         if self.embeddings is None:
             return True
         for pid in self.control_ids:
@@ -85,21 +105,46 @@ class PerturbationEmbedding(nn.Module):
         return True
 
     def regularization(self) -> torch.Tensor:
-        """L2 norm of non-control embeddings for shrinkage regularization."""
-        if self.embeddings is None:
-            return torch.tensor(0.0)
-        return (self.embeddings ** 2).mean()
+        """Regularization over residual embeddings and the shared control reference."""
+        device = self._device_sentinel.device
+        dtype = self._device_sentinel.dtype
+        reg = torch.tensor(0.0, device=device, dtype=dtype)
+        if self.embeddings is not None:
+            reg = reg + (self.embeddings ** 2).mean()
+        if self.reference_embedding is not None and self.control_ref_penalty > 0:
+            reg = reg + self.control_ref_penalty * (self.reference_embedding ** 2).mean()
+        return reg
 
     def snapshot(self) -> Dict[str, List[float]]:
         """Return embedding values as a plain dict for logging."""
         out = {}
+        ref = (
+            self.reference_embedding.detach().cpu()
+            if self.reference_embedding is not None
+            else None
+        )
         for pid in self.perturbation_ids:
-            if pid in self.control_ids:
+            if pid in self.control_ids and ref is None:
                 out[pid] = [0.0] * self.embedding_dim
-            elif self.embeddings is not None:
+            elif self.embeddings is not None and pid in self._nc_to_local:
                 local_idx = self._nc_to_local[pid]
-                out[pid] = self.embeddings[local_idx].detach().cpu().tolist()
+                value = self.embeddings[local_idx].detach().cpu()
+                if ref is not None:
+                    value = value + ref
+                out[pid] = value.tolist()
+            elif ref is not None:
+                out[pid] = ref.tolist()
+        if ref is not None:
+            out["__control_reference__"] = ref.tolist()
         return out
+
+    def freeze_reference(self) -> None:
+        if self.reference_embedding is not None:
+            self.reference_embedding.requires_grad_(False)
+
+    def unfreeze_reference(self) -> None:
+        if self.reference_embedding is not None:
+            self.reference_embedding.requires_grad_(True)
 
 
 class TimeEmbedding(nn.Module):

@@ -1,11 +1,13 @@
 """Coefficient networks: drift, diffusion (diagonal), and growth.
 
-Control anchoring is structural:
+Zero-embedding anchoring is structural:
     v_g(z, tau, c) = beta_v(u) + B_v(u) @ a_g
     sigma_g(z, tau, c) = softplus(beta_sigma(u) + B_sigma(u) @ a_g) + sigma_min
     r_g(z, tau, c) = r_max * tanh(beta_r(u) + B_r(u) @ a_g + b_g + Phi(...))
 
-When a_g = 0 (controls), the perturbation modulation terms vanish exactly.
+Whenever a perturbation has `a_g = 0`, the perturbation modulation terms vanish
+exactly. Under control anchoring, controls use this zero embedding; under
+control-free ablations they may instead learn nonzero embeddings.
 
 Common input:  u = [z, gamma(tau), c_tau]
 """
@@ -65,7 +67,7 @@ class ControlAnchoredFieldHead(nn.Module):
     def forward(self, u: torch.Tensor, a_g: torch.Tensor) -> torch.Tensor:
         """
         u: [G, N, input_dim]
-        a_g: [G, r]  embeddings; controls have a_g = 0 exactly
+        a_g: [G, r]  embeddings; anchored controls have a_g = 0 exactly
 
         Returns [G, N, out_dim].
         """

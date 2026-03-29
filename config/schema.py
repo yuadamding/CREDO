@@ -34,6 +34,8 @@ class ModelConfig(BaseModel):
     ecological_drift: bool = False
     ecological_growth: bool = False
     n_payoff_ranks: int = 4
+    control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"
+    control_ref_penalty: float = 5e-4
 
 
 class SimulationConfig(BaseModel):
@@ -46,6 +48,7 @@ class SimulationConfig(BaseModel):
 
 class TrainingConfig(BaseModel):
     optimizer: Literal["adamw", "adam"] = "adamw"
+    precision: Literal["fp32", "fp16", "bf16"] = "fp32"
     lr_net: float = 3e-4
     lr_embed: float = 1e-3
     weight_decay: float = 1e-6
@@ -57,6 +60,7 @@ class TrainingConfig(BaseModel):
     lambda_reg_embed: float = 1e-4
     lambda_reg_net: float = 1e-4
     lambda_reg_diffusion: float = 1e-4
+    control_ref_warmup_epochs: int = 150
     seed: int = 0
     epochs: int = 300
     early_stop_patience: int = 50

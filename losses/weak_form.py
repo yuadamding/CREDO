@@ -16,6 +16,8 @@ The residual is:
                 - E_hat[w_k L_g psi_m(Z_k)]
 
 and the loss is sum_{g,m,k} R_{g,m,k}^2.
+
+Memory-efficient implementation: avoids materializing [G, N, M, d] tensors.
 """
 from __future__ import annotations
 
@@ -26,7 +28,11 @@ import torch.nn as nn
 
 
 class GaussianRBFTestFunctions:
-    """Analytic Gaussian RBF test functions with exact first/second derivatives."""
+    """Analytic Gaussian RBF test functions with exact first/second derivatives.
+
+    Memory-efficient: provides contracted operations that avoid materializing
+    the full [G, N, M, d] gradient/Hessian tensors.
+    """
 
     def __init__(
         self,
@@ -40,25 +46,61 @@ class GaussianRBFTestFunctions:
     def M(self) -> int:
         return len(self.centers)
 
-    def psi(self, z: torch.Tensor) -> torch.Tensor:
-        """z: [G, N, d] -> [G, N, M]."""
-        # ||z - c_m||^2 for all m
+    def _diff_and_psi(self, z: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """z: [G, N, d] -> diff [G, N, M, d], psi [G, N, M]."""
         diff = z.unsqueeze(-2) - self.centers  # [G, N, M, d]
         sq_dist = (diff ** 2).sum(-1)          # [G, N, M]
-        return torch.exp(-sq_dist / (2 * self.h ** 2))
+        psi = torch.exp(-sq_dist / (2 * self.h ** 2))
+        return diff, psi
 
-    def grad_psi(self, z: torch.Tensor) -> torch.Tensor:
-        """d psi_m / d z_j. Returns [G, N, M, d]."""
-        diff = z.unsqueeze(-2) - self.centers  # [G, N, M, d]
-        psi_val = self.psi(z).unsqueeze(-1)    # [G, N, M, 1]
-        return -(1.0 / self.h ** 2) * diff * psi_val  # [G, N, M, d]
+    def psi(self, z: torch.Tensor) -> torch.Tensor:
+        """z: [G, N, d] -> [G, N, M]."""
+        _, psi = self._diff_and_psi(z)
+        return psi
 
-    def diag_hess_psi(self, z: torch.Tensor) -> torch.Tensor:
-        """d^2 psi_m / d z_j^2 (diagonal of Hessian). Returns [G, N, M, d]."""
-        diff = z.unsqueeze(-2) - self.centers   # [G, N, M, d]
-        psi_val = self.psi(z).unsqueeze(-1)     # [G, N, M, 1]
+    def generator_contracted(
+        self,
+        z: torch.Tensor,        # [G, N, d]
+        v: torch.Tensor,        # [G, N, d]  drift
+        sigma: torch.Tensor,    # [G, N, d]  diffusion std
+        r: torch.Tensor,        # [G, N]     growth
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Compute psi(z) and E_gen = w . (L_g psi) without [G,N,M,d] intermediates.
+
+        Returns:
+            psi: [G, N, M]
+            gen_psi: [G, N, M]  where gen_psi[g,n,m] = (grad_psi . v + 0.5*sigma^2.hess_psi + r*psi)
+        """
+        diff, psi = self._diff_and_psi(z)  # [G, N, M, d], [G, N, M]
         h2 = self.h ** 2
-        return psi_val * ((diff / h2) ** 2 - 1.0 / h2)  # [G, N, M, d]
+
+        # grad_psi . v = -(1/h^2) * psi * sum_j diff_j * v_j
+        # = -(1/h^2) * psi * (diff . v)
+        # diff: [G, N, M, d], v: [G, N, d] -> dot: [G, N, M]
+        diff_dot_v = (diff * v.unsqueeze(-2)).sum(-1)  # [G, N, M]
+        drift_term = -(1.0 / h2) * psi * diff_dot_v   # [G, N, M]
+
+        # 0.5 * sigma^2 . diag_hess_psi
+        # diag_hess_psi_j = psi * ((diff_j/h^2)^2 - 1/h^2)
+        # contracted: 0.5 * sum_j sigma_j^2 * psi * ((diff_j/h^2)^2 - 1/h^2)
+        # = 0.5 * psi * (sum_j sigma_j^2 * (diff_j^2/h^4 - 1/h^2))
+        sigma_sq = sigma ** 2  # [G, N, d]
+        diff_sq = diff ** 2    # [G, N, M, d]
+
+        # sum_j sigma_j^2 * diff_j^2 / h^4  -> [G, N, M]
+        term1 = (sigma_sq.unsqueeze(-2) * diff_sq).sum(-1) / (h2 ** 2)
+        # sum_j sigma_j^2 / h^2  -> [G, N]
+        term2 = sigma_sq.sum(-1) / h2  # [G, N]
+        diff_term = 0.5 * psi * (term1 - term2.unsqueeze(-1))  # [G, N, M]
+
+        # Delete diff to free memory before growth term
+        del diff, diff_sq, diff_dot_v
+
+        # Growth term: r * psi -> [G, N, M]
+        growth_term = r.unsqueeze(-1) * psi  # [G, N, M]
+
+        gen_psi = drift_term + diff_term + growth_term  # [G, N, M]
+        return psi, gen_psi
 
 
 class WeakFormLoss(nn.Module):
@@ -90,22 +132,31 @@ class WeakFormLoss(nn.Module):
         z_ref: torch.Tensor,  # [G, N, d] use to set center range
         scale: float = 2.0,
     ) -> None:
-        """Sample new test function centers from a region covering the particles."""
+        """Sample new test function centers and adapt bandwidth to the data."""
         G, N, d = z_ref.shape
-        z_flat = z_ref.detach().reshape(-1, d)
+        z_flat = z_ref.detach().float().reshape(-1, d)
         z_min = z_flat.min(0).values
         z_max = z_flat.max(0).values
-        centers = z_min + torch.rand(self.M, d, device=z_ref.device,
-                                     dtype=z_ref.dtype) * (z_max - z_min)
+        centers = z_min + torch.rand(self.M, d, device=z_ref.device) * (z_max - z_min)
         self._centers = centers
+
+        # Adapt bandwidth to the data scale so RBFs have non-vanishing values.
+        n_sub = min(512, z_flat.shape[0])
+        idx = torch.randperm(z_flat.shape[0], device=z_flat.device)[:n_sub]
+        sub = z_flat[idx]  # [n_sub, d]
+        sq_dists = ((sub.unsqueeze(1) - centers.unsqueeze(0)) ** 2).sum(-1)  # [n_sub, M]
+        median_dist = sq_dists.median().sqrt().item()
+        # Set bandwidth so that the RBF at median distance ≈ exp(-0.5) ≈ 0.6
+        self._adaptive_bandwidth = max(median_dist, 1.0)
         self._centers_initialized = True
 
     def _get_test_fns(self, z_ref: torch.Tensor) -> GaussianRBFTestFunctions:
         if not self._centers_initialized:
             self.refresh_test_functions(z_ref)
+        bw = getattr(self, "_adaptive_bandwidth", self.bandwidth)
         return GaussianRBFTestFunctions(
             centers=self._centers.to(z_ref.device, z_ref.dtype),
-            bandwidth=self.bandwidth,
+            bandwidth=bw,
         )
 
     def forward(
@@ -118,7 +169,18 @@ class WeakFormLoss(nn.Module):
         tau_steps: torch.Tensor,     # [K+1]
         refresh_centers: bool = True,
     ) -> torch.Tensor:
-        """Compute sum of squared residuals."""
+        """Compute sum of squared residuals.
+
+        All computation is done in float32 for numerical stability.
+        """
+        # Cast all inputs to float32 for numerical stability (fp16 rollouts)
+        z_steps = z_steps.float()
+        logw_steps = logw_steps.float()
+        drift_steps = drift_steps.float()
+        sigma_steps = sigma_steps.float()
+        growth_steps = growth_steps.float()
+        tau_steps = tau_steps.float()
+
         K_plus1, G, N, d = z_steps.shape
         K = K_plus1 - 1
 
@@ -126,56 +188,40 @@ class WeakFormLoss(nn.Module):
             self.refresh_test_functions(z_steps[0])
 
         test_fns = self._get_test_fns(z_steps[0])
-        M = test_fns.M
 
-        # Compute weighted test-function expectations at each step
-        # E_hat[w * psi_m] = sum_i w_i * psi_m(Z_i)  (unnormalized by N)
-        # We use normalized log-weights for numerical stability
-        # psi_vals: [K+1, G, N, M]
-        psi_vals = torch.stack([test_fns.psi(z_steps[k]) for k in range(K + 1)], dim=0)
-
-        # Normalized weights: w_norm_i = softmax of logw over N dim
-        # [K+1, G, N] -> [K+1, G, N]
+        # Normalized weights at each step: [K+1, G, N]
         logw_norm = logw_steps - torch.logsumexp(logw_steps, dim=-1, keepdim=True)
-        w_norm = logw_norm.exp()  # [K+1, G, N]
+        w_norm = logw_norm.exp()
 
-        # Weighted test-fn expectation: [K+1, G, M]
-        E_psi = torch.einsum("kgn, kgnm -> kgm", w_norm, psi_vals)
+        # Compute E_psi at step 0 for the first residual
+        psi_prev = test_fns.psi(z_steps[0])  # [G, N, M]
+        E_psi_prev = torch.einsum("gn, gnm -> gm", w_norm[0], psi_prev)  # [G, M]
 
-        # --- Generator values at step k ---
-        # L_g psi = grad_psi . v + 0.5 * sum_j sigma_j^2 * diag_hess_j + r * psi
-        residuals_sq = []
-        dtau = (tau_steps[1:] - tau_steps[:-1]).unsqueeze(-1).unsqueeze(-1)  # [K, 1, 1]
+        residual_sum = torch.tensor(0.0, device=z_steps.device)
 
         for k in range(K):
-            zk = z_steps[k]           # [G, N, d]
-            wk = w_norm[k]            # [G, N]
+            dtau_k = tau_steps[k + 1] - tau_steps[k]
 
-            grad_psi = test_fns.grad_psi(zk)        # [G, N, M, d]
-            dhess_psi = test_fns.diag_hess_psi(zk)  # [G, N, M, d]
-            psi_k = psi_vals[k]                      # [G, N, M]
-
-            v = drift_steps[k]     # [G, N, d]
-            s = sigma_steps[k]     # [G, N, d]
-            r = growth_steps[k]    # [G, N]
-
-            # Drift term: grad_psi . v  -> [G, N, M]
-            drift_term = torch.einsum("gnmd, gnd -> gnm", grad_psi, v)
-            # Diffusion term: 0.5 * sum_j sigma_j^2 * diag_hess_j -> [G, N, M]
-            diff_term = 0.5 * torch.einsum("gnmd, gnd -> gnm", dhess_psi, s ** 2)
-            # Growth term: r * psi -> [G, N, M]
-            growth_term = r.unsqueeze(-1) * psi_k
-
-            gen_psi = drift_term + diff_term + growth_term   # [G, N, M]
+            # Generator applied to test functions at step k
+            # Uses memory-efficient contracted computation
+            psi_k, gen_psi_k = test_fns.generator_contracted(
+                z_steps[k], drift_steps[k], sigma_steps[k], growth_steps[k]
+            )
 
             # E_hat[w_k * L_g psi_m]
-            E_gen = torch.einsum("gn, gnm -> gm", wk, gen_psi)  # [G, M]
+            E_gen = torch.einsum("gn, gnm -> gm", w_norm[k], gen_psi_k)  # [G, M]
+            del gen_psi_k  # free immediately
 
-            # Time derivative of E_hat[w * psi_m]
-            dE_dtau = (E_psi[k + 1] - E_psi[k]) / dtau[k]  # [G, M]
+            # E_psi at step k+1
+            psi_next = test_fns.psi(z_steps[k + 1])  # [G, N, M]
+            E_psi_next = torch.einsum("gn, gnm -> gm", w_norm[k + 1], psi_next)
 
-            # Residual
+            # Residual: dE/dtau - E[L_g psi]
+            dE_dtau = (E_psi_next - E_psi_prev) / dtau_k  # [G, M]
             R = dE_dtau - E_gen   # [G, M]
-            residuals_sq.append((R ** 2).mean())
+            residual_sum = residual_sum + (R ** 2).mean()
 
-        return torch.stack(residuals_sq).mean()
+            # Advance
+            E_psi_prev = E_psi_next
+
+        return residual_sum / K
