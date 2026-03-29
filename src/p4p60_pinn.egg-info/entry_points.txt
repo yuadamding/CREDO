@@ -1,5 +1,0 @@
-[console_scripts]
-p4p60-counterfactual = p4p60_pinn.cli.counterfactual:main
-p4p60-evaluate = p4p60_pinn.cli.evaluate:main
-p4p60-preprocess = p4p60_pinn.cli.preprocess:main
-p4p60-train = p4p60_pinn.cli.train:main

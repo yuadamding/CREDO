@@ -1,5 +1,0 @@
-[console_scripts]
-cape-counterfactual = cape.cli.counterfactual:main
-cape-evaluate = cape.cli.evaluate:main
-cape-preprocess = cape.cli.preprocess:main
-cape-train = cape.cli.train:main
