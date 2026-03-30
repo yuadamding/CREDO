@@ -176,7 +176,17 @@ def run_benchmark(
         supported_pids=supported_pids,
         output_dir=output_dir,
     )
-    history = trainer.train(stage="all", n_epochs=train_epochs)
+    stage_c_epochs = min(100, train_epochs)
+    remaining_epochs = max(train_epochs - stage_c_epochs, 0)
+    stage_d_epochs = min(100, remaining_epochs) if ecological else remaining_epochs
+    remaining_epochs = max(remaining_epochs - stage_d_epochs, 0)
+    if stage_c_epochs > 0:
+        trainer.train(stage="C", n_epochs=stage_c_epochs)
+    if stage_d_epochs > 0:
+        trainer.train(stage="D", n_epochs=stage_d_epochs)
+    if remaining_epochs > 0:
+        trainer.train(stage="E", n_epochs=remaining_epochs)
+    history = trainer.history
 
     # --- Evaluate ---
     simulator = WeightedParticleSimulator(n_steps=32, store_history=False)

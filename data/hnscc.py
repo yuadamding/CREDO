@@ -175,6 +175,60 @@ def make_random_split(
     return HNSCCSplitResult(split=split, manifest=manifest, metadata=metadata)
 
 
+def make_random_kfold_split(
+    obs: pd.DataFrame,
+    *,
+    n_folds: int,
+    fold_index: int,
+    seed: int,
+    stratify_cols: Sequence[str] = DEFAULT_RANDOM_STRATIFY_COLS,
+) -> HNSCCSplitResult:
+    if n_folds < 2:
+        raise ValueError(f"n_folds must be >= 2, got {n_folds}.")
+    if not 0 <= fold_index < n_folds:
+        raise ValueError(f"fold_index must be in [0, {n_folds}), got {fold_index}.")
+    for col in stratify_cols:
+        if col not in obs.columns:
+            raise KeyError(f"Stratify column {col!r} not present in obs.")
+
+    rng = np.random.default_rng(seed)
+    stratify_key = _build_stratify_key(obs, stratify_cols)
+    fold_assign = pd.Series(-1, index=obs.index, dtype=np.int64, name="fold")
+    manifest_rows: list[dict] = []
+
+    grouped = obs.assign(_stratify_key=stratify_key).groupby("_stratify_key", sort=True, observed=True)
+    for key, frame in grouped:
+        idx = frame.index.to_numpy()
+        n = len(idx)
+        perm = rng.permutation(n)
+        assigned_folds = np.arange(n, dtype=np.int64) % n_folds
+        shuffled_idx = idx[perm]
+        fold_assign.loc[shuffled_idx] = assigned_folds
+        counts = np.bincount(assigned_folds, minlength=n_folds)
+        row = {"split_group": key, "n_cells": int(n)}
+        for col in stratify_cols:
+            row[col] = frame[col].iloc[0]
+        for fold in range(n_folds):
+            row[f"fold_{fold}_cells"] = int(counts[fold])
+        manifest_rows.append(row)
+
+    split = pd.Series("train", index=obs.index, dtype="object", name="split")
+    split.loc[fold_assign.eq(fold_index)] = "test"
+
+    manifest = pd.DataFrame(manifest_rows).sort_values(list(stratify_cols)).reset_index(drop=True)
+    metadata = {
+        "split_strategy": "random_kfold",
+        "seed": int(seed),
+        "stratify_cols": list(stratify_cols),
+        "n_folds": int(n_folds),
+        "fold_index": int(fold_index),
+        "n_train_cells": int((split == "train").sum()),
+        "n_test_cells": int((split == "test").sum()),
+        "n_split_groups": int(len(manifest)),
+    }
+    return HNSCCSplitResult(split=split, manifest=manifest, metadata=metadata)
+
+
 def make_wta_split(
     obs: pd.DataFrame,
     *,

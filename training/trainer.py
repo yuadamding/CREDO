@@ -1,11 +1,11 @@
 """Main training loop for the P4/P60 PINN.
 
-Implements the pseudocode from Section 14 of the spec, with stage-wise
-training from Section 13.6.
+The trainer supports either a single joint stage (`stage="all"`) or explicit
+stage-wise warm starts:
 
-Stage C: control warm-start (embeddings frozen at zero, ecology off)
-Stage D: perturbation warm-start (embeddings unfrozen, ecology off)
-Stage E: ecology on growth (enabled)
+Stage C: controls only, embeddings frozen, ecology off
+Stage D: all perturbations, embeddings unfrozen, ecology off
+Stage E: all perturbations, ecology on growth
 
 Enhancements over baseline:
   - Cosine-annealing LR with linear warm-up
@@ -136,6 +136,7 @@ class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
 @dataclass
 class TrainingHistory:
     epochs: List[int] = field(default_factory=list)
+    stages: List[str] = field(default_factory=list)
     loss_total: List[float] = field(default_factory=list)
     loss_end: List[float] = field(default_factory=list)
     loss_weak: List[float] = field(default_factory=list)
@@ -145,6 +146,7 @@ class TrainingHistory:
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame({
             "epoch": self.epochs,
+            "stage": self.stages,
             "loss_total": self.loss_total,
             "loss_end": self.loss_end,
             "loss_weak": self.loss_weak,
@@ -288,6 +290,8 @@ class Trainer:
         self,
         optimizer: torch.optim.Optimizer,
         epoch: int,
+        stage: str,
+        perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
         tc = self.config.training
@@ -296,13 +300,13 @@ class Trainer:
 
         torch.manual_seed(self.config.training.seed + seed_offset + epoch)
 
-        G = len(self.supported_pids)
+        G = len(perturbation_ids)
         rollout_dtype = self.compute_dtype if self.autocast_enabled else self.dtype
 
         # Initialise particles from P4 endpoint
         z0, logw0, log_m0 = initialise_particles(
             self.endpoint,
-            self.supported_pids,
+            perturbation_ids,
             n_particles=sc.n_particles,
             device=self.device,
             dtype=rollout_dtype,
@@ -321,6 +325,7 @@ class Trainer:
                 logw0=logw0,
                 model=self.model,
                 log_m0=log_m0,
+                perturbation_ids=perturbation_ids,
             )
 
         # --- Endpoint UOT loss (absolute log-weights) ---
@@ -331,7 +336,7 @@ class Trainer:
             pred_logw_abs=pred_logw_abs,
             target_support=self._target_support,
             target_logw=self._target_logw,
-            perturbation_ids=self.supported_pids,
+            perturbation_ids=perturbation_ids,
         )
 
         # --- Weak-form residual loss ---
@@ -349,7 +354,12 @@ class Trainer:
 
         # --- Count likelihood ---
         loss_count = torch.tensor(0.0, device=self.device)
-        if tc.lambda_count > 0 and self.count_data is not None and rollout.growth_steps is not None:
+        if (
+            tc.lambda_count > 0
+            and self.count_data is not None
+            and rollout.growth_steps is not None
+            and perturbation_ids == self.supported_pids
+        ):
             cd = self.count_data
             loss_count = self.count_lik(
                 growth_steps=rollout.growth_steps,
@@ -361,7 +371,7 @@ class Trainer:
             )
 
         # --- Regularization ---
-        embeddings = self.model.embedding(self.supported_pids).float()
+        embeddings = self.model.embedding(perturbation_ids).float()
         loss_reg = self.regularizer(
             embeddings=embeddings,
             drift_steps=rollout.drift_steps.float() if rollout.drift_steps is not None
@@ -401,6 +411,14 @@ class Trainer:
             "loss_reg": float(loss_reg.item()),
         }
 
+    def _active_perturbation_ids(self, stage: str) -> List[str]:
+        if stage != "C":
+            return self.supported_pids
+        control_ids = [pid for pid in self.supported_pids if pid in self.model.control_ids]
+        if not control_ids:
+            raise ValueError("Stage C requested but no control perturbations are available.")
+        return control_ids
+
     def _save_checkpoint(self, epoch: int, tag: str = "best",
                          ema: Optional[EMA] = None) -> None:
         state = {
@@ -432,6 +450,10 @@ class Trainer:
     def train(self, stage: str = "all", n_epochs: Optional[int] = None) -> TrainingHistory:
         tc = self.config.training
         epochs = n_epochs or tc.epochs
+        start_epoch = (self.history.epochs[-1] + 1) if self.history.epochs else 0
+        self._best_loss = math.inf
+        self._patience_counter = 0
+        active_pids = self._active_perturbation_ids(stage)
 
         # Stage-based parameter freezing
         if stage == "C":
@@ -478,14 +500,21 @@ class Trainer:
                 self.model.unfreeze_control_reference()
                 print(f"[{stage}] Released control reference at epoch {epoch}")
 
-            metrics = self._one_epoch(optimizer, epoch)
+            absolute_epoch = start_epoch + epoch
+            metrics = self._one_epoch(
+                optimizer,
+                epoch,
+                stage=stage,
+                perturbation_ids=active_pids,
+            )
             scheduler.step()
 
             # Update EMA after each optimizer step
             if ema is not None:
                 ema.update()
 
-            self.history.epochs.append(epoch)
+            self.history.epochs.append(absolute_epoch)
+            self.history.stages.append(stage)
             self.history.loss_total.append(metrics["loss_total"])
             self.history.loss_end.append(metrics["loss_end"])
             self.history.loss_weak.append(metrics["loss_weak"])
@@ -496,10 +525,10 @@ class Trainer:
             if metrics["loss_total"] < self._best_loss:
                 self._best_loss = metrics["loss_total"]
                 self._patience_counter = 0
-                self._save_checkpoint(epoch, "best", ema=ema)
+                self._save_checkpoint(absolute_epoch, "best", ema=ema)
                 # Also save EMA-specific checkpoint
                 if ema is not None:
-                    self._save_ema_checkpoint(epoch, ema)
+                    self._save_ema_checkpoint(absolute_epoch, ema)
             else:
                 self._patience_counter += 1
 
@@ -507,7 +536,8 @@ class Trainer:
                 elapsed = time.time() - start
                 cur_lr = scheduler.get_last_lr()[0]
                 print(
-                    f"[{stage}] Epoch {epoch:4d}/{epochs} | "
+                    f"[{stage}] Epoch {absolute_epoch:4d} "
+                    f"(stage {epoch + 1:4d}/{epochs}, pids={len(active_pids)}) | "
                     f"total={metrics['loss_total']:.4f} "
                     f"end={metrics['loss_end']:.4f} "
                     f"weak={metrics['loss_weak']:.4f} "
@@ -517,7 +547,7 @@ class Trainer:
                 )
 
             if epoch % tc.checkpoint_every == 0:
-                self._save_checkpoint(epoch, f"epoch{epoch:04d}", ema=ema)
+                self._save_checkpoint(absolute_epoch, f"epoch{absolute_epoch:04d}", ema=ema)
 
             # Early stopping
             if self._patience_counter >= tc.early_stop_patience:
@@ -526,7 +556,7 @@ class Trainer:
 
         # Final EMA checkpoint
         if ema is not None:
-            self._save_ema_checkpoint(epochs - 1, ema)
+            self._save_ema_checkpoint(start_epoch + epochs - 1, ema)
 
         # Save history
         df = self.history.to_dataframe()

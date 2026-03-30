@@ -162,25 +162,35 @@ class CounterfactualEngine:
 
 
 class _zero_embedding_context:
-    """Context manager that temporarily zeros the embedding of a perturbation."""
+    """Context manager that temporarily makes one perturbation's effective embedding zero."""
 
     def __init__(self, model: FullDynamicsModel, pid: str) -> None:
         self.model = model
         self.pid = pid
-        self._saved = None
+        self._saved_embedding = None
+        self._saved_reference = None
 
     def __enter__(self) -> None:
         emb = self.model.embedding
-        if pid := self.pid:
-            if pid in emb._nc_to_local and emb.embeddings is not None:
-                local_idx = emb._nc_to_local[pid]
-                self._saved = emb.embeddings[local_idx].clone()
-                with torch.no_grad():
+        if self.pid in emb._nc_to_local and emb.embeddings is not None:
+            local_idx = emb._nc_to_local[self.pid]
+            self._saved_embedding = emb.embeddings[local_idx].clone()
+            with torch.no_grad():
+                if emb.reference_embedding is not None:
+                    emb.embeddings[local_idx].copy_(-emb.reference_embedding.detach())
+                else:
                     emb.embeddings[local_idx].zero_()
+        elif self.pid in emb.all_control_ids and emb.reference_embedding is not None:
+            self._saved_reference = emb.reference_embedding.clone()
+            with torch.no_grad():
+                emb.reference_embedding.zero_()
 
     def __exit__(self, *args: object) -> None:
         emb = self.model.embedding
-        if self._saved is not None and self.pid in emb._nc_to_local:
+        if self._saved_embedding is not None and self.pid in emb._nc_to_local:
             local_idx = emb._nc_to_local[self.pid]
             with torch.no_grad():
-                emb.embeddings[local_idx].copy_(self._saved)
+                emb.embeddings[local_idx].copy_(self._saved_embedding)
+        if self._saved_reference is not None and emb.reference_embedding is not None:
+            with torch.no_grad():
+                emb.reference_embedding.copy_(self._saved_reference)

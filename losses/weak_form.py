@@ -58,6 +58,17 @@ class GaussianRBFTestFunctions:
         _, psi = self._diff_and_psi(z)
         return psi
 
+    def grad_psi(self, z: torch.Tensor) -> torch.Tensor:
+        """Analytic gradient of psi with shape [G, N, M, d]."""
+        diff, psi = self._diff_and_psi(z)
+        return -(diff / (self.h ** 2)) * psi.unsqueeze(-1)
+
+    def hess_diag_psi(self, z: torch.Tensor) -> torch.Tensor:
+        """Analytic Hessian diagonal of psi with shape [G, N, M, d]."""
+        diff, psi = self._diff_and_psi(z)
+        h2 = self.h ** 2
+        return psi.unsqueeze(-1) * ((diff ** 2) / (h2 ** 2) - (1.0 / h2))
+
     def generator_contracted(
         self,
         z: torch.Tensor,        # [G, N, d]

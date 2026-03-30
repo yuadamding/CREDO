@@ -60,6 +60,9 @@ class TrainingConfig(BaseModel):
     lambda_reg_embed: float = 1e-4
     lambda_reg_net: float = 1e-4
     lambda_reg_diffusion: float = 1e-4
+    training_schedule: Literal["joint", "staged"] = "staged"
+    stage_c_epochs: int = 150
+    stage_d_epochs: int = 150
     control_ref_warmup_epochs: int = 150
     seed: int = 0
     epochs: int = 300
