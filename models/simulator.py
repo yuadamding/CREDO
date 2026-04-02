@@ -112,6 +112,7 @@ class CounterfactualEngine:
         perturbation_ids: List[str],
         clamp_context: bool = False,
         seed: int = 0,
+        control_rollout_mode: str = "reference_consistent",
     ) -> List[CounterfactualResult]:
         """Run counterfactual simulations.
 
@@ -120,8 +121,18 @@ class CounterfactualEngine:
         endpoint: provides P4 initial conditions
         perturbation_ids: which perturbations to analyse
         clamp_context: if True, also run with context fixed to control trajectory
+        control_rollout_mode:
+            - ``reference_consistent``: for ``soft_ref``, keep the shared
+              reference embedding and set only the perturbation residual to zero
+            - ``zero_centered``: force the full effective embedding to zero as a
+              diagnostic rollout
         """
         results = []
+
+        if control_rollout_mode not in {"reference_consistent", "zero_centered"}:
+            raise ValueError(
+                "control_rollout_mode must be 'reference_consistent' or 'zero_centered'."
+            )
 
         for pid in perturbation_ids:
             if pid not in endpoint.initial:
@@ -141,8 +152,9 @@ class CounterfactualEngine:
             # --- Control rollout with the same perturbation-specific initial measure ---
             z0c, lw0c, lm0c = z0p.clone(), lw0p.clone(), lm0p.clone()
 
-            # Temporarily patch embedding to zero for control rollout
-            with _zero_embedding_context(self.model, pid):
+            # Reference-consistent soft-ref semantics keep a_ref and zero only
+            # the perturbation residual; full zeroing is left as a diagnostic.
+            with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
                 rollout_c = self.simulator.rollout(
                     z0=z0c,
                     logw0=lw0c,
@@ -161,12 +173,20 @@ class CounterfactualEngine:
         return results
 
 
-class _zero_embedding_context:
-    """Context manager that temporarily makes one perturbation's effective embedding zero."""
+class _control_embedding_context:
+    """Temporarily patch one perturbation's control embedding semantics.
 
-    def __init__(self, model: FullDynamicsModel, pid: str) -> None:
+    For ``soft_ref``:
+    - ``reference_consistent`` keeps the shared reference embedding and zeros
+      only the perturbation-specific residual
+    - ``zero_centered`` forces the full effective embedding to zero as an
+      optional diagnostic
+    """
+
+    def __init__(self, model: FullDynamicsModel, pid: str, mode: str = "reference_consistent") -> None:
         self.model = model
         self.pid = pid
+        self.mode = mode
         self._saved_embedding = None
         self._saved_reference = None
 
@@ -176,11 +196,15 @@ class _zero_embedding_context:
             local_idx = emb._nc_to_local[self.pid]
             self._saved_embedding = emb.embeddings[local_idx].clone()
             with torch.no_grad():
-                if emb.reference_embedding is not None:
+                if emb.reference_embedding is not None and self.mode == "zero_centered":
                     emb.embeddings[local_idx].copy_(-emb.reference_embedding.detach())
                 else:
                     emb.embeddings[local_idx].zero_()
-        elif self.pid in emb.all_control_ids and emb.reference_embedding is not None:
+        elif (
+            self.mode == "zero_centered"
+            and self.pid in emb.all_control_ids
+            and emb.reference_embedding is not None
+        ):
             self._saved_reference = emb.reference_embedding.clone()
             with torch.no_grad():
                 emb.reference_embedding.zero_()
@@ -194,3 +218,10 @@ class _zero_embedding_context:
         if self._saved_reference is not None and emb.reference_embedding is not None:
             with torch.no_grad():
                 emb.reference_embedding.copy_(self._saved_reference)
+
+
+class _zero_embedding_context(_control_embedding_context):
+    """Backward-compatible zero-centered diagnostic embedding context."""
+
+    def __init__(self, model: FullDynamicsModel, pid: str) -> None:
+        super().__init__(model, pid, mode="zero_centered")
