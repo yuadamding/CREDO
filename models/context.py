@@ -16,6 +16,7 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 
 @dataclass
@@ -26,6 +27,14 @@ class ContextState:
     context: torch.Tensor  # [C]  context vector for coefficient networks
     mass_g: torch.Tensor    # [G]  per-perturbation absolute mass
     freq_g: torch.Tensor    # [G]  per-perturbation relative frequency
+
+
+@dataclass
+class GroupStatistics:
+    """Per-perturbation summaries that can be merged across device shards."""
+    log_n_g: torch.Tensor    # [G]   absolute log-mass per perturbation
+    eta_g: torch.Tensor      # [G,K] within-perturbation program averages
+    phi_g: torch.Tensor      # [G,L] within-perturbation mediator averages
 
 
 class ProgramEncoder(nn.Module):
@@ -42,6 +51,7 @@ class ProgramEncoder(nn.Module):
         hidden_dim: int = 64,
         fixed_centroids: Optional[torch.Tensor] = None,
         assignment_scale: float = 1.0,
+        activation_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.latent_dim = latent_dim
@@ -60,6 +70,7 @@ class ProgramEncoder(nn.Module):
         self.mediator_dim = mediator_dim
         self.assignment_scale = float(assignment_scale)
         self.use_fixed_centroids = fixed_centroids is not None
+        self.activation_checkpointing = activation_checkpointing
 
         # Soft latent-factor map: z -> Delta^{K-1}
         if self.use_fixed_centroids:
@@ -86,10 +97,16 @@ class ProgramEncoder(nn.Module):
             diff = z.unsqueeze(-2) - centers
             sq_dist = (diff ** 2).sum(dim=-1)
             return torch.softmax(-self.assignment_scale * sq_dist, dim=-1)
-        return torch.softmax(self.eta_net(z), dim=-1)
+        if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+            logits = checkpoint(self.eta_net, z, use_reentrant=False)
+        else:
+            logits = self.eta_net(z)
+        return torch.softmax(logits, dim=-1)
 
     def phi(self, z: torch.Tensor) -> torch.Tensor:
         """z: [..., d] -> [..., L]."""
+        if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+            return checkpoint(self.phi_net, z, use_reentrant=False)
         return self.phi_net(z)
 
 
@@ -116,6 +133,7 @@ class ContextAggregator(nn.Module):
         use_identity_context: bool = True,
         fixed_program_centroids: Optional[torch.Tensor] = None,
         program_assignment_scale: float = 1.0,
+        activation_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.encoder = ProgramEncoder(
@@ -125,6 +143,7 @@ class ContextAggregator(nn.Module):
             hidden_dim,
             fixed_centroids=fixed_program_centroids,
             assignment_scale=program_assignment_scale,
+            activation_checkpointing=activation_checkpointing,
         )
         self.n_programs = self.encoder.n_programs
         self.mediator_dim = mediator_dim
@@ -152,37 +171,46 @@ class ContextAggregator(nn.Module):
         a: torch.Tensor,     # [G, r]  perturbation embeddings (unused here, for API compat.)
         log_m0: torch.Tensor,  # [G]  log initial mass per perturbation
     ) -> ContextState:
-        G, N, d = z.shape
+        stats, _, _ = self.summarize_groups(z, logw, log_m0)
+        return self.context_from_group_statistics(stats)
 
-        # --- Absolute finite-measure mass computation (log-space) ---
-        # logw has shape [G, N] and represents absolute particle log-weights relative
-        # to the perturbation-specific initial mass M0_g. The total mass for group g is
-        # M0_g * sum_i exp(logw[g, i]).
-        log_n_g = log_m0 + torch.logsumexp(logw, dim=-1)
-        # freq_g
-        log_n_total = torch.logsumexp(log_n_g, dim=0)
-        log_freq_g = log_n_g - log_n_total
-        freq_g = log_freq_g.exp()      # [G]
-        mass_g = log_n_g.exp()         # [G]
+    def encode_particles(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Encode particles into latent programs and mediator features."""
+        eta = self.encoder.eta(z)   # [G, N, K]
+        phi = self.encoder.phi(z)   # [G, N, L]
+        return eta, phi
 
-        # --- Normalised within-perturbation weights ---
+    def summarize_groups(
+        self,
+        z: torch.Tensor,
+        logw: torch.Tensor,
+        log_m0: torch.Tensor,
+        eta: Optional[torch.Tensor] = None,
+        phi: Optional[torch.Tensor] = None,
+    ) -> tuple[GroupStatistics, torch.Tensor, torch.Tensor]:
+        """Compute per-group summaries that can be merged exactly across shards."""
+        if eta is None or phi is None:
+            eta, phi = self.encode_particles(z)
+
+        log_n_g = log_m0 + torch.logsumexp(logw, dim=-1)  # [G]
         log_norm_w = logw - torch.logsumexp(logw, dim=-1, keepdim=True)  # [G, N]
         norm_w = log_norm_w.exp()  # [G, N]
 
-        # --- Per-perturbation program averages ---
-        eta = self.encoder.eta(z)   # [G, N, K]
-        phi = self.encoder.phi(z)   # [G, N, L]
-
-        # mass-weighted average across perturbations
-        # eta_g: [G, K]  = E_{p_g}[eta(z)]
         eta_g = (norm_w.unsqueeze(-1) * eta).sum(dim=1)   # [G, K]
         phi_g = (norm_w.unsqueeze(-1) * phi).sum(dim=1)   # [G, L]
 
-        # population-level:  q = sum_g f_g * eta_g
-        q = (freq_g.unsqueeze(-1) * eta_g).sum(dim=0)   # [K]
-        s = (freq_g.unsqueeze(-1) * phi_g).sum(dim=0)   # [L]
+        return GroupStatistics(log_n_g=log_n_g, eta_g=eta_g, phi_g=phi_g), eta, phi
 
-        # --- Context vector ---
+    def context_from_group_statistics(self, stats: GroupStatistics) -> ContextState:
+        """Build the global context from per-group summaries."""
+        log_n_total = torch.logsumexp(stats.log_n_g, dim=0)
+        log_freq_g = stats.log_n_g - log_n_total
+        freq_g = log_freq_g.exp()      # [G]
+        mass_g = stats.log_n_g.exp()   # [G]
+
+        q = (freq_g.unsqueeze(-1) * stats.eta_g).sum(dim=0)   # [K]
+        s = (freq_g.unsqueeze(-1) * stats.phi_g).sum(dim=0)   # [L]
+
         qs = torch.cat([q, s], dim=-1)  # [K+L]
         if self.use_identity_context:
             ctx = qs

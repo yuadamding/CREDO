@@ -19,6 +19,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .embeddings import TimeEmbedding
 from .ecology import EcologicalPayoff
@@ -57,12 +58,14 @@ class ControlAnchoredFieldHead(nn.Module):
         embedding_dim: int,
         hidden_dim: int,
         depth: int,
+        activation_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.baseline_net = _mlp(input_dim, out_dim, hidden_dim, depth)
         self.modulation_net = _mlp(input_dim, out_dim * embedding_dim, hidden_dim, depth)
         self.out_dim = out_dim
         self.embedding_dim = embedding_dim
+        self.activation_checkpointing = activation_checkpointing
 
     def forward(self, u: torch.Tensor, a_g: torch.Tensor) -> torch.Tensor:
         """
@@ -72,8 +75,12 @@ class ControlAnchoredFieldHead(nn.Module):
         Returns [G, N, out_dim].
         """
         G, N, _ = u.shape
-        baseline = self.baseline_net(u)                        # [G, N, out_dim]
-        B_flat = self.modulation_net(u)                         # [G, N, out_dim * r]
+        if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+            baseline = checkpoint(self.baseline_net, u, use_reentrant=False)
+            B_flat = checkpoint(self.modulation_net, u, use_reentrant=False)
+        else:
+            baseline = self.baseline_net(u)                        # [G, N, out_dim]
+            B_flat = self.modulation_net(u)                         # [G, N, out_dim * r]
         B = B_flat.view(G, N, self.out_dim, self.embedding_dim)  # [G, N, out_dim, r]
         # a_g: [G, r]  -> contract over r
         modulation = torch.einsum("gnor, gr -> gno", B, a_g)   # [G, N, out_dim]
@@ -104,6 +111,7 @@ class CoefficientNetworks(nn.Module):
         context_dim: int,
         hidden_dim: int = 128,
         depth: int = 3,
+        activation_checkpointing: bool = False,
         n_time_freqs: int = 4,
         sigma_min: float = 1e-3,
         r_max: float = 3.0,
@@ -118,18 +126,22 @@ class CoefficientNetworks(nn.Module):
         self.r_max = r_max
         self.ecological_growth = ecological_growth
         self.n_programs = n_programs
+        self.activation_checkpointing = activation_checkpointing
 
         self.time_embed = TimeEmbedding(n_frequencies=n_time_freqs)
         time_dim = self.time_embed.output_dim
         input_dim = latent_dim + time_dim + context_dim
 
         self.drift_head = ControlAnchoredFieldHead(
-            input_dim, latent_dim, embedding_dim, hidden_dim, depth)
+            input_dim, latent_dim, embedding_dim, hidden_dim, depth,
+            activation_checkpointing=activation_checkpointing)
         self.sigma_head = ControlAnchoredFieldHead(
-            input_dim, latent_dim, embedding_dim, hidden_dim, depth)
+            input_dim, latent_dim, embedding_dim, hidden_dim, depth,
+            activation_checkpointing=activation_checkpointing)
         # Growth head outputs scalar per particle
         self.growth_head = ControlAnchoredFieldHead(
-            input_dim, 1, embedding_dim, hidden_dim, depth)
+            input_dim, 1, embedding_dim, hidden_dim, depth,
+            activation_checkpointing=activation_checkpointing)
         # Per-perturbation growth offset b_g (scalar, learned)
         self.growth_offset = nn.Embedding(1, 1)  # placeholder; replaced by pert-specific
         # Actually implement as a parameter indexed by non-control perturbation

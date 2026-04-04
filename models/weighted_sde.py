@@ -123,9 +123,11 @@ class WeightedParticleSimulator(nn.Module):
             r = coeffs.growth     # [G, N]
 
             if self.store_history:
-                drift_list.append(v.detach())
-                sigma_list.append(sigma.detach())
-                growth_list.append(r.detach())
+                # Keep rollout coefficients attached so weak-form and rollout
+                # regularizers can backpropagate through the simulator.
+                drift_list.append(v)
+                sigma_list.append(sigma)
+                growth_list.append(r)
                 ctx_list.append(ctx.context.detach())
 
             # Euler-Maruyama update

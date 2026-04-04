@@ -28,6 +28,7 @@ class ModelConfig(BaseModel):
     mediator_dim: int = 8
     hidden_dim: int = 128
     depth: int = 3
+    activation_checkpointing: bool = False
     time_frequencies: int = 4
     sigma_min: float = 1e-3
     r_max: float = 3.0
@@ -94,6 +95,7 @@ class RunConfig(BaseModel):
     latent_id: Optional[str] = None
     output_dir: str = "outputs"
     device: str = "auto"
+    multi_gpu_devices: list[str] = Field(default_factory=list)
 
     data: DataConfig = Field(default_factory=DataConfig)
     latent: LatentConfig = Field(default_factory=LatentConfig)
@@ -107,3 +109,37 @@ class RunConfig(BaseModel):
         if self.device == "auto":
             return "cuda" if torch.cuda.is_available() else "cpu"
         return self.device
+
+    def resolve_training_devices(self) -> list[str]:
+        import torch
+
+        def _normalize(device: str) -> str:
+            dev = str(device).strip()
+            if not dev:
+                return dev
+            if dev.isdigit():
+                return f"cuda:{dev}"
+            if dev == "cuda":
+                return "cuda:0"
+            return dev
+
+        if self.multi_gpu_devices:
+            devices = [_normalize(device) for device in self.multi_gpu_devices if str(device).strip()]
+            if not devices:
+                return [self.resolve_device()]
+            if not torch.cuda.is_available():
+                return ["cpu"]
+            count = torch.cuda.device_count()
+            valid: list[str] = []
+            for device in devices:
+                if device.startswith("cuda:"):
+                    try:
+                        idx = int(device.split(":", 1)[1])
+                    except ValueError:
+                        continue
+                    if idx < count:
+                        valid.append(device)
+                elif device == "cpu":
+                    valid.append(device)
+            return valid or [self.resolve_device()]
+        return [self.resolve_device()]

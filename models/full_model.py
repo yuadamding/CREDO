@@ -47,6 +47,7 @@ class FullDynamicsModel(nn.Module):
         mediator_dim: int = 8,
         hidden_dim: int = 128,
         depth: int = 3,
+        activation_checkpointing: bool = False,
         n_time_freqs: int = 4,
         sigma_min: float = 1e-3,
         r_max: float = 3.0,
@@ -95,6 +96,7 @@ class FullDynamicsModel(nn.Module):
             use_identity_context=True,
             fixed_program_centroids=program_centroids,
             program_assignment_scale=program_assignment_scale,
+            activation_checkpointing=activation_checkpointing,
         )
 
         self.coeff_nets = CoefficientNetworks(
@@ -103,6 +105,7 @@ class FullDynamicsModel(nn.Module):
             context_dim=context_dim,
             hidden_dim=hidden_dim,
             depth=depth,
+            activation_checkpointing=activation_checkpointing,
             n_time_freqs=n_time_freqs,
             sigma_min=sigma_min,
             r_max=r_max,

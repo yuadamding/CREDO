@@ -35,6 +35,7 @@ from ..losses.uot import UOTLoss
 from ..losses.weak_form import WeakFormLoss
 from ..losses.counts import CountLikelihood
 from ..losses.regularizers import RolloutRegularizer
+from ..models.context import GroupStatistics
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import WeightedParticleSimulator
 from ..models.simulator import initialise_particles
@@ -204,12 +205,15 @@ class Trainer:
         self.endpoint = endpoint
         self.supported_pids = supported_pids
         self.count_data = count_data
-        self.device = config.resolve_device()
+        self.training_devices = config.resolve_training_devices()
+        self.device = self.training_devices[0]
         self.dtype = torch.float32
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ema_decay = ema_decay
         self.warmup_epochs = warmup_epochs
+        self._model_replicas: Dict[str, FullDynamicsModel] = {}
+        self._weak_loss_replicas: Dict[str, WeakFormLoss] = {}
 
         tc = config.training
         sc = config.simulation
@@ -266,6 +270,107 @@ class Trainer:
         self._best_loss = math.inf
         self._patience_counter = 0
 
+    def _can_use_multi_gpu(self) -> bool:
+        return (
+            len(self.training_devices) > 1
+            and all(device.startswith("cuda") for device in self.training_devices)
+            and torch.cuda.is_available()
+        )
+
+    def _split_perturbation_ids(self, perturbation_ids: List[str], devices: List[str]) -> List[Tuple[str, List[str], slice]]:
+        n_items = len(perturbation_ids)
+        n_shards = min(len(devices), n_items)
+        if n_shards <= 1:
+            return [(devices[0], perturbation_ids, slice(0, n_items))]
+        base = n_items // n_shards
+        extra = n_items % n_shards
+        shards: List[Tuple[str, List[str], slice]] = []
+        start = 0
+        for shard_idx, device in enumerate(devices[:n_shards]):
+            size = base + (1 if shard_idx < extra else 0)
+            stop = start + size
+            local_pids = perturbation_ids[start:stop]
+            if local_pids:
+                shards.append((device, local_pids, slice(start, stop)))
+            start = stop
+        return shards
+
+    def _sync_replica_from_primary(self, replica: FullDynamicsModel) -> None:
+        replica.load_state_dict(self.model.state_dict())
+        primary_params = dict(self.model.named_parameters())
+        for name, param in replica.named_parameters():
+            if name in primary_params:
+                param.requires_grad_(primary_params[name].requires_grad)
+        primary_buffers = dict(self.model.named_buffers())
+        for name, buffer in replica.named_buffers():
+            if name in primary_buffers:
+                buffer.copy_(primary_buffers[name].to(device=buffer.device, dtype=buffer.dtype))
+        replica.train(self.model.training)
+
+    def _get_model_for_device(self, device: str) -> FullDynamicsModel:
+        if device == self.device:
+            return self.model
+        replica = self._model_replicas.get(device)
+        if replica is None:
+            replica = copy.deepcopy(self.model).to(device)
+            self._model_replicas[device] = replica
+        self._sync_replica_from_primary(replica)
+        return replica
+
+    def _sync_weak_loss_state(self, weak_loss: WeakFormLoss) -> None:
+        weak_loss.load_state_dict(self.weak_loss.state_dict())
+        weak_loss._centers_initialized = self.weak_loss._centers_initialized
+        if hasattr(self.weak_loss, "_adaptive_bandwidth"):
+            weak_loss._adaptive_bandwidth = self.weak_loss._adaptive_bandwidth
+        elif hasattr(weak_loss, "_adaptive_bandwidth"):
+            delattr(weak_loss, "_adaptive_bandwidth")
+
+    def _get_weak_loss_for_device(self, device: str) -> WeakFormLoss:
+        if device == self.device:
+            return self.weak_loss
+        replica = self._weak_loss_replicas.get(device)
+        if replica is None:
+            replica = copy.deepcopy(self.weak_loss).to(device)
+            self._weak_loss_replicas[device] = replica
+        self._sync_weak_loss_state(replica)
+        return replica
+
+    def _prepare_multi_gpu_weak_losses(self, z_ref: torch.Tensor, refresh_centers: bool) -> None:
+        if not refresh_centers and self.weak_loss._centers_initialized:
+            for device in self.training_devices[1:]:
+                self._sync_weak_loss_state(self._get_weak_loss_for_device(device))
+            return
+        if refresh_centers or not self.weak_loss._centers_initialized:
+            self.weak_loss.refresh_test_functions(z_ref.float())
+        for device in self.training_devices[1:]:
+            self._sync_weak_loss_state(self._get_weak_loss_for_device(device))
+
+    def _accumulate_replica_gradients(
+        self,
+        replicas: Dict[str, FullDynamicsModel],
+    ) -> None:
+        primary_params = dict(self.model.named_parameters())
+        for device, replica in replicas.items():
+            if device == self.device:
+                continue
+            for name, replica_param in replica.named_parameters():
+                if replica_param.grad is None or name not in primary_params:
+                    continue
+                primary_param = primary_params[name]
+                if not primary_param.requires_grad:
+                    continue
+                grad = replica_param.grad.detach().to(self.device)
+                if primary_param.grad is None:
+                    primary_param.grad = grad.clone()
+                else:
+                    primary_param.grad.add_(grad)
+
+    @staticmethod
+    def _weighted_shard_loss(loss_value: torch.Tensor, local_groups: int, total_groups: int) -> torch.Tensor:
+        if total_groups <= 0:
+            return loss_value
+        return loss_value * (float(local_groups) / float(total_groups))
+
     def _build_optimizer(self, stage: str) -> torch.optim.Optimizer:
         tc = self.config.training
         # Separate learning rates for embedding vs network params
@@ -294,6 +399,15 @@ class Trainer:
         perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
+        if self._can_use_multi_gpu() and len(perturbation_ids) > 1:
+            return self._one_epoch_multi_gpu(
+                optimizer=optimizer,
+                epoch=epoch,
+                stage=stage,
+                perturbation_ids=perturbation_ids,
+                seed_offset=seed_offset,
+            )
+
         tc = self.config.training
         sc = self.config.simulation
         self.model.train()
@@ -402,6 +516,240 @@ class Trainer:
             loss.backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
             optimizer.step()
+
+        return {
+            "loss_total": float(loss.item()),
+            "loss_end": float(loss_end.item()),
+            "loss_weak": float(loss_weak.item()),
+            "loss_count": float(loss_count.item()),
+            "loss_reg": float(loss_reg.item()),
+        }
+
+    def _one_epoch_multi_gpu(
+        self,
+        optimizer: torch.optim.Optimizer,
+        epoch: int,
+        stage: str,
+        perturbation_ids: List[str],
+        seed_offset: int = 0,
+    ) -> Dict[str, float]:
+        tc = self.config.training
+        sc = self.config.simulation
+        if tc.lambda_count > 0:
+            raise NotImplementedError("Multi-GPU single-model training does not yet support count loss.")
+        if self.precision == "fp16":
+            raise NotImplementedError("Multi-GPU single-model training currently supports fp32/bf16, not fp16.")
+
+        self.model.train()
+        torch.manual_seed(self.config.training.seed + seed_offset + epoch)
+
+        rollout_dtype = self.compute_dtype if self.autocast_enabled else self.dtype
+        shards = self._split_perturbation_ids(perturbation_ids, self.training_devices)
+        if len(shards) <= 1:
+            raise RuntimeError("Multi-GPU epoch requested without a real perturbation shard split.")
+
+        models: Dict[str, FullDynamicsModel] = {}
+        for device, _, _ in shards:
+            models[device] = self._get_model_for_device(device)
+            models[device].train()
+
+        z0_full, logw0_full, log_m0_full = initialise_particles(
+            self.endpoint,
+            perturbation_ids,
+            n_particles=sc.n_particles,
+            device=self.device,
+            dtype=rollout_dtype,
+            seed=self.config.training.seed + epoch,
+        )
+
+        if tc.lambda_weak > 0:
+            self._prepare_multi_gpu_weak_losses(
+                z_ref=z0_full,
+                refresh_centers=(epoch % 10 == 0),
+            )
+
+        def autocast_ctx_for(device: str):
+            if self.autocast_enabled and device.startswith("cuda"):
+                return torch.autocast(device_type="cuda", dtype=self.compute_dtype)
+            return nullcontext()
+
+        shard_state: Dict[str, Dict[str, object]] = {}
+        for device, local_pids, local_slice in shards:
+            shard_state[device] = {
+                "pids": local_pids,
+                "slice": local_slice,
+                "z": z0_full[local_slice].to(device),
+                "logw": logw0_full[local_slice].to(device),
+                "log_m0": log_m0_full[local_slice].to(device),
+                "z_list": [z0_full[local_slice].to(device)],
+                "logw_list": [logw0_full[local_slice].to(device)],
+                "drift_list": [],
+                "sigma_list": [],
+                "growth_list": [],
+            }
+
+        tau_steps = torch.linspace(
+            0.0,
+            1.0,
+            sc.n_steps + 1,
+            device=self.device,
+            dtype=rollout_dtype,
+        )
+        dtau = 1.0 / sc.n_steps
+        total_groups = len(perturbation_ids)
+
+        optimizer.zero_grad()
+        for device, replica in models.items():
+            if device != self.device:
+                replica.zero_grad(set_to_none=True)
+
+        for step_idx in range(sc.n_steps):
+            tau_primary = tau_steps[step_idx]
+            summary_parts: list[GroupStatistics] = []
+            local_cache: Dict[str, Dict[str, torch.Tensor]] = {}
+
+            for device, local_pids, _ in shards:
+                state = shard_state[device]
+                model = models[device]
+                z_local = state["z"]
+                logw_local = state["logw"]
+                log_m0_local = state["log_m0"]
+                with autocast_ctx_for(device):
+                    a_local = model.embedding(local_pids)
+                    eta_local, phi_local = model.context_agg.encode_particles(z_local)
+                    stats_local, _, _ = model.context_agg.summarize_groups(
+                        z_local,
+                        logw_local,
+                        log_m0_local,
+                        eta=eta_local,
+                        phi=phi_local,
+                    )
+                summary_parts.append(
+                    GroupStatistics(
+                        log_n_g=stats_local.log_n_g.to(self.device),
+                        eta_g=stats_local.eta_g.to(self.device),
+                        phi_g=stats_local.phi_g.to(self.device),
+                    )
+                )
+                local_cache[device] = {
+                    "a": a_local,
+                    "eta": eta_local,
+                }
+
+            global_stats = GroupStatistics(
+                log_n_g=torch.cat([stats.log_n_g for stats in summary_parts], dim=0),
+                eta_g=torch.cat([stats.eta_g for stats in summary_parts], dim=0),
+                phi_g=torch.cat([stats.phi_g for stats in summary_parts], dim=0),
+            )
+            global_context = self.model.context_agg.context_from_group_statistics(global_stats)
+
+            noise_full = torch.randn_like(z0_full)
+
+            for device, local_pids, local_slice in shards:
+                state = shard_state[device]
+                model = models[device]
+                z_local = state["z"]
+                logw_local = state["logw"]
+                a_local = local_cache[device]["a"]
+                eta_local = local_cache[device]["eta"]
+                tau_local = tau_primary.to(device)
+                ctx_local = global_context.context.to(device=device, dtype=z_local.dtype)
+                q_local = global_context.q.to(device=device, dtype=z_local.dtype)
+                s_local = global_context.s.to(device=device, dtype=z_local.dtype)
+                with autocast_ctx_for(device):
+                    coeffs = model.coeff_nets(
+                        z=z_local,
+                        tau=tau_local,
+                        context=ctx_local,
+                        a=a_local,
+                        eta_z=eta_local,
+                        q=q_local,
+                        s=s_local,
+                    )
+
+                state["drift_list"].append(coeffs.drift)
+                state["sigma_list"].append(coeffs.sigma_diag)
+                state["growth_list"].append(coeffs.growth)
+
+                noise_local = noise_full[local_slice].to(device)
+                z_next = z_local + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise_local
+                logw_next = logw_local + coeffs.growth * dtau
+                state["z"] = z_next
+                state["logw"] = logw_next
+                state["z_list"].append(z_next)
+                state["logw_list"].append(logw_next)
+
+        loss_end = torch.tensor(0.0, device=self.device)
+        loss_weak = torch.tensor(0.0, device=self.device)
+        loss_count = torch.tensor(0.0, device=self.device)
+        loss_reg = torch.tensor(0.0, device=self.device)
+
+        for device, local_pids, _ in shards:
+            state = shard_state[device]
+            local_groups = len(local_pids)
+            z_steps = torch.stack(state["z_list"], dim=0)
+            logw_steps = torch.stack(state["logw_list"], dim=0)
+            drift_steps = torch.stack(state["drift_list"], dim=0)
+            sigma_steps = torch.stack(state["sigma_list"], dim=0)
+            growth_steps = torch.stack(state["growth_list"], dim=0)
+            pred_logw_abs = logw_steps[-1].float() + state["log_m0"].float().unsqueeze(-1)
+            local_target_support, local_target_logw = _build_target_dicts(
+                self.endpoint,
+                local_pids,
+                device,
+                self.dtype,
+            )
+            local_loss_end, _ = self.uot_loss(
+                pred_z=z_steps[-1].float(),
+                pred_logw_abs=pred_logw_abs,
+                target_support=local_target_support,
+                target_logw=local_target_logw,
+                perturbation_ids=local_pids,
+            )
+            loss_end = loss_end + local_loss_end.to(self.device)
+
+            if tc.lambda_weak > 0:
+                weak_loss_module = self._get_weak_loss_for_device(device)
+                local_loss_weak = weak_loss_module(
+                    z_steps=z_steps,
+                    logw_steps=logw_steps,
+                    drift_steps=drift_steps,
+                    sigma_steps=sigma_steps,
+                    growth_steps=growth_steps,
+                    tau_steps=tau_steps.to(device),
+                    refresh_centers=False,
+                )
+                loss_weak = loss_weak + self._weighted_shard_loss(
+                    local_loss_weak,
+                    local_groups,
+                    total_groups,
+                ).to(self.device)
+
+            local_embeddings = models[device].embedding(local_pids).float()
+            local_loss_reg = self.regularizer(
+                embeddings=local_embeddings,
+                drift_steps=drift_steps.float(),
+                sigma_steps=sigma_steps.float(),
+                growth_steps=growth_steps.float(),
+            )
+            loss_reg = loss_reg + self._weighted_shard_loss(
+                local_loss_reg,
+                local_groups,
+                total_groups,
+            ).to(self.device)
+
+        loss_reg = loss_reg + self.model.regularization()
+        loss = (
+            tc.lambda_end * loss_end
+            + tc.lambda_weak * loss_weak
+            + tc.lambda_count * loss_count
+            + loss_reg
+        )
+
+        loss.backward()
+        self._accumulate_replica_gradients(models)
+        nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
+        optimizer.step()
 
         return {
             "loss_total": float(loss.item()),
