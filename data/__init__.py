@@ -10,6 +10,7 @@ from .hnscc import (
     clean_perturbation_ids,
     compute_state_centroids,
     load_hnscc,
+    load_hnscc_expression,
     make_random_split,
     make_wta_split,
     parse_list_arg,

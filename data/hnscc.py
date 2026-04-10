@@ -7,6 +7,7 @@ from typing import Sequence
 import anndata as ad
 import numpy as np
 import pandas as pd
+import scipy.sparse as sp
 
 from .core import CellStateTable, MassTable, PerturbSeqDynamicsData, PerturbationCatalog, TimeAxis
 from .filters import filter_state_supported_perturbations
@@ -16,6 +17,7 @@ P60 = "P60"
 TIME_MAP = {4.0: P4, 60.0: P60}
 DEFAULT_STATE_KEY = "Cell type annotation"
 DEFAULT_WTA_COLUMN = "Library"
+DEFAULT_LATENT_KEY = "X_pca"
 DEFAULT_TRAIN_WTAS = (
     "wta4",
     "wta5",
@@ -40,13 +42,81 @@ class HNSCCSplitResult:
     metadata: dict
 
 
-def load_hnscc(path: str) -> tuple[pd.DataFrame, np.ndarray]:
+def load_hnscc(path: str, *, latent_key: str = DEFAULT_LATENT_KEY) -> tuple[pd.DataFrame, np.ndarray]:
     adata = ad.read_h5ad(path, backed="r")
     obs = adata.obs.copy()
-    latent = np.asarray(adata.obsm["X_pca"], dtype=np.float32)
+    if latent_key not in adata.obsm:
+        available = sorted(str(key) for key in adata.obsm.keys())
+        if hasattr(adata, "file") and adata.file is not None:
+            adata.file.close()
+        raise KeyError(
+            f"Requested latent key {latent_key!r} not found in adata.obsm. "
+            f"Available keys: {available}"
+        )
+    latent = np.asarray(adata.obsm[latent_key], dtype=np.float32)
     if hasattr(adata, "file") and adata.file is not None:
         adata.file.close()
     return obs, latent
+
+
+def _coerce_gene_mask(values: pd.Series) -> np.ndarray:
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.notna().any():
+        return numeric.fillna(0).astype(bool).to_numpy()
+    text = values.astype(str).str.lower()
+    return text.isin({"1", "true", "t", "yes", "y"}).to_numpy()
+
+
+def load_hnscc_expression(
+    path: str,
+    *,
+    gene_mask_col: str = "hv_gene",
+    top_genes: int = 2000,
+) -> tuple[pd.DataFrame, sp.csr_matrix, list[str], dict]:
+    adata = ad.read_h5ad(path, backed="r")
+    obs = adata.obs.copy()
+    var = adata.var.copy()
+
+    if gene_mask_col and gene_mask_col in var.columns:
+        candidate_mask = _coerce_gene_mask(var[gene_mask_col])
+    elif "use_genes" in var.columns:
+        candidate_mask = _coerce_gene_mask(var["use_genes"])
+    elif "in_original_2500_feature_set" in var.columns:
+        candidate_mask = _coerce_gene_mask(var["in_original_2500_feature_set"])
+    else:
+        candidate_mask = np.ones(len(var), dtype=bool)
+
+    candidate_idx = np.flatnonzero(candidate_mask)
+    if len(candidate_idx) == 0:
+        candidate_idx = np.arange(len(var), dtype=np.int64)
+
+    if top_genes > 0 and len(candidate_idx) > top_genes:
+        if "hv_score" in var.columns:
+            scores = pd.to_numeric(var["hv_score"], errors="coerce").fillna(-np.inf).to_numpy()
+            ranked = candidate_idx[np.argsort(scores[candidate_idx])[::-1]]
+            selected_idx = ranked[:top_genes]
+        else:
+            selected_idx = candidate_idx[:top_genes]
+    else:
+        selected_idx = candidate_idx
+
+    expr = adata[:, selected_idx].X
+    if hasattr(expr, "to_memory"):
+        expr = expr.to_memory()
+    if sp.issparse(expr):
+        expr = expr.tocsr().astype(np.float32)
+    else:
+        expr = sp.csr_matrix(np.asarray(expr, dtype=np.float32))
+
+    gene_names = [str(name) for name in var.index[selected_idx].tolist()]
+    meta = {
+        "gene_mask_col": gene_mask_col,
+        "top_genes": int(top_genes),
+        "n_selected_genes": int(len(gene_names)),
+    }
+    if hasattr(adata, "file") and adata.file is not None:
+        adata.file.close()
+    return obs, expr, gene_names, meta
 
 
 def clean_perturbation_ids(obs: pd.DataFrame) -> pd.Series:
