@@ -17,6 +17,7 @@ The intended usage is:
 """
 from __future__ import annotations
 
+from contextlib import nullcontext
 import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -84,6 +85,23 @@ def _dense_batch(matrix: sp.spmatrix | np.ndarray, rows: np.ndarray) -> np.ndarr
     if sp.issparse(batch):
         batch = batch.toarray()
     return np.asarray(batch, dtype=np.float32)
+
+
+def maybe_materialize_dense_matrix(
+    matrix: sp.spmatrix | np.ndarray,
+    *,
+    max_gb: float = 4.0,
+) -> tuple[sp.spmatrix | np.ndarray, bool]:
+    """Materialize a dense float32 panel when it fits comfortably in host RAM."""
+    if max_gb <= 0:
+        return matrix, False
+    n_rows, n_cols = matrix.shape
+    needed_bytes = int(n_rows) * int(n_cols) * np.dtype(np.float32).itemsize
+    if needed_bytes > int(max_gb * (1024 ** 3)):
+        return matrix, False
+    if sp.issparse(matrix):
+        return np.asarray(matrix.toarray(), dtype=np.float32), True
+    return np.asarray(matrix, dtype=np.float32), True
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +261,13 @@ class VAEArtifactBundle:
     split_manifest_hash: str | None = None
     commit_sha: str | None = None
 
-    def save(self, directory: str | Path, model: ExpressionVAE) -> Path:
+    def save(
+        self,
+        directory: str | Path,
+        model: ExpressionVAE,
+        *,
+        latent_all_std: np.ndarray | None = None,
+    ) -> Path:
         """Save bundle to *directory*: metadata JSON + model state_dict."""
         d = Path(directory)
         d.mkdir(parents=True, exist_ok=True)
@@ -269,6 +293,8 @@ class VAEArtifactBundle:
         }
         with open(d / "vae_metadata.json", "w") as f:
             json.dump(meta, f, indent=2)
+        if latent_all_std is not None:
+            np.save(d / "latent_all_std.npy", np.asarray(latent_all_std, dtype=np.float32))
         return d
 
     @classmethod
@@ -334,6 +360,8 @@ def fit_expression_vae(
     grad_clip: float = 1.0,
     seed: int = 0,
     device: str = "cpu",
+    use_amp: bool = True,
+    amp_dtype: str = "bf16",
 ) -> tuple[ExpressionVAE, pd.DataFrame, ExpressionVAETrainingSummary]:
     """Fit an expression VAE with validation, early stopping, and KL warmup.
 
@@ -399,6 +427,14 @@ def fit_expression_vae(
         weight_decay=weight_decay,
     )
 
+    amp_enabled = bool(use_amp and str(device).startswith("cuda"))
+    amp_torch_dtype = torch.bfloat16 if amp_dtype == "bf16" else torch.float16
+    scaler_enabled = amp_enabled and amp_torch_dtype == torch.float16
+    if hasattr(torch, "amp") and hasattr(torch.amp, "GradScaler"):
+        scaler = torch.amp.GradScaler("cuda", enabled=scaler_enabled)
+    else:
+        scaler = torch.cuda.amp.GradScaler(enabled=scaler_enabled)
+
     history_rows: list[dict] = []
     best_val_loss = float("inf")
     best_epoch = 0
@@ -415,35 +451,50 @@ def fit_expression_vae(
         # --- Training ---
         model.train()
         order = rng.permutation(n_train)
-        total_loss = recon_total = kl_total = 0.0
+        total_loss = torch.zeros((), device=device, dtype=torch.float32)
+        recon_total = torch.zeros((), device=device, dtype=torch.float32)
+        kl_total = torch.zeros((), device=device, dtype=torch.float32)
         n_seen = 0
 
         for start in range(0, n_train, batch_size):
             batch_rows = train_idx[order[start : start + batch_size]]
-            x = torch.from_numpy(_dense_batch(matrix, batch_rows)).to(device=device)
+            x = torch.from_numpy(_dense_batch(matrix, batch_rows)).to(device=device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
-            recon, mu, logvar = model(x)
-            recon_loss = F.mse_loss(recon, x, reduction="mean")
-            kl = -0.5 * torch.mean(
-                torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-            )
-            loss = recon_loss + effective_kl_weight * kl
-            loss.backward()
-            if grad_clip > 0:
-                nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-            optimizer.step()
+            with (
+                torch.autocast(device_type="cuda", dtype=amp_torch_dtype)
+                if amp_enabled else
+                nullcontext()
+            ):
+                recon, mu, logvar = model(x)
+                recon_loss = F.mse_loss(recon, x, reduction="mean")
+                kl = -0.5 * torch.mean(
+                    torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+                )
+                loss = recon_loss + effective_kl_weight * kl
+            if scaler.is_enabled():
+                scaler.scale(loss).backward()
+                if grad_clip > 0:
+                    scaler.unscale_(optimizer)
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                if grad_clip > 0:
+                    nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+                optimizer.step()
 
             batch_n = len(batch_rows)
-            total_loss += float(loss.detach().cpu()) * batch_n
-            recon_total += float(recon_loss.detach().cpu()) * batch_n
-            kl_total += float(kl.detach().cpu()) * batch_n
+            total_loss = total_loss + loss.detach().float() * batch_n
+            recon_total = recon_total + recon_loss.detach().float() * batch_n
+            kl_total = kl_total + kl.detach().float() * batch_n
             n_seen += batch_n
 
         train_metrics = {
             "epoch": epoch,
-            "loss_total": total_loss / max(n_seen, 1),
-            "loss_recon": recon_total / max(n_seen, 1),
-            "loss_kl": kl_total / max(n_seen, 1),
+            "loss_total": float((total_loss / max(n_seen, 1)).cpu()),
+            "loss_recon": float((recon_total / max(n_seen, 1)).cpu()),
+            "loss_kl": float((kl_total / max(n_seen, 1)).cpu()),
             "kl_weight_eff": effective_kl_weight,
         }
 
@@ -451,27 +502,34 @@ def fit_expression_vae(
         val_loss_avg = float("nan")
         if n_val > 0:
             model.eval()
-            val_loss = val_recon = val_kl = 0.0
+            val_loss = torch.zeros((), device=device, dtype=torch.float32)
+            val_recon = torch.zeros((), device=device, dtype=torch.float32)
+            val_kl = torch.zeros((), device=device, dtype=torch.float32)
             val_seen = 0
             with torch.no_grad():
                 for start in range(0, n_val, batch_size):
                     batch_rows = val_idx[start : start + batch_size]
-                    x = torch.from_numpy(_dense_batch(matrix, batch_rows)).to(device=device)
-                    recon, mu, logvar = model(x)
-                    recon_loss = F.mse_loss(recon, x, reduction="mean")
-                    kl = -0.5 * torch.mean(
-                        torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
-                    )
-                    loss = recon_loss + effective_kl_weight * kl
+                    x = torch.from_numpy(_dense_batch(matrix, batch_rows)).to(device=device, non_blocking=True)
+                    with (
+                        torch.autocast(device_type="cuda", dtype=amp_torch_dtype)
+                        if amp_enabled else
+                        nullcontext()
+                    ):
+                        recon, mu, logvar = model(x)
+                        recon_loss = F.mse_loss(recon, x, reduction="mean")
+                        kl = -0.5 * torch.mean(
+                            torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+                        )
+                        loss = recon_loss + effective_kl_weight * kl
                     bn = len(batch_rows)
-                    val_loss += float(loss.cpu()) * bn
-                    val_recon += float(recon_loss.cpu()) * bn
-                    val_kl += float(kl.cpu()) * bn
+                    val_loss = val_loss + loss.detach().float() * bn
+                    val_recon = val_recon + recon_loss.detach().float() * bn
+                    val_kl = val_kl + kl.detach().float() * bn
                     val_seen += bn
-            val_loss_avg = val_loss / max(val_seen, 1)
+            val_loss_avg = float((val_loss / max(val_seen, 1)).cpu())
             train_metrics["val_loss"] = val_loss_avg
-            train_metrics["val_recon"] = val_recon / max(val_seen, 1)
-            train_metrics["val_kl"] = val_kl / max(val_seen, 1)
+            train_metrics["val_recon"] = float((val_recon / max(val_seen, 1)).cpu())
+            train_metrics["val_kl"] = float((val_kl / max(val_seen, 1)).cpu())
 
             # --- Early stopping ---
             if val_loss_avg < best_val_loss:
@@ -533,6 +591,8 @@ def encode_expression_vae(
     *,
     batch_size: int = 4096,
     device: str = "cpu",
+    use_amp: bool = True,
+    amp_dtype: str = "bf16",
 ) -> np.ndarray:
     """Encode expression matrix to latent means using a trained VAE.
 
@@ -542,12 +602,19 @@ def encode_expression_vae(
     encoded = np.zeros((n_cells, model.latent_dim), dtype=np.float32)
     model = model.to(device)
     model.eval()
+    amp_enabled = bool(use_amp and str(device).startswith("cuda"))
+    amp_torch_dtype = torch.bfloat16 if amp_dtype == "bf16" else torch.float16
 
     for start in range(0, n_cells, batch_size):
         rows = np.arange(start, min(start + batch_size, n_cells), dtype=np.int64)
-        x = torch.from_numpy(_dense_batch(matrix, rows)).to(device=device)
-        mu, _ = model.encode(x)
-        encoded[rows] = mu.detach().cpu().numpy().astype(np.float32, copy=False)
+        x = torch.from_numpy(_dense_batch(matrix, rows)).to(device=device, non_blocking=True)
+        with (
+            torch.autocast(device_type="cuda", dtype=amp_torch_dtype)
+            if amp_enabled else
+            nullcontext()
+        ):
+            mu, _ = model.encode(x)
+        encoded[rows] = mu.detach().float().cpu().numpy().astype(np.float32, copy=False)
     return encoded
 
 

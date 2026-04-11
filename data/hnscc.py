@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
+import json
+from pathlib import Path
 from typing import Sequence
 
 import anndata as ad
@@ -107,6 +109,84 @@ def _validate_count_matrix(
         warnings.warn(message, stacklevel=3)
 
 
+def _materialize_chunk(chunk) -> sp.csr_matrix | np.ndarray:
+    if hasattr(chunk, "to_memory"):
+        chunk = chunk.to_memory()
+    if sp.issparse(chunk):
+        return chunk.tocsr().astype(np.float32)
+    return np.asarray(chunk, dtype=np.float32)
+
+
+def _chunked_row_sums(
+    source,
+    *,
+    n_rows: int,
+    chunk_size: int = 4096,
+) -> np.ndarray:
+    if sp.issparse(source):
+        return np.asarray(source.sum(axis=1)).ravel().astype(np.float32)
+    if isinstance(source, np.ndarray):
+        return source.sum(axis=1, dtype=np.float32)
+
+    totals = np.zeros(n_rows, dtype=np.float32)
+    for start in range(0, n_rows, chunk_size):
+        stop = min(start + chunk_size, n_rows)
+        batch = _materialize_chunk(source[start:stop])
+        if sp.issparse(batch):
+            totals[start:stop] = np.asarray(batch.sum(axis=1)).ravel().astype(np.float32)
+        else:
+            totals[start:stop] = batch.sum(axis=1, dtype=np.float32)
+    return totals
+
+
+def _materialize_selected_matrix(
+    source,
+    selected_idx: np.ndarray,
+    *,
+    n_rows: int,
+    chunk_size: int = 2048,
+) -> sp.csr_matrix:
+    if sp.issparse(source):
+        return source[:, selected_idx].tocsr().astype(np.float32)
+    if isinstance(source, np.ndarray):
+        return sp.csr_matrix(np.asarray(source[:, selected_idx], dtype=np.float32))
+
+    batches: list[sp.csr_matrix] = []
+    for start in range(0, n_rows, chunk_size):
+        stop = min(start + chunk_size, n_rows)
+        batch = _materialize_chunk(source[start:stop, selected_idx])
+        if sp.issparse(batch):
+            batches.append(batch.tocsr().astype(np.float32))
+        else:
+            batches.append(sp.csr_matrix(np.asarray(batch, dtype=np.float32)))
+    if not batches:
+        return sp.csr_matrix((n_rows, len(selected_idx)), dtype=np.float32)
+    return sp.vstack(batches, format="csr").astype(np.float32)
+
+
+def _dense_cache_limit_bytes(max_gb: float) -> int:
+    if max_gb <= 0:
+        return 0
+    return int(max_gb * (1024 ** 3))
+
+
+def _maybe_dense_cache(
+    matrix: sp.csr_matrix | np.ndarray,
+    *,
+    max_gb: float,
+) -> tuple[sp.csr_matrix | np.ndarray, bool]:
+    max_bytes = _dense_cache_limit_bytes(max_gb)
+    if max_bytes <= 0:
+        return matrix, False
+    n_rows, n_cols = matrix.shape
+    needed = int(n_rows) * int(n_cols) * np.dtype(np.float32).itemsize
+    if needed > max_bytes:
+        return matrix, False
+    if sp.issparse(matrix):
+        return np.asarray(matrix.toarray(), dtype=np.float32), True
+    return np.asarray(matrix, dtype=np.float32), True
+
+
 def load_hnscc_expression(
     path: str,
     *,
@@ -117,6 +197,7 @@ def load_hnscc_expression(
     validate_counts: bool = True,
     strict_layer: bool = True,
     strict_counts: bool = True,
+    allow_full_gene_scan: bool = False,
 ) -> tuple[pd.DataFrame, sp.csr_matrix, list[str], dict]:
     """Load expression matrix from an h5ad file.
 
@@ -164,22 +245,25 @@ def load_hnscc_expression(
         resolved_layer = "X"
         var = adata.var.copy()
 
-    if hasattr(source, "to_memory"):
-        source = source.to_memory()
-    if sp.issparse(source):
-        source = source.tocsr().astype(np.float32)
-    else:
-        source = sp.csr_matrix(np.asarray(source, dtype=np.float32))
-
-    full_library_totals = np.asarray(source.sum(axis=1)).ravel().astype(np.float32)
+    n_rows, n_cols = int(source.shape[0]), int(source.shape[1])
     if validate_counts:
+        sample_rows = min(256, n_rows)
+        sample = _materialize_chunk(source[:sample_rows])
         _validate_count_matrix(
-            source,
+            sample,
             name=f"expression (layer={resolved_layer!r})",
             strict=strict_counts,
         )
 
-    if gene_mask_col and gene_mask_col in var.columns:
+    if gene_mask_col:
+        if gene_mask_col not in var.columns:
+            available = sorted(str(col) for col in var.columns)
+            if hasattr(adata, "file") and adata.file is not None:
+                adata.file.close()
+            raise KeyError(
+                f"Requested gene mask column {gene_mask_col!r} not found in adata.var. "
+                f"Available columns: {available}"
+            )
         candidate_mask = _coerce_gene_mask(var[gene_mask_col])
     else:
         candidate_mask = np.ones(len(var), dtype=bool)
@@ -187,6 +271,20 @@ def load_hnscc_expression(
     candidate_idx = np.flatnonzero(candidate_mask)
     if len(candidate_idx) == 0:
         candidate_idx = np.arange(len(var), dtype=np.int64)
+
+    if (
+        gene_mask_col is None
+        and top_genes <= 0
+        and len(candidate_idx) > 5000
+        and not allow_full_gene_scan
+    ):
+        if hasattr(adata, "file") and adata.file is not None:
+            adata.file.close()
+        raise ValueError(
+            "Refusing to materialize the full transcriptome candidate matrix. "
+            "Pass a gene mask column such as 'hv_gene', request a smaller top_genes "
+            "panel, or set allow_full_gene_scan=True explicitly."
+        )
 
     if top_genes > 0 and len(candidate_idx) > top_genes:
         if "hv_score" in var.columns:
@@ -198,11 +296,8 @@ def load_hnscc_expression(
     else:
         selected_idx = candidate_idx
 
-    expr = source[:, selected_idx]
-    if sp.issparse(expr):
-        expr = expr.tocsr().astype(np.float32)
-    else:
-        expr = sp.csr_matrix(np.asarray(expr, dtype=np.float32))
+    full_library_totals = _chunked_row_sums(source, n_rows=n_rows)
+    expr = _materialize_selected_matrix(source, selected_idx, n_rows=n_rows)
 
     gene_names = [str(name) for name in var.index[selected_idx].tolist()]
     meta = {
@@ -214,6 +309,7 @@ def load_hnscc_expression(
         "gene_names": gene_names,
         "selected_gene_indices": selected_idx.astype(np.int64).tolist(),
         "full_library_totals": full_library_totals,
+        "allow_full_gene_scan": bool(allow_full_gene_scan),
     }
     if hasattr(adata, "file") and adata.file is not None:
         adata.file.close()
@@ -246,6 +342,115 @@ def _rank_train_hv_genes(
     dispersion[valid] = np.log1p(variance[valid] / np.maximum(mean[valid], 1e-8))
     ranked = np.argsort(dispersion)[::-1]
     return ranked[:n_genes].astype(np.int64)
+
+
+def _rank_to_unit_scores(ranked: np.ndarray, n_items: int) -> np.ndarray:
+    scores = np.zeros(n_items, dtype=np.float64)
+    if n_items == 0:
+        return scores
+    values = np.linspace(1.0, 0.0, num=n_items, endpoint=False, dtype=np.float64)
+    scores[ranked] = values
+    return scores
+
+
+def _rank_train_hv_genes_batch_aware(
+    matrix: sp.csr_matrix | np.ndarray,
+    obs: pd.DataFrame,
+    *,
+    n_genes: int,
+    batch_col: str = DEFAULT_WTA_COLUMN,
+    time_col: str = "Time point",
+    min_cells_per_batch: int = 256,
+) -> np.ndarray:
+    n_available = int(matrix.shape[1])
+    if n_genes <= 0 or n_genes >= n_available:
+        return np.arange(n_available, dtype=np.int64)
+    if batch_col not in obs.columns or time_col not in obs.columns:
+        return _rank_train_hv_genes(matrix, n_genes=n_genes)
+
+    time_labels = obs[time_col].astype(str).fillna("NA").reset_index(drop=True)
+    batch_labels = obs[batch_col].astype(str).fillna("NA").reset_index(drop=True)
+    unique_times = sorted(time_labels.unique().tolist())
+    if not unique_times:
+        return _rank_train_hv_genes(matrix, n_genes=n_genes)
+
+    selected: list[int] = []
+    selected_set: set[int] = set()
+    quota = max(1, n_genes // max(len(unique_times), 1))
+    per_time_scores: list[np.ndarray] = []
+
+    for time_value in unique_times:
+        time_mask = time_labels.eq(time_value).to_numpy()
+        n_time_cells = int(time_mask.sum())
+        if n_time_cells == 0:
+            continue
+        matrix_time = matrix[time_mask]
+        ranked_time = _rank_train_hv_genes(matrix_time, n_genes=n_available)
+        score_time = _rank_to_unit_scores(ranked_time, n_available)
+
+        time_batches = batch_labels.loc[time_mask]
+        batch_score_parts: list[np.ndarray] = []
+        for batch_value in sorted(time_batches.unique().tolist()):
+            batch_mask = time_batches.eq(batch_value).to_numpy()
+            if int(batch_mask.sum()) < int(min_cells_per_batch):
+                continue
+            ranked_batch = _rank_train_hv_genes(matrix_time[batch_mask], n_genes=n_available)
+            batch_score_parts.append(_rank_to_unit_scores(ranked_batch, n_available))
+
+        if batch_score_parts:
+            score_time = 0.5 * score_time + 0.5 * np.mean(batch_score_parts, axis=0)
+
+        per_time_scores.append(score_time)
+        for gene_idx in np.argsort(score_time)[::-1]:
+            gene_idx = int(gene_idx)
+            if gene_idx in selected_set:
+                continue
+            selected.append(gene_idx)
+            selected_set.add(gene_idx)
+            if len(selected) >= quota * len(per_time_scores):
+                break
+
+    global_rank = _rank_train_hv_genes(matrix, n_genes=n_available)
+    global_score = _rank_to_unit_scores(global_rank, n_available)
+    if per_time_scores:
+        global_score = 0.5 * global_score + 0.5 * np.mean(per_time_scores, axis=0)
+
+    for gene_idx in np.argsort(global_score)[::-1]:
+        gene_idx = int(gene_idx)
+        if gene_idx in selected_set:
+            continue
+        selected.append(gene_idx)
+        selected_set.add(gene_idx)
+        if len(selected) >= n_genes:
+            break
+
+    return np.asarray(selected[:n_genes], dtype=np.int64)
+
+
+def _vae_cache_paths(save_dir: str | Path) -> tuple[Path, Path, Path]:
+    save_path = Path(save_dir)
+    return save_path, save_path / "vae_metadata.json", save_path / "latent_all_std.npy"
+
+
+def _vae_cache_matches(save_dir: str | Path, *, expected: dict) -> bool:
+    _, meta_path, _ = _vae_cache_paths(save_dir)
+    if not meta_path.exists():
+        return False
+    try:
+        meta = json.loads(meta_path.read_text())
+    except Exception:
+        return False
+    checks = {
+        "requested_layer": meta.get("requested_layer"),
+        "source_layer": meta.get("source_layer"),
+        "target_sum": meta.get("target_sum"),
+        "selected_gene_indices": meta.get("selected_gene_indices"),
+        "train_cell_indices": meta.get("train_cell_indices"),
+        "kept_positions": meta.get("kept_positions"),
+        "split_manifest_hash": meta.get("split_manifest_hash"),
+        "vae_hyperparams": meta.get("vae_hyperparams"),
+    }
+    return checks == expected
 
 
 def _split_manifest_hash(obs: pd.DataFrame, split: pd.Series) -> str:
@@ -593,6 +798,11 @@ def build_vae_latent(
     use_raw: bool = False,
     gene_mask_col: str | None = None,
     n_genes: int = 2000,
+    batch_aware_hvg: bool = True,
+    hvg_batch_col: str = DEFAULT_WTA_COLUMN,
+    hvg_time_col: str = "Time point",
+    hvg_min_cells_per_batch: int = 256,
+    allow_full_gene_scan: bool = False,
     target_sum: float = 1e4,
     vae_hidden_dim: int = 512,
     vae_depth: int = 2,
@@ -607,6 +817,11 @@ def build_vae_latent(
     vae_early_stop_patience: int = 15,
     vae_grad_clip: float = 1.0,
     vae_seed: int = 0,
+    encode_batch_size: int = 4096,
+    max_dense_cache_gb: float = 4.0,
+    reuse_saved_artifact: bool = True,
+    vae_use_amp: bool = True,
+    vae_amp_dtype: str = "bf16",
     device: str = "cpu",
     state_key: str = DEFAULT_STATE_KEY,
     compute_centroids: bool = False,
@@ -659,10 +874,10 @@ def build_vae_latent(
     """
     from ..models.expression_vae import (
         VAEArtifactBundle,
-        LatentStandardization,
         encode_expression_vae,
         fit_expression_vae,
         log1p_normalize_expression_matrix,
+        maybe_materialize_dense_matrix,
         standardize_latent,
     )
 
@@ -676,6 +891,7 @@ def build_vae_latent(
         validate_counts=True,
         strict_layer=True,
         strict_counts=True,
+        allow_full_gene_scan=allow_full_gene_scan,
     )
     candidate_gene_indices = np.asarray(expr_meta["selected_gene_indices"], dtype=np.int64)
     library_totals = np.asarray(expr_meta["full_library_totals"], dtype=np.float32)
@@ -701,7 +917,17 @@ def build_vae_latent(
 
     # 3. Select genes using training cells only.
     train_candidate = expr_candidate[train_mask]
-    selected_local_idx = _rank_train_hv_genes(train_candidate, n_genes=n_genes)
+    if batch_aware_hvg:
+        selected_local_idx = _rank_train_hv_genes_batch_aware(
+            train_candidate,
+            obs.loc[train_mask],
+            n_genes=n_genes,
+            batch_col=hvg_batch_col,
+            time_col=hvg_time_col,
+            min_cells_per_batch=hvg_min_cells_per_batch,
+        )
+    else:
+        selected_local_idx = _rank_train_hv_genes(train_candidate, n_genes=n_genes)
     selected_gene_indices = candidate_gene_indices[selected_local_idx]
     gene_names = [candidate_gene_names[int(i)] for i in selected_local_idx.tolist()]
     expr_selected = expr_candidate[:, selected_local_idx]
@@ -712,11 +938,72 @@ def build_vae_latent(
         target_sum=target_sum,
         library_totals=library_totals,
     )
+    expr_norm, dense_cached = maybe_materialize_dense_matrix(
+        expr_norm,
+        max_gb=max_dense_cache_gb,
+    )
 
     if sp.issparse(expr_norm):
         expr_train = expr_norm[train_mask]
     else:
         expr_train = expr_norm[train_mask]
+
+    vae_hp = {
+        "input_dim": int(expr_norm.shape[1]),
+        "latent_dim": latent_dim,
+        "hidden_dim": vae_hidden_dim,
+        "depth": vae_depth,
+        "dropout": vae_dropout,
+        "batch_aware_hvg": bool(batch_aware_hvg),
+        "hvg_batch_col": hvg_batch_col,
+        "hvg_time_col": hvg_time_col,
+        "hvg_min_cells_per_batch": int(hvg_min_cells_per_batch),
+        "dense_cached": bool(dense_cached),
+        "max_dense_cache_gb": float(max_dense_cache_gb),
+        "vae_use_amp": bool(vae_use_amp),
+        "vae_amp_dtype": str(vae_amp_dtype),
+    }
+    split_hash = _split_manifest_hash(obs, split)
+    expected_cache = {
+        "requested_layer": expr_meta.get("requested_layer"),
+        "source_layer": expr_meta.get("layer"),
+        "target_sum": target_sum,
+        "selected_gene_indices": selected_gene_indices.astype(np.int64).tolist(),
+        "train_cell_indices": train_indices,
+        "kept_positions": kept_positions.tolist() if kept_positions is not None else None,
+        "split_manifest_hash": split_hash,
+        "vae_hyperparams": vae_hp,
+    }
+
+    if save_dir is not None and reuse_saved_artifact and _vae_cache_matches(save_dir, expected=expected_cache):
+        bundle, model = VAEArtifactBundle.load(save_dir, device=device)
+        _, _, latent_cache_path = _vae_cache_paths(save_dir)
+        if latent_cache_path.exists():
+            z_all_std = np.load(latent_cache_path)
+        else:
+            z_all = encode_expression_vae(
+                model,
+                expr_norm,
+                batch_size=encode_batch_size,
+                device=device,
+                use_amp=vae_use_amp,
+                amp_dtype=vae_amp_dtype,
+            )
+            z_all_std = bundle.latent_standardization.transform(z_all)
+        program_centroids = None
+        if compute_centroids:
+            train_obs = obs.loc[train_mask]
+            z_train_std = z_all_std[train_mask]
+            _, program_centroids, _ = compute_state_centroids(
+                train_obs, z_train_std, state_key=state_key,
+            )
+        return VAELatentResult(
+            latent=z_all_std,
+            train_mask=train_mask,
+            test_mask=test_mask,
+            program_centroids=program_centroids,
+            bundle=bundle,
+        )
 
     model, history, summary = fit_expression_vae(
         expr_train,
@@ -735,10 +1022,19 @@ def build_vae_latent(
         grad_clip=vae_grad_clip,
         seed=vae_seed,
         device=device,
+        use_amp=vae_use_amp,
+        amp_dtype=vae_amp_dtype,
     )
 
     # 6. Encode ALL cells with frozen encoder
-    z_all = encode_expression_vae(model, expr_norm, device=device)
+    z_all = encode_expression_vae(
+        model,
+        expr_norm,
+        batch_size=encode_batch_size,
+        device=device,
+        use_amp=vae_use_amp,
+        amp_dtype=vae_amp_dtype,
+    )
 
     # 7. Standardize using training-set statistics only
     z_train = z_all[train_mask]
@@ -755,13 +1051,6 @@ def build_vae_latent(
         )
 
     # 7. Build artifact bundle
-    vae_hp = {
-        "input_dim": int(expr_norm.shape[1]),
-        "latent_dim": latent_dim,
-        "hidden_dim": vae_hidden_dim,
-        "depth": vae_depth,
-        "dropout": vae_dropout,
-    }
     bundle = VAEArtifactBundle(
         gene_names=gene_names,
         source_layer=expr_meta.get("layer"),
@@ -771,14 +1060,14 @@ def build_vae_latent(
         vae_hyperparams=vae_hp,
         train_cell_indices=train_indices,
         kept_positions=kept_positions.tolist() if kept_positions is not None else None,
-        split_manifest_hash=_split_manifest_hash(obs, split),
+        split_manifest_hash=split_hash,
         latent_standardization=lat_stats,
         training_summary=summary,
         commit_sha=commit_sha,
     )
 
     if save_dir is not None:
-        bundle.save(save_dir, model)
+        bundle.save(save_dir, model, latent_all_std=z_all_std)
         history.to_csv(str(save_dir) + "/vae_training_history.csv", index=False)
 
     return VAELatentResult(

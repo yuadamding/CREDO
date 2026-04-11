@@ -218,6 +218,8 @@ class Trainer:
         self.warmup_epochs = warmup_epochs
         self._model_replicas: Dict[str, FullDynamicsModel] = {}
         self._weak_loss_replicas: Dict[str, WeakFormLoss] = {}
+        self._target_cache: Dict[str, Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]] = {}
+        self._count_tensor_cache: Dict[str, Dict[str, torch.Tensor]] = {}
 
         tc = config.training
         sc = config.simulation
@@ -225,7 +227,7 @@ class Trainer:
         has_trajectory_reg = (
             tc.lambda_reg_net > 0 or tc.lambda_reg_diffusion > 0
         )
-        needs_history = (
+        self._needs_rollout_history = (
             (tc.lambda_weak > 0) or (tc.lambda_count > 0) or has_trajectory_reg
         )
         self.precision = tc.precision
@@ -243,7 +245,7 @@ class Trainer:
 
         self.simulator = WeightedParticleSimulator(
             n_steps=sc.n_steps,
-            store_history=needs_history,
+            store_history=self._needs_rollout_history,
         )
         self.uot_loss = UOTLoss(
             eps=tc.sinkhorn_epsilon,
@@ -263,8 +265,7 @@ class Trainer:
             lambda_growth=tc.lambda_reg_net,
         )
 
-        self._target_support, self._target_logw = _build_target_dicts(
-            endpoint, supported_pids, self.device, self.dtype)
+        self._target_support, self._target_logw = self._get_target_dicts_for_device(self.device)
 
         self.model.to(self.device)
         self.weak_loss.to(self.device)
@@ -384,6 +385,49 @@ class Trainer:
                 else:
                     primary_param.grad.add_(grad)
 
+    def _get_target_dicts_for_device(
+        self,
+        device: str,
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+        cached = self._target_cache.get(device)
+        if cached is None:
+            cached = _build_target_dicts(
+                self.endpoint,
+                self.supported_pids,
+                device,
+                self.dtype,
+            )
+            self._target_cache[device] = cached
+        return cached
+
+    def _subset_target_dicts(
+        self,
+        device: str,
+        perturbation_ids: List[str],
+    ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
+        target_support, target_logw = self._get_target_dicts_for_device(device)
+        local_support = {pid: target_support[pid] for pid in perturbation_ids if pid in target_support}
+        local_logw = {pid: target_logw[pid] for pid in perturbation_ids if pid in target_logw}
+        return local_support, local_logw
+
+    def _get_count_tensors_for_device(self, device: str) -> Optional[Dict[str, torch.Tensor]]:
+        if self.count_data is None:
+            return None
+        cached = self._count_tensor_cache.get(device)
+        if cached is None:
+            cached = {
+                "exposures": torch.as_tensor(self.count_data["exposures"], dtype=self.dtype, device=device),
+                "counts": torch.as_tensor(self.count_data["counts"], dtype=self.dtype, device=device),
+                "n_totals": torch.as_tensor(self.count_data["n_totals"], dtype=self.dtype, device=device),
+            }
+            self._count_tensor_cache[device] = cached
+        return cached
+
+    def _make_noise_generator(self, device: str, seed: int) -> torch.Generator:
+        generator = torch.Generator(device=device if device.startswith("cuda") else "cpu")
+        generator.manual_seed(int(seed))
+        return generator
+
     @staticmethod
     def _weighted_shard_loss(loss_value: torch.Tensor, local_groups: int, total_groups: int) -> torch.Tensor:
         if total_groups <= 0:
@@ -421,11 +465,12 @@ class Trainer:
         if not self._can_use_multi_gpu():
             batch_size = self._perturbation_batch_size(perturbation_ids)
             if batch_size < len(perturbation_ids):
-                raise NotImplementedError(
-                    "Single-model perturbation chunking is disabled because it changes "
-                    "the global-context semantics seen by the coefficient networks. "
-                    "Use max_active_perturbations=0 and search for a setting that fits "
-                    "without chunking."
+                return self._one_epoch_chunked(
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    stage=stage,
+                    perturbation_ids=perturbation_ids,
+                    seed_offset=seed_offset,
                 )
         if self._can_use_multi_gpu() and len(perturbation_ids) > 1:
             return self._one_epoch_multi_gpu(
@@ -502,26 +547,23 @@ class Trainer:
             and rollout.growth_steps is not None
             and perturbation_ids == self.supported_pids
         ):
-            cd = self.count_data
+            cd = self._get_count_tensors_for_device(self.device)
             loss_count = self.count_lik(
                 growth_steps=rollout.growth_steps,
                 logw_steps=rollout.logw_steps,
                 tau_steps=rollout.tau_steps,
-                exposures=torch.tensor(cd["exposures"], dtype=self.dtype, device=self.device),
-                count_matrix=torch.tensor(cd["counts"], dtype=self.dtype, device=self.device),
-                n_totals=torch.tensor(cd["n_totals"], dtype=self.dtype, device=self.device),
+                exposures=cd["exposures"],
+                count_matrix=cd["counts"],
+                n_totals=cd["n_totals"],
             )
 
         # --- Regularization ---
         embeddings = self.model.embedding(perturbation_ids).float()
         loss_reg = self.regularizer(
             embeddings=embeddings,
-            drift_steps=rollout.drift_steps.float() if rollout.drift_steps is not None
-                        else torch.zeros(1, G, sc.n_particles, self.model.latent_dim, device=self.device),
-            sigma_steps=rollout.sigma_steps.float() if rollout.sigma_steps is not None
-                        else torch.zeros(1, G, sc.n_particles, self.model.latent_dim, device=self.device),
-            growth_steps=rollout.growth_steps.float() if rollout.growth_steps is not None
-                         else torch.zeros(1, G, sc.n_particles, device=self.device),
+            drift_steps=rollout.drift_steps.float() if rollout.drift_steps is not None else None,
+            sigma_steps=rollout.sigma_steps.float() if rollout.sigma_steps is not None else None,
+            growth_steps=rollout.growth_steps.float() if rollout.growth_steps is not None else None,
         )
         loss_reg = loss_reg + self.model.regularization()
 
@@ -577,6 +619,7 @@ class Trainer:
         perturbation_chunks = self._chunk_perturbation_ids(perturbation_ids)
         total_groups = len(perturbation_ids)
         batch_size = max(len(chunk) for chunk in perturbation_chunks)
+        store_history = self._needs_rollout_history
 
         autocast_ctx = (
             torch.autocast(device_type="cuda", dtype=self.compute_dtype)
@@ -598,6 +641,100 @@ class Trainer:
                 self.weak_loss.refresh_test_functions(z_ref.float())
                 del z_ref
 
+        chunk_states: list[dict] = []
+        base_seed = self.config.training.seed + seed_offset + epoch * 1000
+        noise_generator = self._make_noise_generator(self.device, base_seed + 17)
+        for chunk_idx, chunk_pids in enumerate(perturbation_chunks):
+            chunk_seed = base_seed + chunk_idx
+            z0, logw0, log_m0 = initialise_particles(
+                self.endpoint,
+                chunk_pids,
+                n_particles=sc.n_particles,
+                device=self.device,
+                dtype=rollout_dtype,
+                seed=chunk_seed,
+            )
+            state = {
+                "pids": chunk_pids,
+                "z": z0,
+                "logw": logw0,
+                "log_m0": log_m0,
+            }
+            if store_history:
+                state.update(
+                    {
+                        "z_list": [z0],
+                        "logw_list": [logw0],
+                        "drift_list": [],
+                        "sigma_list": [],
+                        "growth_list": [],
+                    }
+                )
+            chunk_states.append(state)
+
+        tau_steps = torch.linspace(
+            0.0,
+            1.0,
+            sc.n_steps + 1,
+            device=self.device,
+            dtype=rollout_dtype,
+        )
+        dtau = 1.0 / sc.n_steps
+
+        for step_idx in range(sc.n_steps):
+            tau_k = tau_steps[step_idx]
+            summary_parts: list[GroupStatistics] = []
+            local_cache: list[dict[str, torch.Tensor]] = []
+
+            for state in chunk_states:
+                with autocast_ctx:
+                    a_local = self.model.embedding(state["pids"])
+                    eta_local, phi_local = self.model.context_agg.encode_particles(state["z"])
+                    stats_local, _, _ = self.model.context_agg.summarize_groups(
+                        state["z"],
+                        state["logw"],
+                        state["log_m0"],
+                        eta=eta_local,
+                        phi=phi_local,
+                    )
+                summary_parts.append(stats_local)
+                local_cache.append({"a": a_local, "eta": eta_local})
+
+            global_stats = GroupStatistics(
+                log_n_g=torch.cat([stats.log_n_g for stats in summary_parts], dim=0),
+                eta_g=torch.cat([stats.eta_g for stats in summary_parts], dim=0),
+                phi_g=torch.cat([stats.phi_g for stats in summary_parts], dim=0),
+            )
+            global_context = self.model.context_agg.context_from_group_statistics(global_stats)
+
+            for state, cache_entry in zip(chunk_states, local_cache):
+                with autocast_ctx:
+                    coeffs = self.model.coeff_nets(
+                        z=state["z"],
+                        tau=tau_k,
+                        context=global_context.context,
+                        a=cache_entry["a"],
+                        eta_z=cache_entry["eta"],
+                        q=global_context.q,
+                        s=global_context.s,
+                    )
+                noise = torch.randn(
+                    state["z"].shape,
+                    device=self.device,
+                    dtype=state["z"].dtype,
+                    generator=noise_generator,
+                )
+                z_next = state["z"] + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise
+                logw_next = state["logw"] + coeffs.growth * dtau
+                if store_history:
+                    state["drift_list"].append(coeffs.drift)
+                    state["sigma_list"].append(coeffs.sigma_diag)
+                    state["growth_list"].append(coeffs.growth)
+                    state["z_list"].append(z_next)
+                    state["logw_list"].append(logw_next)
+                state["z"] = z_next
+                state["logw"] = logw_next
+
         metrics = {
             "n_active_perturbations": len(perturbation_ids),
             "perturbation_batch_size": batch_size,
@@ -610,101 +747,86 @@ class Trainer:
 
         optimizer.zero_grad()
 
-        for chunk_idx, chunk_pids in enumerate(perturbation_chunks):
-            local_groups = len(chunk_pids)
-            chunk_seed = self.config.training.seed + seed_offset + epoch * 1000 + chunk_idx
-            torch.manual_seed(chunk_seed)
+        loss_end = torch.tensor(0.0, device=self.device)
+        loss_weak = torch.tensor(0.0, device=self.device)
+        loss_reg = torch.tensor(0.0, device=self.device)
 
-            z0, logw0, log_m0 = initialise_particles(
-                self.endpoint,
-                chunk_pids,
-                n_particles=sc.n_particles,
-                device=self.device,
-                dtype=rollout_dtype,
-                seed=chunk_seed,
-            )
+        for state in chunk_states:
+            local_groups = len(state["pids"])
+            if store_history:
+                z_steps = torch.stack(state["z_list"], dim=0)
+                logw_steps = torch.stack(state["logw_list"], dim=0)
+                drift_steps = torch.stack(state["drift_list"], dim=0)
+                sigma_steps = torch.stack(state["sigma_list"], dim=0)
+                growth_steps = torch.stack(state["growth_list"], dim=0)
+                terminal_z = z_steps[-1]
+                terminal_logw = logw_steps[-1]
+            else:
+                z_steps = None
+                logw_steps = None
+                drift_steps = None
+                sigma_steps = None
+                growth_steps = None
+                terminal_z = state["z"]
+                terminal_logw = state["logw"]
 
-            with autocast_ctx:
-                rollout = self.simulator.rollout(
-                    z0=z0,
-                    logw0=logw0,
-                    model=self.model,
-                    log_m0=log_m0,
-                    perturbation_ids=chunk_pids,
-                )
-
-            pred_logw_abs = rollout.terminal_logw.float() + log_m0.float().unsqueeze(-1)
-            loss_end, _ = self.uot_loss(
-                pred_z=rollout.terminal_z.float(),
+            pred_logw_abs = terminal_logw.float() + state["log_m0"].float().unsqueeze(-1)
+            local_target_support, local_target_logw = self._subset_target_dicts(self.device, state["pids"])
+            local_loss_end, _ = self.uot_loss(
+                pred_z=terminal_z.float(),
                 pred_logw_abs=pred_logw_abs,
-                target_support=self._target_support,
-                target_logw=self._target_logw,
-                perturbation_ids=chunk_pids,
+                target_support=local_target_support,
+                target_logw=local_target_logw,
+                perturbation_ids=state["pids"],
             )
+            loss_end = loss_end + local_loss_end
 
-            loss_weak = torch.tensor(0.0, device=self.device)
-            if tc.lambda_weak > 0 and rollout.drift_steps is not None:
+            if tc.lambda_weak > 0 and drift_steps is not None:
                 local_loss_weak = self.weak_loss(
-                    z_steps=rollout.z_steps,
-                    logw_steps=rollout.logw_steps,
-                    drift_steps=rollout.drift_steps,
-                    sigma_steps=rollout.sigma_steps,
-                    growth_steps=rollout.growth_steps,
-                    tau_steps=rollout.tau_steps,
+                    z_steps=z_steps,
+                    logw_steps=logw_steps,
+                    drift_steps=drift_steps,
+                    sigma_steps=sigma_steps,
+                    growth_steps=growth_steps,
+                    tau_steps=tau_steps,
                     refresh_centers=False,
                 )
-                loss_weak = self._weighted_shard_loss(
+                loss_weak = loss_weak + self._weighted_shard_loss(
                     local_loss_weak,
                     local_groups,
                     total_groups,
                 )
 
-            loss_reg = self.regularizer(
-                embeddings=self.model.embedding(chunk_pids).float(),
-                drift_steps=rollout.drift_steps.float()
-                if rollout.drift_steps is not None
-                else torch.zeros(1, local_groups, sc.n_particles, self.model.latent_dim, device=self.device),
-                sigma_steps=rollout.sigma_steps.float()
-                if rollout.sigma_steps is not None
-                else torch.zeros(1, local_groups, sc.n_particles, self.model.latent_dim, device=self.device),
-                growth_steps=rollout.growth_steps.float()
-                if rollout.growth_steps is not None
-                else torch.zeros(1, local_groups, sc.n_particles, device=self.device),
+            local_loss_reg = self.regularizer(
+                embeddings=self.model.embedding(state["pids"]).float(),
+                drift_steps=drift_steps.float() if drift_steps is not None else None,
+                sigma_steps=sigma_steps.float() if sigma_steps is not None else None,
+                growth_steps=growth_steps.float() if growth_steps is not None else None,
             )
-            loss_reg = self._weighted_shard_loss(loss_reg, local_groups, total_groups)
-
-            loss = (
-                tc.lambda_end * loss_end
-                + tc.lambda_weak * loss_weak
-                + loss_reg
+            loss_reg = loss_reg + self._weighted_shard_loss(
+                local_loss_reg,
+                local_groups,
+                total_groups,
             )
 
-            if self.scaler.is_enabled():
-                self.scaler.scale(loss).backward()
-            else:
-                loss.backward()
-
-            metrics["loss_total"] += float(loss.item())
-            metrics["loss_end"] += float(loss_end.item())
-            metrics["loss_weak"] += float(loss_weak.item())
-            metrics["loss_reg"] += float(loss_reg.item())
-
-            del rollout, pred_logw_abs, z0, logw0, log_m0
+        loss = tc.lambda_end * loss_end + tc.lambda_weak * loss_weak + loss_reg
 
         model_reg = self.model.regularization()
         if self.scaler.is_enabled():
-            self.scaler.scale(model_reg).backward()
+            self.scaler.scale(loss + model_reg).backward()
             self.scaler.unscale_(optimizer)
             nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
             self.scaler.step(optimizer)
             self.scaler.update()
         else:
-            model_reg.backward()
+            (loss + model_reg).backward()
             nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
             optimizer.step()
 
-        metrics["loss_reg"] += float(model_reg.item())
-        metrics["loss_total"] += float(model_reg.item())
+        metrics["loss_end"] = float(loss_end.item())
+        metrics["loss_weak"] = float(loss_weak.item())
+        metrics["loss_reg"] = float((loss_reg + model_reg).item())
+        metrics["loss_total"] = float((loss + model_reg).item())
         return metrics
 
     def _one_epoch_multi_gpu(
@@ -729,6 +851,7 @@ class Trainer:
         shards = self._split_perturbation_ids(perturbation_ids, self.training_devices)
         if len(shards) <= 1:
             raise RuntimeError("Multi-GPU epoch requested without a real perturbation shard split.")
+        store_history = self._needs_rollout_history
 
         models: Dict[str, FullDynamicsModel] = {}
         for device, _, _ in shards:
@@ -756,19 +879,27 @@ class Trainer:
             return nullcontext()
 
         shard_state: Dict[str, Dict[str, object]] = {}
+        base_seed = self.config.training.seed + seed_offset + epoch * 1000
+        noise_generators: Dict[str, torch.Generator] = {}
         for device, local_pids, local_slice in shards:
+            noise_generators[device] = self._make_noise_generator(device, base_seed + 1009 * (len(noise_generators) + 1))
             shard_state[device] = {
                 "pids": local_pids,
                 "slice": local_slice,
                 "z": z0_full[local_slice].to(device),
                 "logw": logw0_full[local_slice].to(device),
                 "log_m0": log_m0_full[local_slice].to(device),
-                "z_list": [z0_full[local_slice].to(device)],
-                "logw_list": [logw0_full[local_slice].to(device)],
-                "drift_list": [],
-                "sigma_list": [],
-                "growth_list": [],
             }
+            if store_history:
+                shard_state[device].update(
+                    {
+                        "z_list": [shard_state[device]["z"]],
+                        "logw_list": [shard_state[device]["logw"]],
+                        "drift_list": [],
+                        "sigma_list": [],
+                        "growth_list": [],
+                    }
+                )
 
         tau_steps = torch.linspace(
             0.0,
@@ -825,8 +956,6 @@ class Trainer:
             )
             global_context = self.model.context_agg.context_from_group_statistics(global_stats)
 
-            noise_full = torch.randn_like(z0_full)
-
             for device, local_pids, local_slice in shards:
                 state = shard_state[device]
                 model = models[device]
@@ -849,17 +978,24 @@ class Trainer:
                         s=s_local,
                     )
 
-                state["drift_list"].append(coeffs.drift)
-                state["sigma_list"].append(coeffs.sigma_diag)
-                state["growth_list"].append(coeffs.growth)
+                if store_history:
+                    state["drift_list"].append(coeffs.drift)
+                    state["sigma_list"].append(coeffs.sigma_diag)
+                    state["growth_list"].append(coeffs.growth)
 
-                noise_local = noise_full[local_slice].to(device)
+                noise_local = torch.randn(
+                    z_local.shape,
+                    device=device,
+                    dtype=z_local.dtype,
+                    generator=noise_generators[device],
+                )
                 z_next = z_local + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise_local
                 logw_next = logw_local + coeffs.growth * dtau
                 state["z"] = z_next
                 state["logw"] = logw_next
-                state["z_list"].append(z_next)
-                state["logw_list"].append(logw_next)
+                if store_history:
+                    state["z_list"].append(z_next)
+                    state["logw_list"].append(logw_next)
 
         loss_end = torch.tensor(0.0, device=self.device)
         loss_weak = torch.tensor(0.0, device=self.device)
@@ -869,20 +1005,26 @@ class Trainer:
         for device, local_pids, _ in shards:
             state = shard_state[device]
             local_groups = len(local_pids)
-            z_steps = torch.stack(state["z_list"], dim=0)
-            logw_steps = torch.stack(state["logw_list"], dim=0)
-            drift_steps = torch.stack(state["drift_list"], dim=0)
-            sigma_steps = torch.stack(state["sigma_list"], dim=0)
-            growth_steps = torch.stack(state["growth_list"], dim=0)
-            pred_logw_abs = logw_steps[-1].float() + state["log_m0"].float().unsqueeze(-1)
-            local_target_support, local_target_logw = _build_target_dicts(
-                self.endpoint,
-                local_pids,
-                device,
-                self.dtype,
-            )
+            if store_history:
+                z_steps = torch.stack(state["z_list"], dim=0)
+                logw_steps = torch.stack(state["logw_list"], dim=0)
+                drift_steps = torch.stack(state["drift_list"], dim=0)
+                sigma_steps = torch.stack(state["sigma_list"], dim=0)
+                growth_steps = torch.stack(state["growth_list"], dim=0)
+                terminal_z = z_steps[-1]
+                terminal_logw = logw_steps[-1]
+            else:
+                z_steps = None
+                logw_steps = None
+                drift_steps = None
+                sigma_steps = None
+                growth_steps = None
+                terminal_z = state["z"]
+                terminal_logw = state["logw"]
+            pred_logw_abs = terminal_logw.float() + state["log_m0"].float().unsqueeze(-1)
+            local_target_support, local_target_logw = self._subset_target_dicts(device, local_pids)
             local_loss_end, _ = self.uot_loss(
-                pred_z=z_steps[-1].float(),
+                pred_z=terminal_z.float(),
                 pred_logw_abs=pred_logw_abs,
                 target_support=local_target_support,
                 target_logw=local_target_logw,
@@ -890,7 +1032,7 @@ class Trainer:
             )
             loss_end = loss_end + local_loss_end.to(self.device)
 
-            if tc.lambda_weak > 0:
+            if tc.lambda_weak > 0 and drift_steps is not None:
                 weak_loss_module = self._get_weak_loss_for_device(device)
                 local_loss_weak = weak_loss_module(
                     z_steps=z_steps,
@@ -910,9 +1052,9 @@ class Trainer:
             local_embeddings = models[device].embedding(local_pids).float()
             local_loss_reg = self.regularizer(
                 embeddings=local_embeddings,
-                drift_steps=drift_steps.float(),
-                sigma_steps=sigma_steps.float(),
-                growth_steps=growth_steps.float(),
+                drift_steps=drift_steps.float() if drift_steps is not None else None,
+                sigma_steps=sigma_steps.float() if sigma_steps is not None else None,
+                growth_steps=growth_steps.float() if growth_steps is not None else None,
             )
             loss_reg = loss_reg + self._weighted_shard_loss(
                 local_loss_reg,

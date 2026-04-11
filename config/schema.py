@@ -39,6 +39,15 @@ class VAEConfig(BaseModel):
     target_sum: float = 1e4
     strict_layer: bool = True
     strict_counts: bool = True
+    batch_aware_hvg: bool = True
+    hvg_batch_col: str = "Library"
+    hvg_time_col: str = "Time point"
+    hvg_min_cells_per_batch: int = 256
+    allow_full_gene_scan: bool = False
+    preload_dense_max_gb: float = 4.0
+    reuse_artifact: bool = True
+    use_amp: bool = True
+    amp_dtype: Literal["bf16", "fp16"] = "bf16"
 
 
 class LatentConfig(BaseModel):
@@ -158,11 +167,6 @@ class RunConfig(BaseModel):
 
     @model_validator(mode="after")
     def _validate_run(self) -> "RunConfig":
-        if self.training.max_active_perturbations > 0:
-            raise ValueError(
-                "max_active_perturbations > 0 is currently disabled because "
-                "single-model perturbation chunking changes the global-context semantics."
-            )
         if self.training.lambda_count > 0 and len(self.multi_gpu_devices) > 1:
             raise ValueError(
                 "lambda_count > 0 is not supported with the current multi-GPU single-model path."

@@ -1,6 +1,8 @@
 """Regularization losses for the full model."""
 from __future__ import annotations
 
+from typing import Optional
+
 import torch
 import torch.nn as nn
 
@@ -50,13 +52,17 @@ class RolloutRegularizer(nn.Module):
     def forward(
         self,
         embeddings: torch.Tensor,     # [G, r]
-        drift_steps: torch.Tensor,    # [K, G, N, d]
-        sigma_steps: torch.Tensor,    # [K, G, N, d]
-        growth_steps: torch.Tensor,   # [K, G, N]
+        drift_steps: Optional[torch.Tensor],    # [K, G, N, d]
+        sigma_steps: Optional[torch.Tensor],    # [K, G, N, d]
+        growth_steps: Optional[torch.Tensor],   # [K, G, N]
     ) -> torch.Tensor:
         reg = torch.tensor(0.0, device=embeddings.device, dtype=embeddings.dtype)
-        reg = reg + self.lambda_embed * embedding_shrinkage(embeddings)
-        reg = reg + self.lambda_diffusion * diffusion_magnitude_penalty(sigma_steps)
-        reg = reg + self.lambda_drift * drift_action_penalty(drift_steps)
-        reg = reg + self.lambda_growth * growth_action_penalty(growth_steps)
+        if self.lambda_embed > 0:
+            reg = reg + self.lambda_embed * embedding_shrinkage(embeddings)
+        if self.lambda_diffusion > 0 and sigma_steps is not None:
+            reg = reg + self.lambda_diffusion * diffusion_magnitude_penalty(sigma_steps)
+        if self.lambda_drift > 0 and drift_steps is not None:
+            reg = reg + self.lambda_drift * drift_action_penalty(drift_steps)
+        if self.lambda_growth > 0 and growth_steps is not None:
+            reg = reg + self.lambda_growth * growth_action_penalty(growth_steps)
         return reg
