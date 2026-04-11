@@ -516,7 +516,7 @@ def prepare_hnscc_obs(
     obs: pd.DataFrame,
     *,
     guide_confident_only: bool = True,
-    state_key: str | None = DEFAULT_STATE_KEY,
+    state_key: str | None = None,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     keep = np.ones(len(obs), dtype=bool)
     if guide_confident_only and "guide_confident" in obs.columns:
@@ -715,14 +715,14 @@ def build_study_from_split(
     split: pd.Series,
     split_name: str,
     mass_value_col: str | None = None,
-    mass_scope: str = "full_obs",
+    mass_scope: str = "subset_only",
 ) -> PerturbSeqDynamicsData:
     """Build a split-specific study object.
 
     Support always comes from the cells assigned to ``split_name``. Mass can be
-    sourced either from the full observation table (the default, suitable for
-    split-aware evaluation where support is partitioned but total abundance is
-    treated as a global target) or from the subset only.
+    sourced either from the split subset only (the default, suitable for held-out
+    evaluation where both support and mass are split-local) or from the full
+    observation table when a global abundance target is explicitly desired.
     """
     mask = split.eq(split_name).to_numpy()
     sub_obs = obs.loc[mask].copy()
@@ -819,7 +819,7 @@ def build_split_summary(
     obs: pd.DataFrame,
     *,
     split: pd.Series,
-    state_key: str | None = DEFAULT_STATE_KEY,
+    state_key: str | None = None,
 ) -> pd.DataFrame:
     group_cols = ["split", "Time point", "perturbation_id"]
     sort_cols = list(group_cols)
@@ -888,7 +888,7 @@ def build_vae_latent(
     vae_use_amp: bool = True,
     vae_amp_dtype: str = "bf16",
     device: str = "cpu",
-    state_key: str | None = DEFAULT_STATE_KEY,
+    state_key: str | None = None,
     compute_centroids: bool = False,
     save_dir: str | None = None,
     commit_sha: str | None = None,
@@ -1171,7 +1171,7 @@ def build_study_from_vae_latent(
     split: pd.Series,
     *,
     mass_value_col: str | None = None,
-    mass_scope: str = "full_obs",
+    mass_scope: str = "subset_only",
 ) -> tuple[PerturbSeqDynamicsData, PerturbSeqDynamicsData]:
     """Build train and test ``PerturbSeqDynamicsData`` from a VAE latent result.
 

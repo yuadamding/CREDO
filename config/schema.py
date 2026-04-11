@@ -16,7 +16,7 @@ class DataConfig(BaseModel):
     train_level: Literal["gene", "sgrna"] = "gene"
     min_total_mass: Optional[float] = None
     mass_value_col: Optional[str] = None
-    mass_scope: Literal["full_obs", "subset_only"] = "full_obs"
+    mass_scope: Literal["full_obs", "subset_only"] = "subset_only"
 
 
 class VAEConfig(BaseModel):
@@ -85,6 +85,7 @@ class ModelConfig(BaseModel):
     sigma_min: float = 1e-3
     r_max: float = 3.0
     ecological_growth: bool = True
+    use_growth_intercept: bool = True
     n_payoff_ranks: int = 4
     control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"
     control_ref_penalty: float = 5e-4
@@ -110,6 +111,7 @@ class TrainingConfig(BaseModel):
     lambda_weak: float = 0.1
     lambda_aux: float = 0.05
     lambda_reg_embed: float = 1e-4
+    lambda_reg_growth_bias: float = 1e-4
     lambda_reg_net: float = 1e-4
     lambda_reg_diffusion: float = 1e-4
     training_schedule: Literal["joint", "staged"] = "staged"

@@ -53,6 +53,7 @@ class FullDynamicsModel(nn.Module):
         r_max: float = 3.0,
         n_payoff_ranks: int = 4,
         ecological_growth: bool = True,
+        use_growth_intercept: bool = True,
         program_centroids: Optional[torch.Tensor] = None,
         program_assignment_scale: float = 1.0,
         control_mode: str = "soft_ref",
@@ -85,6 +86,7 @@ class FullDynamicsModel(nn.Module):
             embedding_dim=embedding_dim,
             control_mode=control_mode,
             control_ref_penalty=control_ref_penalty,
+            use_growth_intercept=use_growth_intercept,
         )
 
         self.context_agg = ContextAggregator(
@@ -156,6 +158,9 @@ class FullDynamicsModel(nn.Module):
         reg = self.embedding.regularization(lambda_embed=lambda_embed)
         reg = reg + self.coeff_nets.regularization()
         return reg
+
+    def growth_bias_regularization(self, lambda_growth_bias: float = 0.0) -> torch.Tensor:
+        return self.embedding.growth_bias_regularization(lambda_growth_bias=lambda_growth_bias)
 
     def freeze_embeddings(self) -> None:
         """Freeze perturbation embeddings (for control warm-start stage)."""

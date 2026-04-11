@@ -35,6 +35,7 @@ class PerturbationEmbedding(nn.Module):
         embedding_dim: int,
         control_mode: str = "soft_ref",
         control_ref_penalty: float = 5e-4,
+        use_growth_intercept: bool = True,
     ) -> None:
         super().__init__()
         self.perturbation_ids = perturbation_ids
@@ -65,7 +66,10 @@ class PerturbationEmbedding(nn.Module):
 
         if n_nc > 0:
             self.embeddings = nn.Parameter(weight)
-            self.growth_bias = nn.Parameter(torch.zeros(n_nc))
+            if use_growth_intercept:
+                self.growth_bias = nn.Parameter(torch.zeros(n_nc))
+            else:
+                self.register_parameter("growth_bias", None)
         else:
             self.register_parameter("embeddings", None)
             self.register_parameter("growth_bias", None)
@@ -125,10 +129,16 @@ class PerturbationEmbedding(nn.Module):
         reg = torch.tensor(0.0, device=device, dtype=dtype)
         if self.embeddings is not None and lambda_embed > 0:
             reg = reg + float(lambda_embed) * (self.embeddings ** 2).mean()
-        if self.growth_bias is not None and lambda_embed > 0:
-            reg = reg + float(lambda_embed) * (self.growth_bias ** 2).mean()
         if self.reference_embedding is not None and self.control_ref_penalty > 0:
             reg = reg + self.control_ref_penalty * (self.reference_embedding ** 2).mean()
+        return reg
+
+    def growth_bias_regularization(self, lambda_growth_bias: float = 0.0) -> torch.Tensor:
+        device = self._device_sentinel.device
+        dtype = self._device_sentinel.dtype
+        reg = torch.tensor(0.0, device=device, dtype=dtype)
+        if self.growth_bias is not None and lambda_growth_bias > 0:
+            reg = reg + float(lambda_growth_bias) * (self.growth_bias ** 2).mean()
         return reg
 
     def snapshot(self) -> Dict[str, List[float]]:

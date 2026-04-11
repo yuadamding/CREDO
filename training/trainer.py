@@ -496,7 +496,7 @@ class Trainer:
             n_particles=sc.n_particles,
             device=self.device,
             dtype=rollout_dtype,
-            seed=self.config.training.seed + epoch,
+            seed=self.config.training.seed + seed_offset + epoch,
         )
 
         autocast_ctx = (
@@ -563,6 +563,9 @@ class Trainer:
             growth_steps=rollout.growth_steps.float() if rollout.growth_steps is not None else None,
         )
         loss_reg = loss_reg + self.model.regularization(lambda_embed=tc.lambda_reg_embed)
+        loss_reg = loss_reg + self.model.growth_bias_regularization(
+            lambda_growth_bias=tc.lambda_reg_growth_bias
+        )
 
         # --- Total ---
         loss = (
@@ -810,6 +813,9 @@ class Trainer:
         loss = tc.lambda_end * loss_end + tc.lambda_weak * loss_weak + loss_reg
 
         model_reg = self.model.regularization(lambda_embed=tc.lambda_reg_embed)
+        model_reg = model_reg + self.model.growth_bias_regularization(
+            lambda_growth_bias=tc.lambda_reg_growth_bias
+        )
         if self.scaler.is_enabled():
             self.scaler.scale(loss + model_reg).backward()
             self.scaler.unscale_(optimizer)
@@ -862,7 +868,7 @@ class Trainer:
             n_particles=sc.n_particles,
             device=self.device,
             dtype=rollout_dtype,
-            seed=self.config.training.seed + epoch,
+            seed=self.config.training.seed + seed_offset + epoch,
         )
 
         if tc.lambda_weak > 0:
@@ -1062,6 +1068,9 @@ class Trainer:
             ).to(self.device)
 
         loss_reg = loss_reg + self.model.regularization(lambda_embed=tc.lambda_reg_embed)
+        loss_reg = loss_reg + self.model.growth_bias_regularization(
+            lambda_growth_bias=tc.lambda_reg_growth_bias
+        )
         loss = (
             tc.lambda_end * loss_end
             + tc.lambda_weak * loss_weak
