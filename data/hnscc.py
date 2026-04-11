@@ -198,6 +198,7 @@ def load_hnscc_expression(
     strict_layer: bool = True,
     strict_counts: bool = True,
     allow_full_gene_scan: bool = False,
+    allow_precomputed_hv_score: bool = False,
 ) -> tuple[pd.DataFrame, sp.csr_matrix, list[str], dict]:
     """Load expression matrix from an h5ad file.
 
@@ -214,6 +215,9 @@ def load_hnscc_expression(
         Optional column in ``adata.var`` used as a candidate-gene mask.
     top_genes : int
         Maximum number of genes to select. ``0`` keeps the full candidate set.
+        Direct top-gene selection from a precomputed full-dataset ``hv_score`` is
+        evaluation-unsafe by default and therefore disabled unless
+        ``allow_precomputed_hv_score=True``.
     validate_counts : bool
         If True, check that the loaded matrix is nonneg and integer-like.
     strict_layer : bool
@@ -287,12 +291,19 @@ def load_hnscc_expression(
         )
 
     if top_genes > 0 and len(candidate_idx) > top_genes:
-        if "hv_score" in var.columns:
+        if allow_precomputed_hv_score and "hv_score" in var.columns:
             scores = pd.to_numeric(var["hv_score"], errors="coerce").fillna(-np.inf).to_numpy()
             ranked = candidate_idx[np.argsort(scores[candidate_idx])[::-1]]
             selected_idx = ranked[:top_genes]
         else:
-            selected_idx = candidate_idx[:top_genes]
+            if hasattr(adata, "file") and adata.file is not None:
+                adata.file.close()
+            raise ValueError(
+                "Direct top_genes selection inside load_hnscc_expression() is disabled by default "
+                "because it can use precomputed full-dataset variability statistics. "
+                "Use build_vae_latent() for split-safe train-only HVG selection, or pass "
+                "allow_precomputed_hv_score=True explicitly for exploratory use."
+            )
     else:
         selected_idx = candidate_idx
 
@@ -487,7 +498,7 @@ def prepare_hnscc_obs(
     obs: pd.DataFrame,
     *,
     guide_confident_only: bool = True,
-    state_key: str = DEFAULT_STATE_KEY,
+    state_key: str | None = DEFAULT_STATE_KEY,
 ) -> tuple[pd.DataFrame, np.ndarray]:
     keep = np.ones(len(obs), dtype=bool)
     if guide_confident_only and "guide_confident" in obs.columns:
@@ -500,7 +511,10 @@ def prepare_hnscc_obs(
         prepared["Library"].astype(str).replace({"": "pooled", "nan": "pooled", "None": "pooled"})
     )
     prepared["cell_id"] = prepared["cell_id"].astype(str)
-    prepared[state_key] = prepared[state_key].astype(str)
+    if state_key:
+        if state_key not in prepared.columns:
+            raise KeyError(f"Requested state_key {state_key!r} not present in obs.")
+        prepared[state_key] = prepared[state_key].astype(str)
     return prepared, kept_positions
 
 
@@ -682,6 +696,7 @@ def build_study_from_split(
     *,
     split: pd.Series,
     split_name: str,
+    mass_value_col: str | None = None,
 ) -> PerturbSeqDynamicsData:
     mask = split.eq(split_name).to_numpy()
     sub_obs = obs.loc[mask].copy()
@@ -690,12 +705,28 @@ def build_study_from_split(
         raise ValueError(f"No cells left for split={split_name!r}")
 
     cell_df = sub_obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].copy()
-    mass_df = (
-        cell_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
-        .size()
-        .rename("mass")
-        .reset_index()
-    )
+    mass_source_df = obs[["perturbation_id", "time_label", "sample_id"]].copy()
+    if mass_value_col is None:
+        mass_df = (
+            mass_source_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
+            .size()
+            .rename("mass")
+            .reset_index()
+        )
+        mass_mode = "full_cell_count_fallback"
+    else:
+        if mass_value_col not in obs.columns:
+            raise KeyError(f"Requested mass_value_col {mass_value_col!r} not present in obs.")
+        mass_source_df[mass_value_col] = pd.to_numeric(obs[mass_value_col], errors="coerce").fillna(0.0).to_numpy()
+        mass_df = (
+            mass_source_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)[mass_value_col]
+            .sum()
+            .rename("mass")
+            .reset_index()
+        )
+        mass_mode = f"{mass_value_col}_sum"
+    mass_df = mass_df.loc[pd.to_numeric(mass_df["mass"], errors="coerce").fillna(0.0) > 0].reset_index(drop=True)
+    mass_df.attrs["mass_mode"] = mass_mode
 
     perturbation_ids = sorted(cell_df["perturbation_id"].unique().tolist())
     control_ids = sorted(sub_obs.loc[sub_obs["is_control"].astype(bool), "perturbation_id"].unique().tolist())
@@ -759,15 +790,20 @@ def build_split_summary(
     obs: pd.DataFrame,
     *,
     split: pd.Series,
-    state_key: str = DEFAULT_STATE_KEY,
+    state_key: str | None = DEFAULT_STATE_KEY,
 ) -> pd.DataFrame:
+    group_cols = ["split", "Time point", "perturbation_id"]
+    sort_cols = list(group_cols)
+    if state_key and state_key in obs.columns:
+        group_cols.append(state_key)
+        sort_cols.append(state_key)
     summary = (
         obs.assign(split=split)
-        .groupby(["split", "Time point", "perturbation_id", state_key], observed=True)
+        .groupby(group_cols, observed=True)
         .size()
         .rename("n_cells")
         .reset_index()
-        .sort_values(["split", "Time point", "perturbation_id", state_key])
+        .sort_values(sort_cols)
         .reset_index(drop=True)
     )
     return summary
@@ -823,10 +859,12 @@ def build_vae_latent(
     vae_use_amp: bool = True,
     vae_amp_dtype: str = "bf16",
     device: str = "cpu",
-    state_key: str = DEFAULT_STATE_KEY,
+    state_key: str | None = DEFAULT_STATE_KEY,
     compute_centroids: bool = False,
     save_dir: str | None = None,
     commit_sha: str | None = None,
+    strict_layer: bool = True,
+    strict_counts: bool = True,
 ) -> VAELatentResult:
     """End-to-end VAE latent pipeline: split-safe fitting, encoding, standardization.
 
@@ -889,8 +927,8 @@ def build_vae_latent(
         gene_mask_col=gene_mask_col,
         top_genes=0,
         validate_counts=True,
-        strict_layer=True,
-        strict_counts=True,
+        strict_layer=strict_layer,
+        strict_counts=strict_counts,
         allow_full_gene_scan=allow_full_gene_scan,
     )
     candidate_gene_indices = np.asarray(expr_meta["selected_gene_indices"], dtype=np.int64)
@@ -992,6 +1030,8 @@ def build_vae_latent(
             z_all_std = bundle.latent_standardization.transform(z_all)
         program_centroids = None
         if compute_centroids:
+            if not state_key:
+                raise ValueError("compute_centroids=True requires a non-empty state_key.")
             train_obs = obs.loc[train_mask]
             z_train_std = z_all_std[train_mask]
             _, program_centroids, _ = compute_state_centroids(
@@ -1044,6 +1084,8 @@ def build_vae_latent(
     # 8. Recompute centroids in VAE latent space only if explicitly requested.
     program_centroids = None
     if compute_centroids:
+        if not state_key:
+            raise ValueError("compute_centroids=True requires a non-empty state_key.")
         train_obs = obs.loc[train_mask]
         z_train_std = z_all_std[train_mask]
         _, program_centroids, _ = compute_state_centroids(

@@ -15,6 +15,7 @@ class DataConfig(BaseModel):
     pooled_state: bool = True
     train_level: Literal["gene", "sgrna"] = "gene"
     min_total_mass: Optional[float] = None
+    mass_value_col: Optional[str] = None
 
 
 class VAEConfig(BaseModel):
@@ -81,7 +82,6 @@ class ModelConfig(BaseModel):
     time_frequencies: int = 4
     sigma_min: float = 1e-3
     r_max: float = 3.0
-    ecological_drift: bool = False
     ecological_growth: bool = False
     n_payoff_ranks: int = 4
     control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"

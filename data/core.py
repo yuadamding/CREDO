@@ -384,6 +384,9 @@ class PerturbSeqDynamicsData:
     ) -> FiniteMeasure:
         """Build a FiniteMeasure for a given perturbation / time."""
         cells = self.cell_state.select_time(time_label).select_perturbation(perturbation_id)
+        if sample_id != "pooled":
+            sample_mask = cells.df["sample_id"].astype(str).eq(str(sample_id)).to_numpy()
+            cells = cells.filter(sample_mask)
         n = cells.n_cells
         assert n > 0, f"No cells for ({perturbation_id}, {time_label})"
 

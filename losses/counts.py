@@ -93,28 +93,43 @@ class CountLikelihood(nn.Module):
         growth_steps: torch.Tensor,     # [K, G, N]
         logw_steps: torch.Tensor,       # [K+1, G, N]
         tau_steps: torch.Tensor,        # [K+1]
-        exposures: torch.Tensor,        # [G]  T0 exposure per perturbation
+        exposures: torch.Tensor,        # [G] or [S, G]  T0 exposure per perturbation / replicate
         count_matrix: torch.Tensor,     # [S, G]  observed counts
         n_totals: torch.Tensor,         # [S]
     ) -> torch.Tensor:
         """Compute negative count log-likelihood."""
         G = growth_steps.shape[1]
+        n_samples = count_matrix.shape[0]
 
         zeta = integrated_fitness(growth_steps, logw_steps, tau_steps)  # [G]
 
-        # log pi_{gs} = log l_g + zeta_g - log(sum_h l_h exp(zeta_h))
-        log_l = torch.log(exposures + 1e-30)  # [G]
-        log_unnorm = log_l + zeta              # [G]
-        log_pi = log_unnorm - torch.logsumexp(log_unnorm, dim=0)  # [G]
-        pi = log_pi.exp()                      # [G]
-
-        # Broadcast to [S, G]
-        pi_rep = pi.unsqueeze(0).expand(count_matrix.shape[0], -1)  # [S, G]
+        if exposures.ndim == 1:
+            if exposures.shape[0] != G:
+                raise ValueError(
+                    f"1D exposures must have length {G}, got {tuple(exposures.shape)}."
+                )
+            log_l = torch.log(exposures + 1e-30).unsqueeze(0)  # [1, G]
+            log_unnorm = log_l + zeta.unsqueeze(0)             # [1, G]
+            log_pi = log_unnorm - torch.logsumexp(log_unnorm, dim=1, keepdim=True)
+            pi_rep = log_pi.exp().expand(n_samples, -1)        # [S, G]
+        elif exposures.ndim == 2:
+            if exposures.shape != count_matrix.shape:
+                raise ValueError(
+                    "2D exposures must match count_matrix shape "
+                    f"{tuple(count_matrix.shape)}, got {tuple(exposures.shape)}."
+                )
+            log_l = torch.log(exposures + 1e-30)               # [S, G]
+            log_unnorm = log_l + zeta.unsqueeze(0)             # [S, G]
+            log_pi = log_unnorm - torch.logsumexp(log_unnorm, dim=1, keepdim=True)
+            pi_rep = log_pi.exp()                              # [S, G]
+        else:
+            raise ValueError(
+                f"exposures must be 1D or 2D, got {exposures.ndim}D tensor."
+            )
 
         if self.use_dm:
             return self.dm_lik(count_matrix, pi_rep, n_totals)
         else:
             # Standard multinomial
-            n_rep = n_totals.unsqueeze(-1)  # [S, 1]
-            log_lik = (count_matrix * log_pi.unsqueeze(0)).sum(-1)
+            log_lik = (count_matrix * torch.log(pi_rep + 1e-30)).sum(-1)
             return -log_lik.sum()

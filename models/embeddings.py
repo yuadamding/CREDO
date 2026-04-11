@@ -104,13 +104,13 @@ class PerturbationEmbedding(nn.Module):
                     return False
         return True
 
-    def regularization(self) -> torch.Tensor:
+    def regularization(self, lambda_embed: float = 0.0) -> torch.Tensor:
         """Regularization over residual embeddings and the shared control reference."""
         device = self._device_sentinel.device
         dtype = self._device_sentinel.dtype
         reg = torch.tensor(0.0, device=device, dtype=dtype)
-        if self.embeddings is not None:
-            reg = reg + (self.embeddings ** 2).mean()
+        if self.embeddings is not None and lambda_embed > 0:
+            reg = reg + float(lambda_embed) * (self.embeddings ** 2).mean()
         if self.reference_embedding is not None and self.control_ref_penalty > 0:
             reg = reg + self.control_ref_penalty * (self.reference_embedding ** 2).mean()
         return reg

@@ -150,8 +150,8 @@ class FullDynamicsModel(nn.Module):
 
         return coeffs, ctx_state
 
-    def regularization(self) -> torch.Tensor:
-        reg = self.embedding.regularization()
+    def regularization(self, lambda_embed: float = 0.0) -> torch.Tensor:
+        reg = self.embedding.regularization(lambda_embed=lambda_embed)
         reg = reg + self.coeff_nets.regularization()
         return reg
 

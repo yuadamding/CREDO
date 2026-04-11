@@ -259,7 +259,6 @@ class Trainer:
         )
         self.count_lik = CountLikelihood()
         self.regularizer = RolloutRegularizer(
-            lambda_embed=tc.lambda_reg_embed,
             lambda_diffusion=tc.lambda_reg_diffusion,
             lambda_drift=tc.lambda_reg_net,
             lambda_growth=tc.lambda_reg_net,
@@ -558,14 +557,12 @@ class Trainer:
             )
 
         # --- Regularization ---
-        embeddings = self.model.embedding(perturbation_ids).float()
         loss_reg = self.regularizer(
-            embeddings=embeddings,
             drift_steps=rollout.drift_steps.float() if rollout.drift_steps is not None else None,
             sigma_steps=rollout.sigma_steps.float() if rollout.sigma_steps is not None else None,
             growth_steps=rollout.growth_steps.float() if rollout.growth_steps is not None else None,
         )
-        loss_reg = loss_reg + self.model.regularization()
+        loss_reg = loss_reg + self.model.regularization(lambda_embed=tc.lambda_reg_embed)
 
         # --- Total ---
         loss = (
@@ -798,7 +795,6 @@ class Trainer:
                 )
 
             local_loss_reg = self.regularizer(
-                embeddings=self.model.embedding(state["pids"]).float(),
                 drift_steps=drift_steps.float() if drift_steps is not None else None,
                 sigma_steps=sigma_steps.float() if sigma_steps is not None else None,
                 growth_steps=growth_steps.float() if growth_steps is not None else None,
@@ -811,7 +807,7 @@ class Trainer:
 
         loss = tc.lambda_end * loss_end + tc.lambda_weak * loss_weak + loss_reg
 
-        model_reg = self.model.regularization()
+        model_reg = self.model.regularization(lambda_embed=tc.lambda_reg_embed)
         if self.scaler.is_enabled():
             self.scaler.scale(loss + model_reg).backward()
             self.scaler.unscale_(optimizer)
@@ -1049,9 +1045,7 @@ class Trainer:
                     total_groups,
                 ).to(self.device)
 
-            local_embeddings = models[device].embedding(local_pids).float()
             local_loss_reg = self.regularizer(
-                embeddings=local_embeddings,
                 drift_steps=drift_steps.float() if drift_steps is not None else None,
                 sigma_steps=sigma_steps.float() if sigma_steps is not None else None,
                 growth_steps=growth_steps.float() if growth_steps is not None else None,
@@ -1062,7 +1056,7 @@ class Trainer:
                 total_groups,
             ).to(self.device)
 
-        loss_reg = loss_reg + self.model.regularization()
+        loss_reg = loss_reg + self.model.regularization(lambda_embed=tc.lambda_reg_embed)
         loss = (
             tc.lambda_end * loss_end
             + tc.lambda_weak * loss_weak

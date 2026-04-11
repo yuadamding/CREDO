@@ -142,11 +142,6 @@ class CoefficientNetworks(nn.Module):
         self.growth_head = ControlAnchoredFieldHead(
             input_dim, 1, embedding_dim, hidden_dim, depth,
             activation_checkpointing=activation_checkpointing)
-        # Per-perturbation growth offset b_g (scalar, learned)
-        self.growth_offset = nn.Embedding(1, 1)  # placeholder; replaced by pert-specific
-        # Actually implement as a parameter indexed by non-control perturbation
-        # We will handle b_g as part of the embedding store or a separate parameter dict.
-        # For simplicity, make it part of the growth_head modulation (already handled by B_r).
 
         if ecological_growth:
             self.ecology = EcologicalPayoff(n_programs, embedding_dim, n_payoff_ranks)
