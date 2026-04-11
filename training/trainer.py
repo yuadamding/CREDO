@@ -686,6 +686,7 @@ class Trainer:
             for state in chunk_states:
                 with autocast_ctx:
                     a_local = self.model.embedding(state["pids"])
+                    b_local = self.model.embedding.growth_intercepts(state["pids"])
                     eta_local, phi_local = self.model.context_agg.encode_particles(state["z"])
                     stats_local, _, _ = self.model.context_agg.summarize_groups(
                         state["z"],
@@ -695,7 +696,7 @@ class Trainer:
                         phi=phi_local,
                     )
                 summary_parts.append(stats_local)
-                local_cache.append({"a": a_local, "eta": eta_local})
+                local_cache.append({"a": a_local, "b": b_local, "eta": eta_local})
 
             global_stats = GroupStatistics(
                 log_n_g=torch.cat([stats.log_n_g for stats in summary_parts], dim=0),
@@ -711,6 +712,7 @@ class Trainer:
                         tau=tau_k,
                         context=global_context.context,
                         a=cache_entry["a"],
+                        growth_intercept=cache_entry["b"],
                         eta_z=cache_entry["eta"],
                         q=global_context.q,
                         s=global_context.s,
@@ -925,6 +927,7 @@ class Trainer:
                 log_m0_local = state["log_m0"]
                 with autocast_ctx_for(device):
                     a_local = model.embedding(local_pids)
+                    b_local = model.embedding.growth_intercepts(local_pids)
                     eta_local, phi_local = model.context_agg.encode_particles(z_local)
                     stats_local, _, _ = model.context_agg.summarize_groups(
                         z_local,
@@ -942,6 +945,7 @@ class Trainer:
                 )
                 local_cache[device] = {
                     "a": a_local,
+                    "b": b_local,
                     "eta": eta_local,
                 }
 
@@ -969,6 +973,7 @@ class Trainer:
                         tau=tau_local,
                         context=ctx_local,
                         a=a_local,
+                        growth_intercept=local_cache[device]["b"],
                         eta_z=eta_local,
                         q=q_local,
                         s=s_local,

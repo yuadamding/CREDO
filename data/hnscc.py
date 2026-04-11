@@ -199,6 +199,7 @@ def load_hnscc_expression(
     strict_counts: bool = True,
     allow_full_gene_scan: bool = False,
     allow_precomputed_hv_score: bool = False,
+    allow_empty_gene_mask_fallback: bool = False,
 ) -> tuple[pd.DataFrame, sp.csr_matrix, list[str], dict]:
     """Load expression matrix from an h5ad file.
 
@@ -211,6 +212,8 @@ def load_hnscc_expression(
         given, it must exist unless ``strict_layer=False``.
     use_raw : bool
         If *layer* is ``None`` and *use_raw* is True, read ``adata.raw.X``.
+        If ``adata.raw`` is absent, this now fails loudly by default instead of
+        silently falling back to ``adata.X``.
     gene_mask_col : str
         Optional column in ``adata.var`` used as a candidate-gene mask.
     top_genes : int
@@ -240,7 +243,14 @@ def load_hnscc_expression(
             f"Requested expression layer {layer!r} not found. Available layers: {available}. "
             "Pass --vae-layer explicitly or disable strict_layer if fallback behavior is desired."
         )
-    elif layer is None and use_raw and adata.raw is not None:
+    elif layer is None and use_raw:
+        if adata.raw is None:
+            if hasattr(adata, "file") and adata.file is not None:
+                adata.file.close()
+            raise KeyError(
+                "use_raw=True requested but adata.raw is not available. "
+                "Disable use_raw or provide an explicit count layer."
+            )
         source = adata.raw.X
         resolved_layer = "raw"
         var = adata.raw.var.copy()
@@ -274,6 +284,13 @@ def load_hnscc_expression(
 
     candidate_idx = np.flatnonzero(candidate_mask)
     if len(candidate_idx) == 0:
+        if gene_mask_col and not allow_empty_gene_mask_fallback:
+            if hasattr(adata, "file") and adata.file is not None:
+                adata.file.close()
+            raise ValueError(
+                f"Gene mask column {gene_mask_col!r} selected zero genes. "
+                "Fix the mask or explicitly enable allow_empty_gene_mask_fallback."
+            )
         candidate_idx = np.arange(len(var), dtype=np.int64)
 
     if (
@@ -321,6 +338,7 @@ def load_hnscc_expression(
         "selected_gene_indices": selected_idx.astype(np.int64).tolist(),
         "full_library_totals": full_library_totals,
         "allow_full_gene_scan": bool(allow_full_gene_scan),
+        "allow_empty_gene_mask_fallback": bool(allow_empty_gene_mask_fallback),
     }
     if hasattr(adata, "file") and adata.file is not None:
         adata.file.close()
@@ -697,15 +715,26 @@ def build_study_from_split(
     split: pd.Series,
     split_name: str,
     mass_value_col: str | None = None,
+    mass_scope: str = "full_obs",
 ) -> PerturbSeqDynamicsData:
+    """Build a split-specific study object.
+
+    Support always comes from the cells assigned to ``split_name``. Mass can be
+    sourced either from the full observation table (the default, suitable for
+    split-aware evaluation where support is partitioned but total abundance is
+    treated as a global target) or from the subset only.
+    """
     mask = split.eq(split_name).to_numpy()
     sub_obs = obs.loc[mask].copy()
     sub_latent = latent[mask]
     if len(sub_obs) == 0:
         raise ValueError(f"No cells left for split={split_name!r}")
+    if mass_scope not in {"full_obs", "subset_only"}:
+        raise ValueError("mass_scope must be 'full_obs' or 'subset_only'.")
 
     cell_df = sub_obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].copy()
-    mass_source_df = obs[["perturbation_id", "time_label", "sample_id"]].copy()
+    mass_obs = obs if mass_scope == "full_obs" else sub_obs
+    mass_source_df = mass_obs[["perturbation_id", "time_label", "sample_id"]].copy()
     if mass_value_col is None:
         mass_df = (
             mass_source_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
@@ -713,18 +742,18 @@ def build_study_from_split(
             .rename("mass")
             .reset_index()
         )
-        mass_mode = "full_cell_count_fallback"
+        mass_mode = f"{mass_scope}_cell_count_fallback"
     else:
-        if mass_value_col not in obs.columns:
+        if mass_value_col not in mass_obs.columns:
             raise KeyError(f"Requested mass_value_col {mass_value_col!r} not present in obs.")
-        mass_source_df[mass_value_col] = pd.to_numeric(obs[mass_value_col], errors="coerce").fillna(0.0).to_numpy()
+        mass_source_df[mass_value_col] = pd.to_numeric(mass_obs[mass_value_col], errors="coerce").fillna(0.0).to_numpy()
         mass_df = (
             mass_source_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)[mass_value_col]
             .sum()
             .rename("mass")
             .reset_index()
         )
-        mass_mode = f"{mass_value_col}_sum"
+        mass_mode = f"{mass_scope}:{mass_value_col}_sum"
     mass_df = mass_df.loc[pd.to_numeric(mass_df["mass"], errors="coerce").fillna(0.0) > 0].reset_index(drop=True)
     mass_df.attrs["mass_mode"] = mass_mode
 
@@ -854,8 +883,8 @@ def build_vae_latent(
     vae_grad_clip: float = 1.0,
     vae_seed: int = 0,
     encode_batch_size: int = 4096,
-    max_dense_cache_gb: float = 4.0,
-    reuse_saved_artifact: bool = True,
+    preload_dense_max_gb: float = 4.0,
+    reuse_artifact: bool = True,
     vae_use_amp: bool = True,
     vae_amp_dtype: str = "bf16",
     device: str = "cpu",
@@ -865,6 +894,9 @@ def build_vae_latent(
     commit_sha: str | None = None,
     strict_layer: bool = True,
     strict_counts: bool = True,
+    allow_empty_gene_mask_fallback: bool = False,
+    max_dense_cache_gb: float | None = None,
+    reuse_saved_artifact: bool | None = None,
 ) -> VAELatentResult:
     """End-to-end VAE latent pipeline: split-safe fitting, encoding, standardization.
 
@@ -910,6 +942,16 @@ def build_vae_latent(
         Contains the standardized latent for all cells, masks, optional
         centroids, and the artifact bundle.
     """
+    if max_dense_cache_gb is None:
+        max_dense_cache_gb = preload_dense_max_gb
+    elif float(preload_dense_max_gb) != float(max_dense_cache_gb):
+        raise ValueError("Received conflicting preload_dense_max_gb and max_dense_cache_gb values.")
+
+    if reuse_saved_artifact is None:
+        reuse_saved_artifact = reuse_artifact
+    elif bool(reuse_artifact) != bool(reuse_saved_artifact):
+        raise ValueError("Received conflicting reuse_artifact and reuse_saved_artifact values.")
+
     from ..models.expression_vae import (
         VAEArtifactBundle,
         encode_expression_vae,
@@ -930,6 +972,7 @@ def build_vae_latent(
         strict_layer=strict_layer,
         strict_counts=strict_counts,
         allow_full_gene_scan=allow_full_gene_scan,
+        allow_empty_gene_mask_fallback=allow_empty_gene_mask_fallback,
     )
     candidate_gene_indices = np.asarray(expr_meta["selected_gene_indices"], dtype=np.int64)
     library_totals = np.asarray(expr_meta["full_library_totals"], dtype=np.float32)
@@ -998,6 +1041,7 @@ def build_vae_latent(
         "hvg_min_cells_per_batch": int(hvg_min_cells_per_batch),
         "dense_cached": bool(dense_cached),
         "max_dense_cache_gb": float(max_dense_cache_gb),
+        "allow_empty_gene_mask_fallback": bool(allow_empty_gene_mask_fallback),
         "vae_use_amp": bool(vae_use_amp),
         "vae_amp_dtype": str(vae_amp_dtype),
     }
@@ -1125,6 +1169,9 @@ def build_study_from_vae_latent(
     vae_result: VAELatentResult,
     obs: pd.DataFrame,
     split: pd.Series,
+    *,
+    mass_value_col: str | None = None,
+    mass_scope: str = "full_obs",
 ) -> tuple[PerturbSeqDynamicsData, PerturbSeqDynamicsData]:
     """Build train and test ``PerturbSeqDynamicsData`` from a VAE latent result.
 
@@ -1133,9 +1180,19 @@ def build_study_from_vae_latent(
     and evaluator, so callers never need to manually slice the latent.
     """
     train_data = build_study_from_split(
-        obs, vae_result.latent, split=split, split_name="train",
+        obs,
+        vae_result.latent,
+        split=split,
+        split_name="train",
+        mass_value_col=mass_value_col,
+        mass_scope=mass_scope,
     )
     test_data = build_study_from_split(
-        obs, vae_result.latent, split=split, split_name="test",
+        obs,
+        vae_result.latent,
+        split=split,
+        split_name="test",
+        mass_value_col=mass_value_col,
+        mass_scope=mass_scope,
     )
     return train_data, test_data

@@ -65,8 +65,10 @@ class PerturbationEmbedding(nn.Module):
 
         if n_nc > 0:
             self.embeddings = nn.Parameter(weight)
+            self.growth_bias = nn.Parameter(torch.zeros(n_nc))
         else:
             self.register_parameter("embeddings", None)
+            self.register_parameter("growth_bias", None)
 
         if self.control_mode == "soft_ref":
             self.reference_embedding = nn.Parameter(torch.zeros(embedding_dim))
@@ -104,6 +106,18 @@ class PerturbationEmbedding(nn.Module):
                     return False
         return True
 
+    def growth_intercepts(self, perturbation_ids: List[str]) -> torch.Tensor:
+        """Return explicit perturbation growth intercepts ``b_g`` of shape [G]."""
+        device = self._device_sentinel.device
+        dtype = self._device_sentinel.dtype
+        out = torch.zeros(len(perturbation_ids), device=device, dtype=dtype)
+        if self.growth_bias is None:
+            return out
+        for i, pid in enumerate(perturbation_ids):
+            if pid not in self.control_ids:
+                out[i] = self.growth_bias[self._nc_to_local[pid]]
+        return out
+
     def regularization(self, lambda_embed: float = 0.0) -> torch.Tensor:
         """Regularization over residual embeddings and the shared control reference."""
         device = self._device_sentinel.device
@@ -111,6 +125,8 @@ class PerturbationEmbedding(nn.Module):
         reg = torch.tensor(0.0, device=device, dtype=dtype)
         if self.embeddings is not None and lambda_embed > 0:
             reg = reg + float(lambda_embed) * (self.embeddings ** 2).mean()
+        if self.growth_bias is not None and lambda_embed > 0:
+            reg = reg + float(lambda_embed) * (self.growth_bias ** 2).mean()
         if self.reference_embedding is not None and self.control_ref_penalty > 0:
             reg = reg + self.control_ref_penalty * (self.reference_embedding ** 2).mean()
         return reg

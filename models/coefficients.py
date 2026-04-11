@@ -117,7 +117,7 @@ class CoefficientNetworks(nn.Module):
         r_max: float = 3.0,
         n_programs: int = 8,
         n_payoff_ranks: int = 4,
-        ecological_growth: bool = False,
+        ecological_growth: bool = True,
     ) -> None:
         super().__init__()
         self.latent_dim = latent_dim
@@ -168,6 +168,7 @@ class CoefficientNetworks(nn.Module):
         tau: torch.Tensor,     # scalar
         context: torch.Tensor, # [C]
         a: torch.Tensor,       # [G, r]
+        growth_intercept: Optional[torch.Tensor] = None,  # [G] explicit b_g
         eta_z: Optional[torch.Tensor] = None,  # [G, N, K] for ecology
         q: Optional[torch.Tensor] = None,      # [K] for ecology
         s: Optional[torch.Tensor] = None,      # [L] for ecology (optional)
@@ -179,6 +180,8 @@ class CoefficientNetworks(nn.Module):
         sigma_diag = F.softplus(sigma_raw) + self.sigma_min  # [G, N, d]
 
         growth_raw = self.growth_head(u, a).squeeze(-1)  # [G, N]
+        if growth_intercept is not None:
+            growth_raw = growth_raw + growth_intercept.unsqueeze(-1)
 
         if self.ecological_growth and self.ecology is not None and eta_z is not None and q is not None:
             # a: [G, r], eta_z: [G, N, K] -- ecology.forward handles explicit dims

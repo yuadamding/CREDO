@@ -16,6 +16,7 @@ class DataConfig(BaseModel):
     train_level: Literal["gene", "sgrna"] = "gene"
     min_total_mass: Optional[float] = None
     mass_value_col: Optional[str] = None
+    mass_scope: Literal["full_obs", "subset_only"] = "full_obs"
 
 
 class VAEConfig(BaseModel):
@@ -37,6 +38,7 @@ class VAEConfig(BaseModel):
     use_raw: bool = False
     n_genes: int = 2000
     gene_mask_col: Optional[str] = None
+    allow_empty_gene_mask_fallback: bool = False
     target_sum: float = 1e4
     strict_layer: bool = True
     strict_counts: bool = True
@@ -82,7 +84,7 @@ class ModelConfig(BaseModel):
     time_frequencies: int = 4
     sigma_min: float = 1e-3
     r_max: float = 3.0
-    ecological_growth: bool = False
+    ecological_growth: bool = True
     n_payoff_ranks: int = 4
     control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"
     control_ref_penalty: float = 5e-4

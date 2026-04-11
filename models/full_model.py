@@ -52,7 +52,7 @@ class FullDynamicsModel(nn.Module):
         sigma_min: float = 1e-3,
         r_max: float = 3.0,
         n_payoff_ranks: int = 4,
-        ecological_growth: bool = False,
+        ecological_growth: bool = True,
         program_centroids: Optional[torch.Tensor] = None,
         program_assignment_scale: float = 1.0,
         control_mode: str = "soft_ref",
@@ -129,6 +129,7 @@ class FullDynamicsModel(nn.Module):
         """One step of the dynamics: compute context and coefficients."""
         pids = perturbation_ids or self.perturbation_ids
         a = self.embedding(pids)   # [G, r]
+        b_g = self.embedding.growth_intercepts(pids)  # [G]
 
         ctx_state = self.context_agg(z, logw, a, log_m0)
         ctx = ctx_state.context    # [C]
@@ -143,6 +144,7 @@ class FullDynamicsModel(nn.Module):
             tau=tau,
             context=ctx,
             a=a,
+            growth_intercept=b_g,
             eta_z=eta_z,
             q=q,
             s=s,
