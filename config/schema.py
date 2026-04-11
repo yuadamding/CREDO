@@ -17,9 +17,33 @@ class DataConfig(BaseModel):
     min_total_mass: Optional[float] = None
 
 
+class VAEConfig(BaseModel):
+    """Hyperparameters for the expression VAE latent backend."""
+    hidden_dim: int = 512
+    depth: int = 2
+    dropout: float = 0.1
+    epochs: int = 100
+    batch_size: int = 1024
+    learning_rate: float = 1e-3
+    weight_decay: float = 1e-6
+    kl_weight: float = 1e-3
+    kl_warmup_epochs: int = 20
+    val_frac: float = 0.1
+    early_stop_patience: int = 15
+    grad_clip: float = 1.0
+    seed: int = 0
+    layer: Optional[str] = "counts"
+    n_genes: int = 2000
+    gene_mask_col: str = "hv_gene"
+    target_sum: float = 1e4
+
+
 class LatentConfig(BaseModel):
+    source: Literal["pca", "vae"] = "pca"
+    key: str = "X_pca"
     dim: int = 16
     whiten: bool = True
+    vae: VAEConfig = Field(default_factory=VAEConfig)
 
 
 class ModelConfig(BaseModel):
@@ -64,6 +88,7 @@ class TrainingConfig(BaseModel):
     training_schedule: Literal["joint", "staged"] = "staged"
     stage_c_epochs: int = 150
     stage_d_epochs: int = 150
+    max_active_perturbations: int = 0
     control_ref_warmup_epochs: int = 150
     seed: int = 0
     epochs: int = 300

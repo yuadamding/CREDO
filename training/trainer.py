@@ -138,6 +138,8 @@ class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
 class TrainingHistory:
     epochs: List[int] = field(default_factory=list)
     stages: List[str] = field(default_factory=list)
+    n_active_perturbations: List[int] = field(default_factory=list)
+    perturbation_batch_size: List[int] = field(default_factory=list)
     loss_total: List[float] = field(default_factory=list)
     loss_end: List[float] = field(default_factory=list)
     loss_weak: List[float] = field(default_factory=list)
@@ -148,6 +150,8 @@ class TrainingHistory:
         return pd.DataFrame({
             "epoch": self.epochs,
             "stage": self.stages,
+            "n_active_perturbations": self.n_active_perturbations,
+            "perturbation_batch_size": self.perturbation_batch_size,
             "loss_total": self.loss_total,
             "loss_end": self.loss_end,
             "loss_weak": self.loss_weak,
@@ -295,6 +299,21 @@ class Trainer:
             start = stop
         return shards
 
+    def _perturbation_batch_size(self, perturbation_ids: List[str]) -> int:
+        limit = int(getattr(self.config.training, "max_active_perturbations", 0) or 0)
+        if limit <= 0:
+            return len(perturbation_ids)
+        return max(1, min(limit, len(perturbation_ids)))
+
+    def _chunk_perturbation_ids(self, perturbation_ids: List[str]) -> List[List[str]]:
+        batch_size = self._perturbation_batch_size(perturbation_ids)
+        if batch_size >= len(perturbation_ids):
+            return [perturbation_ids]
+        return [
+            perturbation_ids[start:start + batch_size]
+            for start in range(0, len(perturbation_ids), batch_size)
+        ]
+
     def _sync_replica_from_primary(self, replica: FullDynamicsModel) -> None:
         replica.load_state_dict(self.model.state_dict())
         primary_params = dict(self.model.named_parameters())
@@ -399,6 +418,16 @@ class Trainer:
         perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
+        if not self._can_use_multi_gpu():
+            batch_size = self._perturbation_batch_size(perturbation_ids)
+            if batch_size < len(perturbation_ids):
+                return self._one_epoch_chunked(
+                    optimizer=optimizer,
+                    epoch=epoch,
+                    stage=stage,
+                    perturbation_ids=perturbation_ids,
+                    seed_offset=seed_offset,
+                )
         if self._can_use_multi_gpu() and len(perturbation_ids) > 1:
             return self._one_epoch_multi_gpu(
                 optimizer=optimizer,
@@ -518,12 +547,166 @@ class Trainer:
             optimizer.step()
 
         return {
+            "n_active_perturbations": len(perturbation_ids),
+            "perturbation_batch_size": len(perturbation_ids),
             "loss_total": float(loss.item()),
             "loss_end": float(loss_end.item()),
             "loss_weak": float(loss_weak.item()),
             "loss_count": float(loss_count.item()),
             "loss_reg": float(loss_reg.item()),
         }
+
+    def _one_epoch_chunked(
+        self,
+        optimizer: torch.optim.Optimizer,
+        epoch: int,
+        stage: str,
+        perturbation_ids: List[str],
+        seed_offset: int = 0,
+    ) -> Dict[str, float]:
+        tc = self.config.training
+        sc = self.config.simulation
+        if tc.lambda_count > 0:
+            raise NotImplementedError(
+                "Perturbation chunking is not implemented for count loss."
+            )
+
+        self.model.train()
+        torch.manual_seed(self.config.training.seed + seed_offset + epoch)
+
+        rollout_dtype = self.compute_dtype if self.autocast_enabled else self.dtype
+        perturbation_chunks = self._chunk_perturbation_ids(perturbation_ids)
+        total_groups = len(perturbation_ids)
+        batch_size = max(len(chunk) for chunk in perturbation_chunks)
+
+        autocast_ctx = (
+            torch.autocast(device_type="cuda", dtype=self.compute_dtype)
+            if self.autocast_enabled
+            else nullcontext()
+        )
+
+        if tc.lambda_weak > 0 and perturbation_chunks:
+            refresh_centers = (epoch % 10 == 0) or (not self.weak_loss._centers_initialized)
+            if refresh_centers:
+                z_ref, _, _ = initialise_particles(
+                    self.endpoint,
+                    perturbation_ids,
+                    n_particles=sc.n_particles,
+                    device=self.device,
+                    dtype=rollout_dtype,
+                    seed=self.config.training.seed + seed_offset + epoch,
+                )
+                self.weak_loss.refresh_test_functions(z_ref.float())
+                del z_ref
+
+        metrics = {
+            "n_active_perturbations": len(perturbation_ids),
+            "perturbation_batch_size": batch_size,
+            "loss_total": 0.0,
+            "loss_end": 0.0,
+            "loss_weak": 0.0,
+            "loss_count": 0.0,
+            "loss_reg": 0.0,
+        }
+
+        optimizer.zero_grad()
+
+        for chunk_idx, chunk_pids in enumerate(perturbation_chunks):
+            local_groups = len(chunk_pids)
+            chunk_seed = self.config.training.seed + seed_offset + epoch * 1000 + chunk_idx
+            torch.manual_seed(chunk_seed)
+
+            z0, logw0, log_m0 = initialise_particles(
+                self.endpoint,
+                chunk_pids,
+                n_particles=sc.n_particles,
+                device=self.device,
+                dtype=rollout_dtype,
+                seed=chunk_seed,
+            )
+
+            with autocast_ctx:
+                rollout = self.simulator.rollout(
+                    z0=z0,
+                    logw0=logw0,
+                    model=self.model,
+                    log_m0=log_m0,
+                    perturbation_ids=chunk_pids,
+                )
+
+            pred_logw_abs = rollout.terminal_logw.float() + log_m0.float().unsqueeze(-1)
+            loss_end, _ = self.uot_loss(
+                pred_z=rollout.terminal_z.float(),
+                pred_logw_abs=pred_logw_abs,
+                target_support=self._target_support,
+                target_logw=self._target_logw,
+                perturbation_ids=chunk_pids,
+            )
+
+            loss_weak = torch.tensor(0.0, device=self.device)
+            if tc.lambda_weak > 0 and rollout.drift_steps is not None:
+                local_loss_weak = self.weak_loss(
+                    z_steps=rollout.z_steps,
+                    logw_steps=rollout.logw_steps,
+                    drift_steps=rollout.drift_steps,
+                    sigma_steps=rollout.sigma_steps,
+                    growth_steps=rollout.growth_steps,
+                    tau_steps=rollout.tau_steps,
+                    refresh_centers=False,
+                )
+                loss_weak = self._weighted_shard_loss(
+                    local_loss_weak,
+                    local_groups,
+                    total_groups,
+                )
+
+            loss_reg = self.regularizer(
+                embeddings=self.model.embedding(chunk_pids).float(),
+                drift_steps=rollout.drift_steps.float()
+                if rollout.drift_steps is not None
+                else torch.zeros(1, local_groups, sc.n_particles, self.model.latent_dim, device=self.device),
+                sigma_steps=rollout.sigma_steps.float()
+                if rollout.sigma_steps is not None
+                else torch.zeros(1, local_groups, sc.n_particles, self.model.latent_dim, device=self.device),
+                growth_steps=rollout.growth_steps.float()
+                if rollout.growth_steps is not None
+                else torch.zeros(1, local_groups, sc.n_particles, device=self.device),
+            )
+            loss_reg = self._weighted_shard_loss(loss_reg, local_groups, total_groups)
+
+            loss = (
+                tc.lambda_end * loss_end
+                + tc.lambda_weak * loss_weak
+                + loss_reg
+            )
+
+            if self.scaler.is_enabled():
+                self.scaler.scale(loss).backward()
+            else:
+                loss.backward()
+
+            metrics["loss_total"] += float(loss.item())
+            metrics["loss_end"] += float(loss_end.item())
+            metrics["loss_weak"] += float(loss_weak.item())
+            metrics["loss_reg"] += float(loss_reg.item())
+
+            del rollout, pred_logw_abs, z0, logw0, log_m0
+
+        model_reg = self.model.regularization()
+        if self.scaler.is_enabled():
+            self.scaler.scale(model_reg).backward()
+            self.scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
+            self.scaler.step(optimizer)
+            self.scaler.update()
+        else:
+            model_reg.backward()
+            nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
+            optimizer.step()
+
+        metrics["loss_reg"] += float(model_reg.item())
+        metrics["loss_total"] += float(model_reg.item())
+        return metrics
 
     def _one_epoch_multi_gpu(
         self,
@@ -752,6 +935,8 @@ class Trainer:
         optimizer.step()
 
         return {
+            "n_active_perturbations": len(perturbation_ids),
+            "perturbation_batch_size": len(perturbation_ids),
             "loss_total": float(loss.item()),
             "loss_end": float(loss_end.item()),
             "loss_weak": float(loss_weak.item()),
@@ -802,6 +987,7 @@ class Trainer:
         self._best_loss = math.inf
         self._patience_counter = 0
         active_pids = self._active_perturbation_ids(stage)
+        perturbation_batch_size = self._perturbation_batch_size(active_pids)
 
         # Stage-based parameter freezing
         if stage == "C":
@@ -863,6 +1049,8 @@ class Trainer:
 
             self.history.epochs.append(absolute_epoch)
             self.history.stages.append(stage)
+            self.history.n_active_perturbations.append(int(metrics.get("n_active_perturbations", len(active_pids))))
+            self.history.perturbation_batch_size.append(int(metrics.get("perturbation_batch_size", perturbation_batch_size)))
             self.history.loss_total.append(metrics["loss_total"])
             self.history.loss_end.append(metrics["loss_end"])
             self.history.loss_weak.append(metrics["loss_weak"])
@@ -885,7 +1073,8 @@ class Trainer:
                 cur_lr = scheduler.get_last_lr()[0]
                 print(
                     f"[{stage}] Epoch {absolute_epoch:4d} "
-                    f"(stage {epoch + 1:4d}/{epochs}, pids={len(active_pids)}) | "
+                    f"(stage {epoch + 1:4d}/{epochs}, pids={len(active_pids)}, "
+                    f"batch_pids={int(metrics.get('perturbation_batch_size', perturbation_batch_size))}) | "
                     f"total={metrics['loss_total']:.4f} "
                     f"end={metrics['loss_end']:.4f} "
                     f"weak={metrics['loss_weak']:.4f} "
