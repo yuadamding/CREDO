@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class DataConfig(BaseModel):
@@ -32,18 +32,34 @@ class VAEConfig(BaseModel):
     early_stop_patience: int = 15
     grad_clip: float = 1.0
     seed: int = 0
-    layer: Optional[str] = "counts"
+    layer: Optional[str] = None
+    use_raw: bool = False
     n_genes: int = 2000
-    gene_mask_col: str = "hv_gene"
+    gene_mask_col: Optional[str] = None
     target_sum: float = 1e4
+    strict_layer: bool = True
+    strict_counts: bool = True
 
 
 class LatentConfig(BaseModel):
     source: Literal["pca", "vae"] = "pca"
-    key: str = "X_pca"
+    key: Optional[str] = "X_pca"
     dim: int = 16
     whiten: bool = True
     vae: VAEConfig = Field(default_factory=VAEConfig)
+
+    @model_validator(mode="after")
+    def _validate_backend(self) -> "LatentConfig":
+        if self.source == "vae":
+            if self.key not in (None, "", "X_vae"):
+                raise ValueError(
+                    "latent.source='vae' is incompatible with latent.key="
+                    f"{self.key!r}. Use 'X_vae' or omit the key."
+                )
+            self.key = "X_vae"
+        elif not self.key:
+            raise ValueError("latent.key must be provided when latent.source='pca'.")
+        return self
 
 
 class ModelConfig(BaseModel):
@@ -106,6 +122,17 @@ class TrainingConfig(BaseModel):
     n_test_functions: int = 32
     test_function_bandwidth: float = 1.0
 
+    @model_validator(mode="after")
+    def _validate_training_compatibility(self) -> "TrainingConfig":
+        if self.max_active_perturbations < 0:
+            raise ValueError("max_active_perturbations must be >= 0.")
+        if self.lambda_count > 0 and self.max_active_perturbations > 0:
+            raise ValueError(
+                "lambda_count > 0 is incompatible with perturbation chunking "
+                "(max_active_perturbations > 0)."
+            )
+        return self
+
 
 class EvalConfig(BaseModel):
     n_seeds: int = 3
@@ -128,6 +155,19 @@ class RunConfig(BaseModel):
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
+
+    @model_validator(mode="after")
+    def _validate_run(self) -> "RunConfig":
+        if self.training.max_active_perturbations > 0:
+            raise ValueError(
+                "max_active_perturbations > 0 is currently disabled because "
+                "single-model perturbation chunking changes the global-context semantics."
+            )
+        if self.training.lambda_count > 0 and len(self.multi_gpu_devices) > 1:
+            raise ValueError(
+                "lambda_count > 0 is not supported with the current multi-GPU single-model path."
+            )
+        return self
 
     def resolve_device(self) -> str:
         import torch

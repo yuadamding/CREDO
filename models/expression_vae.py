@@ -18,7 +18,7 @@ The intended usage is:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -38,15 +38,27 @@ def log1p_normalize_expression_matrix(
     matrix: sp.spmatrix | np.ndarray,
     *,
     target_sum: float = 1e4,
+    library_totals: np.ndarray | None = None,
 ) -> sp.csr_matrix | np.ndarray:
     """Library-size normalize then log1p transform expression values.
 
     Expects **raw counts** as input.  Each cell is scaled so that its total
     count equals *target_sum* before applying ``log1p``.
     """
+    if library_totals is not None:
+        totals = np.asarray(library_totals, dtype=np.float32).reshape(-1)
+        if totals.shape[0] != matrix.shape[0]:
+            raise ValueError(
+                "library_totals must have one entry per cell. "
+                f"Got {totals.shape[0]} totals for {matrix.shape[0]} rows."
+            )
+    else:
+        totals = None
+
     if sp.issparse(matrix):
         norm = matrix.tocsr(copy=True).astype(np.float32)
-        totals = np.asarray(norm.sum(axis=1)).ravel().astype(np.float32)
+        if totals is None:
+            totals = np.asarray(norm.sum(axis=1)).ravel().astype(np.float32)
         scale = np.divide(
             target_sum,
             np.maximum(totals, 1.0),
@@ -58,7 +70,10 @@ def log1p_normalize_expression_matrix(
         return norm
 
     arr = np.asarray(matrix, dtype=np.float32)
-    totals = arr.sum(axis=1, keepdims=True)
+    if totals is None:
+        totals = arr.sum(axis=1, keepdims=True)
+    else:
+        totals = totals.reshape(-1, 1)
     totals = np.maximum(totals, 1.0)
     arr = np.log1p((arr / totals) * target_sum)
     return arr.astype(np.float32, copy=False)
@@ -222,6 +237,10 @@ class VAEArtifactBundle:
     train_cell_indices: list[int]
     latent_standardization: LatentStandardization | None
     training_summary: ExpressionVAETrainingSummary
+    requested_layer: str | None = None
+    selected_gene_indices: list[int] = field(default_factory=list)
+    kept_positions: list[int] | None = None
+    split_manifest_hash: str | None = None
     commit_sha: str | None = None
 
     def save(self, directory: str | Path, model: ExpressionVAE) -> Path:
@@ -234,9 +253,13 @@ class VAEArtifactBundle:
         meta = {
             "gene_names": self.gene_names,
             "source_layer": self.source_layer,
+            "requested_layer": self.requested_layer,
+            "selected_gene_indices": self.selected_gene_indices,
             "target_sum": self.target_sum,
             "vae_hyperparams": self.vae_hyperparams,
             "train_cell_indices": self.train_cell_indices,
+            "kept_positions": self.kept_positions,
+            "split_manifest_hash": self.split_manifest_hash,
             "latent_standardization": (
                 self.latent_standardization.to_dict()
                 if self.latent_standardization is not None else None
@@ -275,9 +298,13 @@ class VAEArtifactBundle:
         bundle = cls(
             gene_names=meta["gene_names"],
             source_layer=meta.get("source_layer"),
+            requested_layer=meta.get("requested_layer"),
+            selected_gene_indices=meta.get("selected_gene_indices", []),
             target_sum=meta["target_sum"],
             vae_hyperparams=hp,
             train_cell_indices=meta["train_cell_indices"],
+            kept_positions=meta.get("kept_positions"),
+            split_manifest_hash=meta.get("split_manifest_hash"),
             latent_standardization=lat_std,
             training_summary=summary,
             commit_sha=meta.get("commit_sha"),
@@ -334,13 +361,29 @@ def fit_expression_vae(
     rng = np.random.default_rng(seed)
 
     n_cells, input_dim = matrix.shape
+    if n_cells < 1:
+        raise ValueError("VAE fitting requires at least one training cell.")
 
     # --- Train / validation split ---
     n_val = max(1, int(round(val_frac * n_cells))) if val_frac > 0 else 0
+    if n_cells <= 1 and n_val > 0:
+        raise ValueError(
+            "VAE validation split requested but there are not enough training cells. "
+            f"n_cells={n_cells}, val_frac={val_frac}."
+        )
+    if n_cells > 1:
+        n_val = min(n_val, n_cells - 1)
+    else:
+        n_val = 0
     all_idx = rng.permutation(n_cells)
     val_idx = np.sort(all_idx[:n_val]) if n_val > 0 else np.array([], dtype=np.int64)
     train_idx = np.sort(all_idx[n_val:])
     n_train = len(train_idx)
+    if n_train < 1:
+        raise ValueError(
+            "VAE fitting produced an empty training split. "
+            f"n_cells={n_cells}, val_frac={val_frac}, n_val={n_val}."
+        )
 
     model = ExpressionVAE(
         input_dim=input_dim,

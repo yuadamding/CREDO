@@ -421,12 +421,11 @@ class Trainer:
         if not self._can_use_multi_gpu():
             batch_size = self._perturbation_batch_size(perturbation_ids)
             if batch_size < len(perturbation_ids):
-                return self._one_epoch_chunked(
-                    optimizer=optimizer,
-                    epoch=epoch,
-                    stage=stage,
-                    perturbation_ids=perturbation_ids,
-                    seed_offset=seed_offset,
+                raise NotImplementedError(
+                    "Single-model perturbation chunking is disabled because it changes "
+                    "the global-context semantics seen by the coefficient networks. "
+                    "Use max_active_perturbations=0 and search for a setting that fits "
+                    "without chunking."
                 )
         if self._can_use_multi_gpu() and len(perturbation_ids) > 1:
             return self._one_epoch_multi_gpu(

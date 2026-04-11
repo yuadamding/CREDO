@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Sequence
 
 import anndata as ad
@@ -59,6 +60,14 @@ def load_hnscc(path: str, *, latent_key: str = DEFAULT_LATENT_KEY) -> tuple[pd.D
     return obs, latent
 
 
+def load_hnscc_obs(path: str) -> pd.DataFrame:
+    adata = ad.read_h5ad(path, backed="r")
+    obs = adata.obs.copy()
+    if hasattr(adata, "file") and adata.file is not None:
+        adata.file.close()
+    return obs
+
+
 def _coerce_gene_mask(values: pd.Series) -> np.ndarray:
     numeric = pd.to_numeric(values, errors="coerce")
     if numeric.notna().any():
@@ -67,7 +76,12 @@ def _coerce_gene_mask(values: pd.Series) -> np.ndarray:
     return text.isin({"1", "true", "t", "yes", "y"}).to_numpy()
 
 
-def _validate_count_matrix(matrix: sp.spmatrix | np.ndarray, name: str = "expression") -> None:
+def _validate_count_matrix(
+    matrix: sp.spmatrix | np.ndarray,
+    name: str = "expression",
+    *,
+    strict: bool = True,
+) -> None:
     """Validate that a matrix looks like raw counts (nonneg, integer-like)."""
     if sp.issparse(matrix):
         data = matrix.data
@@ -84,21 +98,25 @@ def _validate_count_matrix(matrix: sp.spmatrix | np.ndarray, name: str = "expres
     frac_integer = np.mean(np.abs(sample - np.round(sample)) < 1e-4)
     if frac_integer < 0.9:
         import warnings
-        warnings.warn(
+        message = (
             f"{name} matrix has only {frac_integer:.0%} near-integer values in a sample "
             f"of {len(sample)} entries. Expected raw counts — double-check the source layer.",
-            stacklevel=3,
         )
+        if strict:
+            raise ValueError(message)
+        warnings.warn(message, stacklevel=3)
 
 
 def load_hnscc_expression(
     path: str,
     *,
-    layer: str | None = "counts",
-    use_raw: bool = True,
-    gene_mask_col: str = "hv_gene",
-    top_genes: int = 2000,
+    layer: str | None = None,
+    use_raw: bool = False,
+    gene_mask_col: str | None = None,
+    top_genes: int = 0,
     validate_counts: bool = True,
+    strict_layer: bool = True,
+    strict_counts: bool = True,
 ) -> tuple[pd.DataFrame, sp.csr_matrix, list[str], dict]:
     """Load expression matrix from an h5ad file.
 
@@ -107,28 +125,62 @@ def load_hnscc_expression(
     path : str
         Path to h5ad file.
     layer : str | None
-        AnnData layer to read. ``"counts"`` reads ``adata.layers["counts"]``;
-        ``None`` reads ``adata.X``.  If the requested layer does not exist,
-        falls back to ``adata.raw.X`` (when *use_raw* is True) then ``adata.X``.
+        AnnData source to read. ``None`` reads ``adata.X``. If a layer name is
+        given, it must exist unless ``strict_layer=False``.
     use_raw : bool
-        If *layer* is missing and *use_raw* is True, try ``adata.raw.X``.
+        If *layer* is ``None`` and *use_raw* is True, read ``adata.raw.X``.
     gene_mask_col : str
-        Column in ``adata.var`` used as a boolean gene mask.
+        Optional column in ``adata.var`` used as a candidate-gene mask.
     top_genes : int
-        Maximum number of genes to select.
+        Maximum number of genes to select. ``0`` keeps the full candidate set.
     validate_counts : bool
         If True, check that the loaded matrix is nonneg and integer-like.
+    strict_layer : bool
+        If True, a missing requested layer raises an error instead of silently
+        falling back to another expression source.
+    strict_counts : bool
+        If True, a non-count-like matrix raises an error instead of a warning.
     """
     adata = ad.read_h5ad(path, backed="r")
     obs = adata.obs.copy()
-    var = adata.var.copy()
+    if layer is not None and layer in adata.layers:
+        source = adata.layers[layer]
+        resolved_layer = layer
+        var = adata.var.copy()
+    elif layer is not None and strict_layer:
+        available = sorted(str(key) for key in adata.layers.keys())
+        if hasattr(adata, "file") and adata.file is not None:
+            adata.file.close()
+        raise KeyError(
+            f"Requested expression layer {layer!r} not found. Available layers: {available}. "
+            "Pass --vae-layer explicitly or disable strict_layer if fallback behavior is desired."
+        )
+    elif layer is None and use_raw and adata.raw is not None:
+        source = adata.raw.X
+        resolved_layer = "raw"
+        var = adata.raw.var.copy()
+    else:
+        source = adata.X
+        resolved_layer = "X"
+        var = adata.var.copy()
+
+    if hasattr(source, "to_memory"):
+        source = source.to_memory()
+    if sp.issparse(source):
+        source = source.tocsr().astype(np.float32)
+    else:
+        source = sp.csr_matrix(np.asarray(source, dtype=np.float32))
+
+    full_library_totals = np.asarray(source.sum(axis=1)).ravel().astype(np.float32)
+    if validate_counts:
+        _validate_count_matrix(
+            source,
+            name=f"expression (layer={resolved_layer!r})",
+            strict=strict_counts,
+        )
 
     if gene_mask_col and gene_mask_col in var.columns:
         candidate_mask = _coerce_gene_mask(var[gene_mask_col])
-    elif "use_genes" in var.columns:
-        candidate_mask = _coerce_gene_mask(var["use_genes"])
-    elif "in_original_2500_feature_set" in var.columns:
-        candidate_mask = _coerce_gene_mask(var["in_original_2500_feature_set"])
     else:
         candidate_mask = np.ones(len(var), dtype=bool)
 
@@ -146,39 +198,65 @@ def load_hnscc_expression(
     else:
         selected_idx = candidate_idx
 
-    # --- Resolve expression source ---
-    resolved_layer = None
-    if layer is not None and layer in adata.layers:
-        expr = adata.layers[layer][:, selected_idx]
-        resolved_layer = layer
-    elif use_raw and adata.raw is not None:
-        expr = adata.raw[:, var.index[selected_idx]].X
-        resolved_layer = "raw"
-    else:
-        expr = adata[:, selected_idx].X
-        resolved_layer = "X"
-
-    if hasattr(expr, "to_memory"):
-        expr = expr.to_memory()
+    expr = source[:, selected_idx]
     if sp.issparse(expr):
         expr = expr.tocsr().astype(np.float32)
     else:
         expr = sp.csr_matrix(np.asarray(expr, dtype=np.float32))
-
-    if validate_counts:
-        _validate_count_matrix(expr, name=f"expression (layer={resolved_layer!r})")
 
     gene_names = [str(name) for name in var.index[selected_idx].tolist()]
     meta = {
         "gene_mask_col": gene_mask_col,
         "top_genes": int(top_genes),
         "n_selected_genes": int(len(gene_names)),
+        "requested_layer": layer,
         "layer": resolved_layer,
         "gene_names": gene_names,
+        "selected_gene_indices": selected_idx.astype(np.int64).tolist(),
+        "full_library_totals": full_library_totals,
     }
     if hasattr(adata, "file") and adata.file is not None:
         adata.file.close()
     return obs, expr, gene_names, meta
+
+
+def _gene_mean_variance(matrix: sp.csr_matrix | np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    if sp.issparse(matrix):
+        mean = np.asarray(matrix.mean(axis=0)).ravel().astype(np.float64)
+        second = np.asarray(matrix.power(2).mean(axis=0)).ravel().astype(np.float64)
+    else:
+        arr = np.asarray(matrix, dtype=np.float64)
+        mean = arr.mean(axis=0)
+        second = np.mean(arr ** 2, axis=0)
+    variance = np.maximum(second - mean ** 2, 0.0)
+    return mean, variance
+
+
+def _rank_train_hv_genes(
+    matrix: sp.csr_matrix | np.ndarray,
+    *,
+    n_genes: int,
+) -> np.ndarray:
+    n_available = int(matrix.shape[1])
+    if n_genes <= 0 or n_genes >= n_available:
+        return np.arange(n_available, dtype=np.int64)
+    mean, variance = _gene_mean_variance(matrix)
+    dispersion = np.full(n_available, -np.inf, dtype=np.float64)
+    valid = mean > 0
+    dispersion[valid] = np.log1p(variance[valid] / np.maximum(mean[valid], 1e-8))
+    ranked = np.argsort(dispersion)[::-1]
+    return ranked[:n_genes].astype(np.int64)
+
+
+def _split_manifest_hash(obs: pd.DataFrame, split: pd.Series) -> str:
+    frame = pd.DataFrame(
+        {
+            "cell_id": obs["cell_id"].astype(str).to_numpy(),
+            "split": split.astype(str).to_numpy(),
+        }
+    )
+    hashed = pd.util.hash_pandas_object(frame, index=False).to_numpy(dtype=np.uint64, copy=False)
+    return hashlib.sha256(hashed.tobytes()).hexdigest()
 
 
 def clean_perturbation_ids(obs: pd.DataFrame) -> pd.Series:
@@ -511,9 +589,9 @@ def build_vae_latent(
     obs: pd.DataFrame,
     kept_positions: np.ndarray | None = None,
     latent_dim: int = 16,
-    layer: str | None = "counts",
-    use_raw: bool = True,
-    gene_mask_col: str = "hv_gene",
+    layer: str | None = None,
+    use_raw: bool = False,
+    gene_mask_col: str | None = None,
     n_genes: int = 2000,
     target_sum: float = 1e4,
     vae_hidden_dim: int = 512,
@@ -531,7 +609,7 @@ def build_vae_latent(
     vae_seed: int = 0,
     device: str = "cpu",
     state_key: str = DEFAULT_STATE_KEY,
-    compute_centroids: bool = True,
+    compute_centroids: bool = False,
     save_dir: str | None = None,
     commit_sha: str | None = None,
 ) -> VAELatentResult:
@@ -543,12 +621,14 @@ def build_vae_latent(
 
     Pipeline steps:
 
-    1. Load raw counts with gene selection (``load_hnscc_expression``).
-    2. Library-normalize + log1p the raw counts.
-    3. Subset to training cells; fit VAE on training set only.
-    4. Encode all cells (train + test) with the frozen encoder.
-    5. Z-score the latent using training-set mean/std.
-    6. Recompute program centroids in VAE latent space (training cells).
+    1. Load raw counts from an explicit count source.
+    2. Define the train/test split.
+    3. Select genes using **training cells only**.
+    4. Library-normalize + log1p using full-library totals.
+    5. Fit the VAE on training cells only.
+    6. Encode all cells (train + test) with the frozen encoder.
+    7. Z-score the latent using training-set mean/std.
+    8. Recompute program centroids in VAE latent space only if explicitly requested.
     7. Save the full artifact bundle if *save_dir* is given.
 
     Parameters
@@ -586,34 +666,52 @@ def build_vae_latent(
         standardize_latent,
     )
 
-    # 1. Load expression with explicit layer and count validation
-    _, expr_raw, gene_names, expr_meta = load_hnscc_expression(
+    # 1. Load candidate expression matrix from an explicit count source.
+    _, expr_candidate, candidate_gene_names, expr_meta = load_hnscc_expression(
         h5ad_path,
         layer=layer,
         use_raw=use_raw,
         gene_mask_col=gene_mask_col,
-        top_genes=n_genes,
+        top_genes=0,
         validate_counts=True,
+        strict_layer=True,
+        strict_counts=True,
     )
+    candidate_gene_indices = np.asarray(expr_meta["selected_gene_indices"], dtype=np.int64)
+    library_totals = np.asarray(expr_meta["full_library_totals"], dtype=np.float32)
 
     # Align rows if prepare_hnscc_obs filtered some cells
     if kept_positions is not None:
-        expr_raw = expr_raw[kept_positions]
+        expr_candidate = expr_candidate[kept_positions]
+        library_totals = library_totals[kept_positions]
 
-    n_cells = expr_raw.shape[0]
+    n_cells = expr_candidate.shape[0]
     if n_cells != len(obs):
         raise ValueError(
             f"Expression matrix has {n_cells} rows but obs has {len(obs)} rows. "
             "Pass kept_positions from prepare_hnscc_obs if cells were filtered."
         )
 
-    # 2. Normalize: library-size + log1p
-    expr_norm = log1p_normalize_expression_matrix(expr_raw, target_sum=target_sum)
-
-    # 3. Split-safe fitting: VAE sees ONLY training cells
+    # 2. Define the split before any train-sensitive processing.
     train_mask = split.eq("train").to_numpy()
     test_mask = split.eq("test").to_numpy()
     train_indices = np.flatnonzero(train_mask).tolist()
+    if not train_mask.any():
+        raise ValueError("VAE latent construction requires at least one training cell.")
+
+    # 3. Select genes using training cells only.
+    train_candidate = expr_candidate[train_mask]
+    selected_local_idx = _rank_train_hv_genes(train_candidate, n_genes=n_genes)
+    selected_gene_indices = candidate_gene_indices[selected_local_idx]
+    gene_names = [candidate_gene_names[int(i)] for i in selected_local_idx.tolist()]
+    expr_selected = expr_candidate[:, selected_local_idx]
+
+    # 4. Normalize using full-library totals rather than panel-only totals.
+    expr_norm = log1p_normalize_expression_matrix(
+        expr_selected,
+        target_sum=target_sum,
+        library_totals=library_totals,
+    )
 
     if sp.issparse(expr_norm):
         expr_train = expr_norm[train_mask]
@@ -639,15 +737,15 @@ def build_vae_latent(
         device=device,
     )
 
-    # 4. Encode ALL cells with frozen encoder
+    # 6. Encode ALL cells with frozen encoder
     z_all = encode_expression_vae(model, expr_norm, device=device)
 
-    # 5. Standardize using training-set statistics only
+    # 7. Standardize using training-set statistics only
     z_train = z_all[train_mask]
     _, lat_stats = standardize_latent(z_train)
     z_all_std, _ = standardize_latent(z_all, stats=lat_stats)
 
-    # 6. Recompute centroids in VAE latent space (training cells only)
+    # 8. Recompute centroids in VAE latent space only if explicitly requested.
     program_centroids = None
     if compute_centroids:
         train_obs = obs.loc[train_mask]
@@ -667,9 +765,13 @@ def build_vae_latent(
     bundle = VAEArtifactBundle(
         gene_names=gene_names,
         source_layer=expr_meta.get("layer"),
+        requested_layer=expr_meta.get("requested_layer"),
+        selected_gene_indices=selected_gene_indices.astype(np.int64).tolist(),
         target_sum=target_sum,
         vae_hyperparams=vae_hp,
         train_cell_indices=train_indices,
+        kept_positions=kept_positions.tolist() if kept_positions is not None else None,
+        split_manifest_hash=_split_manifest_hash(obs, split),
         latent_standardization=lat_stats,
         training_summary=summary,
         commit_sha=commit_sha,
@@ -686,3 +788,23 @@ def build_vae_latent(
         program_centroids=program_centroids,
         bundle=bundle,
     )
+
+
+def build_study_from_vae_latent(
+    vae_result: VAELatentResult,
+    obs: pd.DataFrame,
+    split: pd.Series,
+) -> tuple[PerturbSeqDynamicsData, PerturbSeqDynamicsData]:
+    """Build train and test ``PerturbSeqDynamicsData`` from a VAE latent result.
+
+    This is the convenience last-mile function that turns a ``VAELatentResult``
+    (from ``build_vae_latent``) into the study objects consumed by the trainer
+    and evaluator, so callers never need to manually slice the latent.
+    """
+    train_data = build_study_from_split(
+        obs, vae_result.latent, split=split, split_name="train",
+    )
+    test_data = build_study_from_split(
+        obs, vae_result.latent, split=split, split_name="test",
+    )
+    return train_data, test_data
