@@ -35,7 +35,7 @@ DEFAULT_TRAIN_WTAS = (
     "wta18",
 )
 DEFAULT_TEST_WTAS = ("wta8", "wta10", "wta11", "wta12")
-DEFAULT_RANDOM_STRATIFY_COLS = ("Time point", "perturbation_id", DEFAULT_STATE_KEY)
+DEFAULT_RANDOM_STRATIFY_COLS = ("Time point", "perturbation_id")
 
 
 @dataclass(frozen=True)

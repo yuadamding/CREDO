@@ -28,11 +28,13 @@ class TimeAxis:
     physical_times: List[float]   # e.g. [4.0, 60.0]
 
     def __post_init__(self) -> None:
-        assert len(self.labels) == len(self.physical_times), "labels/times length mismatch"
-        assert len(self.labels) >= 2, "Need at least two time points"
+        if len(self.labels) != len(self.physical_times):
+            raise ValueError("labels/times length mismatch")
+        if len(self.labels) < 2:
+            raise ValueError("Need at least two time points")
         for i in range(1, len(self.physical_times)):
-            assert self.physical_times[i] > self.physical_times[i - 1], \
-                f"Times must be strictly increasing: {self.physical_times}"
+            if not self.physical_times[i] > self.physical_times[i - 1]:
+                raise ValueError(f"Times must be strictly increasing: {self.physical_times}")
 
     @property
     def t_min(self) -> float:
@@ -69,10 +71,13 @@ class PerturbationCatalog:
 
     def __post_init__(self) -> None:
         ids = set(self.perturbation_ids)
-        assert len(ids) == len(self.perturbation_ids), "Duplicate perturbation_ids"
-        assert len(self.control_ids) > 0, "Must have at least one control"
+        if len(ids) != len(self.perturbation_ids):
+            raise ValueError("Duplicate perturbation_ids")
+        if len(self.control_ids) == 0:
+            raise ValueError("Must have at least one control")
         for c in self.control_ids:
-            assert c in ids, f"Control {c!r} not in perturbation_ids"
+            if c not in ids:
+                raise KeyError(f"Control {c!r} not in perturbation_ids")
 
     @property
     def n_perturbations(self) -> int:
@@ -104,9 +109,10 @@ class CellStateTable:
 
     def __post_init__(self) -> None:
         missing = self.REQUIRED_COLS - set(self.df.columns)
-        assert not missing, f"CellStateTable missing columns: {missing}"
-        assert len(self.df) == len(self.latent), \
-            f"df rows {len(self.df)} != latent rows {len(self.latent)}"
+        if missing:
+            raise KeyError(f"CellStateTable missing columns: {missing}")
+        if len(self.df) != len(self.latent):
+            raise ValueError(f"df rows {len(self.df)} != latent rows {len(self.latent)}")
 
     @property
     def n_cells(self) -> int:
@@ -141,8 +147,10 @@ class MassTable:
 
     def __post_init__(self) -> None:
         missing = self.REQUIRED_COLS - set(self.df.columns)
-        assert not missing, f"MassTable missing columns: {missing}"
-        assert (self.df["mass"] > 0).all(), "All masses must be positive"
+        if missing:
+            raise KeyError(f"MassTable missing columns: {missing}")
+        if not (self.df["mass"] > 0).all():
+            raise ValueError("All masses must be positive")
 
     def get(self, perturbation_id: str, time_label: str, sample_id: str) -> float:
         row = self.df[
@@ -150,7 +158,10 @@ class MassTable:
             (self.df["time_label"] == time_label) &
             (self.df["sample_id"] == sample_id)
         ]
-        assert len(row) == 1, f"Expected 1 row for ({perturbation_id}, {time_label}, {sample_id}), got {len(row)}"
+        if len(row) != 1:
+            raise KeyError(
+                f"Expected 1 row for ({perturbation_id}, {time_label}, {sample_id}), got {len(row)}"
+            )
         return float(row["mass"].iloc[0])
 
     def get_pooled(self, perturbation_id: str, time_label: str) -> float:
@@ -175,14 +186,18 @@ class ExposureTable:
 
     def __post_init__(self) -> None:
         missing = self.REQUIRED_COLS - set(self.df.columns)
-        assert not missing, f"ExposureTable missing columns: {missing}"
+        if missing:
+            raise KeyError(f"ExposureTable missing columns: {missing}")
 
     def get(self, perturbation_id: str, library_batch: str) -> float:
         row = self.df[
             (self.df["perturbation_id"] == perturbation_id) &
             (self.df["library_batch"] == library_batch)
         ]
-        assert len(row) == 1, f"Expected 1 exposure row for ({perturbation_id}, {library_batch}), got {len(row)}"
+        if len(row) != 1:
+            raise KeyError(
+                f"Expected 1 exposure row for ({perturbation_id}, {library_batch}), got {len(row)}"
+            )
         return float(row["exposure"].iloc[0])
 
     def get_batch_vector(self, perturbation_ids: List[str], library_batch: str) -> np.ndarray:
@@ -205,7 +220,8 @@ class ReplicateCountTable:
 
     def __post_init__(self) -> None:
         missing = self.REQUIRED_COLS - set(self.df.columns)
-        assert not missing, f"ReplicateCountTable missing columns: {missing}"
+        if missing:
+            raise KeyError(f"ReplicateCountTable missing columns: {missing}")
 
     def get_count_matrix(
         self, time_label: str, perturbation_ids: List[str]
@@ -264,13 +280,18 @@ class FiniteMeasure:
     total_mass: float
 
     def __post_init__(self) -> None:
-        assert self.support.ndim == 2, f"support must be 2D, got {self.support.ndim}D"
-        assert len(self.weights) == len(self.support), "support/weights length mismatch"
-        assert self.total_mass > 0, "total_mass must be positive"
-        np.testing.assert_allclose(
-            self.weights.sum(), self.total_mass, rtol=1e-4,
-            err_msg="weights.sum() must equal total_mass"
-        )
+        if self.support.ndim != 2:
+            raise ValueError(f"support must be 2D, got {self.support.ndim}D")
+        if len(self.weights) != len(self.support):
+            raise ValueError("support/weights length mismatch")
+        if not self.total_mass > 0:
+            raise ValueError("total_mass must be positive")
+        weight_sum = float(np.asarray(self.weights, dtype=float).sum())
+        if not np.isclose(weight_sum, float(self.total_mass), rtol=1e-4, atol=1e-8):
+            raise ValueError(
+                "weights.sum() must equal total_mass "
+                f"(got {weight_sum:.6g} vs {float(self.total_mass):.6g})"
+            )
 
     @property
     def n_atoms(self) -> int:
@@ -316,8 +337,10 @@ class EndpointProblem:
 
     def __post_init__(self) -> None:
         for pid in self.perturbation_ids:
-            assert pid in self.initial, f"Missing initial measure for {pid}"
-            assert pid in self.terminal, f"Missing terminal measure for {pid}"
+            if pid not in self.initial:
+                raise KeyError(f"Missing initial measure for {pid}")
+            if pid not in self.terminal:
+                raise KeyError(f"Missing terminal measure for {pid}")
 
     @property
     def n_perturbations(self) -> int:
@@ -388,7 +411,8 @@ class PerturbSeqDynamicsData:
             sample_mask = cells.df["sample_id"].astype(str).eq(str(sample_id)).to_numpy()
             cells = cells.filter(sample_mask)
         n = cells.n_cells
-        assert n > 0, f"No cells for ({perturbation_id}, {time_label})"
+        if n <= 0:
+            raise ValueError(f"No cells for ({perturbation_id}, {time_label}, {sample_id})")
 
         if sample_id == "pooled":
             total_mass = self.mass_table.get_pooled(perturbation_id, time_label)
@@ -412,18 +436,14 @@ class PerturbSeqDynamicsData:
 
         initial, terminal = {}, {}
         for pid in pids:
-            try:
-                initial[pid] = self.build_measure(pid, init_label)
-                terminal[pid] = self.build_measure(pid, term_label)
-            except AssertionError:
-                continue
+            initial[pid] = self.build_measure(pid, init_label)
+            terminal[pid] = self.build_measure(pid, term_label)
 
-        valid_pids = [p for p in pids if p in initial and p in terminal]
         return EndpointProblem(
             initial=initial,
             terminal=terminal,
             time_axis=self.time_axis,
-            perturbation_ids=valid_pids,
+            perturbation_ids=list(pids),
         )
 
     def summary(self) -> pd.DataFrame:
