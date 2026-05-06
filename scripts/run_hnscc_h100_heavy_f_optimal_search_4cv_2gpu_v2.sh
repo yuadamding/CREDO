@@ -335,12 +335,16 @@ fi
 MULTI_GPU_PER_JOB="${MULTI_GPU_PER_JOB:-0}"
 PIN_CPU="${PIN_CPU:-1}"
 NPROC_TOTAL="${NPROC_TOTAL:-$(nproc)}"
-EXPRESSION_WORKERS="${EXPRESSION_WORKERS:-8}"
-EXPRESSION_CHUNK_SIZE="${EXPRESSION_CHUNK_SIZE:-2048}"
+EXPRESSION_WORKERS_REQUESTED="${EXPRESSION_WORKERS:-}"
+EXPRESSION_CHUNK_SIZE="${EXPRESSION_CHUNK_SIZE:-4096}"
+VAE_BATCH_SIZE="${VAE_BATCH_SIZE:-4096}"
+VAE_ENCODE_BATCH_SIZE="${VAE_ENCODE_BATCH_SIZE:-16384}"
+VAE_PRELOAD_DENSE_MAX_GB="${VAE_PRELOAD_DENSE_MAX_GB:-4.0}"
 ACTIVATION_CHECKPOINTING="${ACTIVATION_CHECKPOINTING:-1}"
 ALLOW_UNSAFE_NO_CHECKPOINTING="${ALLOW_UNSAFE_NO_CHECKPOINTING:-0}"
 GPU_MONITOR="${GPU_MONITOR:-0}"
 GPU_MONITOR_INTERVAL="${GPU_MONITOR_INTERVAL:-30}"
+REQUIRE_FULL_GPU_QUEUE="${REQUIRE_FULL_GPU_QUEUE:-0}"
 
 mapfile -t GPU_DEVICES < <(detect_gpu_devices)
 if [[ "${#GPU_DEVICES[@]}" -eq 0 ]]; then
@@ -368,6 +372,21 @@ fi
 if [[ "$THREADS_PER_JOB" -lt 1 ]]; then
   THREADS_PER_JOB=1
 fi
+if [[ -z "$EXPRESSION_WORKERS_REQUESTED" ]]; then
+  EXPRESSION_WORKERS="$THREADS_PER_JOB"
+  if [[ "$EXPRESSION_WORKERS" -gt 8 ]]; then
+    EXPRESSION_WORKERS=8
+  fi
+else
+  EXPRESSION_WORKERS="$EXPRESSION_WORKERS_REQUESTED"
+fi
+if ! [[ "$EXPRESSION_WORKERS" =~ ^[0-9]+$ ]] || [[ "$EXPRESSION_WORKERS" -lt 1 ]]; then
+  echo "EXPRESSION_WORKERS must be a positive integer, got: $EXPRESSION_WORKERS" >&2
+  exit 1
+fi
+if [[ "$EXPRESSION_WORKERS" -gt "$THREADS_PER_JOB" ]]; then
+  echo "CREDO warning: EXPRESSION_WORKERS=$EXPRESSION_WORKERS exceeds THREADS_PER_JOB=$THREADS_PER_JOB; this can starve GPU-side training by oversubscribing CPU cores." >&2
+fi
 MIN_GPU_MEM_MB="${MIN_GPU_MEM_MB:-70000}"
 if [[ "${ALLOW_SMALL_GPU:-0}" != "1" ]] && command -v nvidia-smi >/dev/null 2>&1; then
   for gpu in "${ACTIVE_GPU_DEVICES[@]}"; do
@@ -387,10 +406,20 @@ done
 
 load_settings
 parse_search_folds
+TOTAL_JOB_COUNT=$(( ${#SETTINGS[@]} * ${#SEARCH_FOLD_ITEMS[@]} ))
+if [[ "$MULTI_GPU_PER_JOB" != "1" ]] && [[ "$TOTAL_JOB_COUNT" -lt "${#SCHEDULER_GPU_RESOURCES[@]}" ]]; then
+  echo "CREDO warning: planned setting/fold jobs=$TOTAL_JOB_COUNT but scheduled GPU slots=${#SCHEDULER_GPU_RESOURCES[@]}; some GPUs will be idle." >&2
+  echo "Reduce MAX_PARALLEL_JOBS/GPU_LIST, add folds/settings, or use the guide-vs-shared wrapper with PARALLEL_ARMS=auto on larger nodes." >&2
+  if [[ "$REQUIRE_FULL_GPU_QUEUE" == "1" ]]; then
+    echo "Refusing underfilled GPU queue because REQUIRE_FULL_GPU_QUEUE=1." >&2
+    exit 1
+  fi
+fi
 mkdir -p "$RUN_ROOT"
 
 echo "CREDO optimal search v2 root: $RUN_ROOT"
 echo "CREDO optimal search v2 settings: ${#SETTINGS[@]}"
+echo "CREDO optimal search v2 planned setting/fold jobs: $TOTAL_JOB_COUNT"
 echo "CREDO optimal search v2 preset: ${SETTINGS_FILE:-$SETTINGS_PRESET}"
 echo "CREDO optimal search v2 folds: ${SEARCH_FOLD_ITEMS[*]} / CV_FOLDS=$CV_FOLDS"
 echo "CREDO optimal search v2 default epochs: $EPOCHS"
@@ -402,6 +431,7 @@ echo "CREDO optimal search v2 ranking: $SUMMARY_RANKING_MODE"
 echo "CREDO optimal search v2 strategy: multi_gpu_per_job=$MULTI_GPU_PER_JOB pin_cpu=$PIN_CPU nproc_total=$NPROC_TOTAL"
 echo "CREDO optimal search v2 queue: jobs=$MAX_PARALLEL_JOBS resources=${SCHEDULER_GPU_RESOURCES[*]} active_gpus=${ACTIVE_GPU_DEVICES[*]} threads_per_job=$THREADS_PER_JOB"
 echo "CREDO optimal search v2 expression loading: workers=$EXPRESSION_WORKERS chunk_size=$EXPRESSION_CHUNK_SIZE"
+echo "CREDO optimal search v2 VAE input: batch_size=$VAE_BATCH_SIZE encode_batch_size=$VAE_ENCODE_BATCH_SIZE preload_dense_max_gb=$VAE_PRELOAD_DENSE_MAX_GB"
 echo "CREDO optimal search v2 activation checkpointing: requested=$ACTIVATION_CHECKPOINTING allow_unsafe_no_checkpointing=$ALLOW_UNSAFE_NO_CHECKPOINTING"
 echo "CREDO optimal search v2 gpu monitor: enabled=$GPU_MONITOR interval=${GPU_MONITOR_INTERVAL}s"
 echo "CREDO optimal search v2 setting table:"
@@ -583,7 +613,7 @@ launch_job() {
       --vae-depth 2
       --vae-dropout 0.1
       --vae-epochs 50
-      --vae-batch-size 2048
+      --vae-batch-size "$VAE_BATCH_SIZE"
       --vae-lr 1e-3
       --vae-weight-decay 1e-6
       --vae-kl-weight 1e-3
@@ -592,13 +622,13 @@ launch_job() {
       --vae-early-stop-patience 15
       --vae-grad-clip 1.0
       --vae-target-sum 10000
-      --vae-encode-batch-size 8192
+      --vae-encode-batch-size "$VAE_ENCODE_BATCH_SIZE"
       --expression-workers "$EXPRESSION_WORKERS"
       --expression-chunk-size "$EXPRESSION_CHUNK_SIZE"
       --vae-hvg-batch-col Library
       --vae-hvg-time-col "Time point"
       --vae-hvg-min-cells-per-batch 256
-      --vae-preload-dense-max-gb 4.0
+      --vae-preload-dense-max-gb "$VAE_PRELOAD_DENSE_MAX_GB"
       --vae-amp-dtype bf16
       --no-vae-use-raw
       --vae-batch-aware-hvg
@@ -657,7 +687,7 @@ launch_job() {
     if [[ -n "$multi_gpu_devices_arg" ]]; then
       CMD+=(--multi-gpu-devices "$multi_gpu_devices_arg")
     fi
-    echo "CREDO resource plan: mode=v2-direct gpu_resource=$gpu split=$fold fold=$fold threads_per_job=$THREADS_PER_JOB cpu_affinity=${core_range:-unpinned} multi_gpu_per_job=$MULTI_GPU_PER_JOB epochs=$setting_epochs steps=$setting_steps eval_steps=$setting_eval_steps basis=$program_basis ecology=$ecology_mode growth_intercept=$growth_intercept guide_confident_only=$GUIDE_CONFIDENT_ONLY shared_guide_embedding=$SHARED_GUIDE_EMBEDDING activation_checkpointing=$job_activation_checkpointing expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE"
+    echo "CREDO resource plan: mode=v2-direct gpu_resource=$gpu split=$fold fold=$fold threads_per_job=$THREADS_PER_JOB cpu_affinity=${core_range:-unpinned} multi_gpu_per_job=$MULTI_GPU_PER_JOB epochs=$setting_epochs steps=$setting_steps eval_steps=$setting_eval_steps basis=$program_basis ecology=$ecology_mode growth_intercept=$growth_intercept guide_confident_only=$GUIDE_CONFIDENT_ONLY shared_guide_embedding=$SHARED_GUIDE_EMBEDDING activation_checkpointing=$job_activation_checkpointing expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE vae_batch_size=$VAE_BATCH_SIZE vae_encode_batch_size=$VAE_ENCODE_BATCH_SIZE vae_preload_dense_max_gb=$VAE_PRELOAD_DENSE_MAX_GB"
     if [[ "$job_activation_checkpointing" != "$ACTIVATION_CHECKPOINTING" ]]; then
       echo "CREDO warning: requested ACTIVATION_CHECKPOINTING=$ACTIVATION_CHECKPOINTING but max_active=$max_active is high; using activation_checkpointing=$job_activation_checkpointing for this job. Set ALLOW_UNSAFE_NO_CHECKPOINTING=1 to override."
     fi
