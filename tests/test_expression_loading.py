@@ -1,0 +1,63 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import anndata as ad
+import numpy as np
+import pandas as pd
+import pytest
+import scipy.sparse as sp
+
+from cape.data.hnscc import load_hnscc_expression
+
+
+def _write_h5ad(path: Path, matrix: sp.spmatrix, var: pd.DataFrame | None = None) -> None:
+    obs = pd.DataFrame({"cell_id": [f"cell_{idx}" for idx in range(matrix.shape[0])]})
+    if var is None:
+        var = pd.DataFrame(index=[f"gene_{idx}" for idx in range(matrix.shape[1])])
+    ad.AnnData(X=matrix, obs=obs, var=var).write_h5ad(path)
+
+
+def test_parallel_expression_loading_matches_serial(tmp_path: Path) -> None:
+    rng = np.random.default_rng(7)
+    matrix = sp.csr_matrix(rng.poisson(1.5, size=(48, 32)).astype(np.float32))
+    var = pd.DataFrame(
+        {"hv_gene": [idx % 2 == 0 for idx in range(matrix.shape[1])]},
+        index=[f"gene_{idx}" for idx in range(matrix.shape[1])],
+    )
+    path = tmp_path / "synthetic.h5ad"
+    _write_h5ad(path, matrix, var)
+
+    rows = np.arange(3, 41, 2)
+    _, expr_serial, genes_serial, meta_serial = load_hnscc_expression(
+        str(path),
+        gene_mask_col="hv_gene",
+        row_indices=rows,
+        n_workers=0,
+        chunk_size=7,
+    )
+    _, expr_parallel, genes_parallel, meta_parallel = load_hnscc_expression(
+        str(path),
+        gene_mask_col="hv_gene",
+        row_indices=rows,
+        n_workers=2,
+        chunk_size=7,
+    )
+
+    assert genes_parallel == genes_serial
+    assert meta_parallel["selected_gene_indices"] == meta_serial["selected_gene_indices"]
+    assert np.allclose(meta_parallel["full_library_totals"], meta_serial["full_library_totals"])
+    assert (expr_parallel != expr_serial).nnz == 0
+
+
+def test_empty_gene_mask_is_treated_as_missing_and_refuses_full_scan(tmp_path: Path) -> None:
+    path = tmp_path / "wide.h5ad"
+    _write_h5ad(path, sp.csr_matrix((4, 6001), dtype=np.float32))
+
+    with pytest.raises(ValueError, match="Refusing to materialize the full transcriptome"):
+        load_hnscc_expression(
+            str(path),
+            gene_mask_col="",
+            top_genes=0,
+            allow_full_gene_scan=False,
+        )

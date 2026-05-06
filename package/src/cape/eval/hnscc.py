@@ -1,4 +1,4 @@
-"""HNSCC-specific evaluation helpers for CAPE runs."""
+"""HNSCC-specific evaluation helpers for CREDO runs."""
 from __future__ import annotations
 
 from typing import Optional

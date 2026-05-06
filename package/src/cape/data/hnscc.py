@@ -1,6 +1,7 @@
-"""Reusable HNSCC data helpers for CAPE experiments."""
+"""Reusable HNSCC data helpers for CREDO experiments."""
 from __future__ import annotations
 
+from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 import hashlib
 import json
@@ -102,7 +103,7 @@ def _validate_count_matrix(
         import warnings
         message = (
             f"{name} matrix has only {frac_integer:.0%} near-integer values in a sample "
-            f"of {len(sample)} entries. Expected raw counts — double-check the source layer.",
+            f"of {len(sample)} entries. Expected raw counts — double-check the source layer."
         )
         if strict:
             raise ValueError(message)
@@ -139,29 +140,155 @@ def _chunked_row_sums(
     return totals
 
 
-def _materialize_selected_matrix(
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"none", "null", "na"}:
+        return None
+    return text
+
+
+def _row_index_array(row_indices: Sequence[int] | np.ndarray | None, *, n_rows: int) -> np.ndarray | None:
+    if row_indices is None:
+        return None
+    rows = np.asarray(row_indices, dtype=np.int64)
+    if rows.ndim != 1:
+        raise ValueError("row_indices must be one-dimensional.")
+    if len(rows) and (rows.min() < 0 or rows.max() >= n_rows):
+        raise IndexError("row_indices contains values outside the expression matrix.")
+    return rows
+
+
+def _row_batches(
+    *,
+    n_rows: int,
+    row_indices: np.ndarray | None = None,
+    chunk_size: int = 1024,
+) -> list[np.ndarray]:
+    chunk_size = max(1, int(chunk_size))
+    if row_indices is None:
+        return [
+            np.arange(start, min(start + chunk_size, n_rows), dtype=np.int64)
+            for start in range(0, n_rows, chunk_size)
+        ]
+    return [
+        row_indices[start:min(start + chunk_size, len(row_indices))]
+        for start in range(0, len(row_indices), chunk_size)
+    ]
+
+
+def _chunk_shards(row_batches: list[np.ndarray], n_workers: int) -> list[list[np.ndarray]]:
+    workers = max(1, min(int(n_workers), len(row_batches)))
+    shard_size = int(np.ceil(len(row_batches) / workers))
+    return [
+        row_batches[start:start + shard_size]
+        for start in range(0, len(row_batches), shard_size)
+    ]
+
+
+def _materialize_expression_and_totals_serial(
     source,
     selected_idx: np.ndarray,
     *,
     n_rows: int,
-    chunk_size: int = 2048,
-) -> sp.csr_matrix:
-    if sp.issparse(source):
-        return source[:, selected_idx].tocsr().astype(np.float32)
-    if isinstance(source, np.ndarray):
-        return sp.csr_matrix(np.asarray(source[:, selected_idx], dtype=np.float32))
-
-    batches: list[sp.csr_matrix] = []
-    for start in range(0, n_rows, chunk_size):
-        stop = min(start + chunk_size, n_rows)
-        batch = _materialize_chunk(source[start:stop, selected_idx])
+    row_indices: np.ndarray | None = None,
+    chunk_size: int = 1024,
+) -> tuple[np.ndarray, sp.csr_matrix]:
+    rows = _row_batches(n_rows=n_rows, row_indices=row_indices, chunk_size=chunk_size)
+    totals_parts: list[np.ndarray] = []
+    selected_parts: list[sp.csr_matrix] = []
+    for row_batch in rows:
+        batch = _materialize_chunk(source[row_batch, :])
         if sp.issparse(batch):
-            batches.append(batch.tocsr().astype(np.float32))
+            totals_parts.append(np.asarray(batch.sum(axis=1)).ravel().astype(np.float32))
+            selected_parts.append(batch[:, selected_idx].tocsr().astype(np.float32))
         else:
-            batches.append(sp.csr_matrix(np.asarray(batch, dtype=np.float32)))
-    if not batches:
-        return sp.csr_matrix((n_rows, len(selected_idx)), dtype=np.float32)
-    return sp.vstack(batches, format="csr").astype(np.float32)
+            arr = np.asarray(batch, dtype=np.float32)
+            totals_parts.append(arr.sum(axis=1, dtype=np.float32))
+            selected_parts.append(sp.csr_matrix(arr[:, selected_idx]))
+    if totals_parts:
+        totals = np.concatenate(totals_parts).astype(np.float32, copy=False)
+        expr = sp.vstack(selected_parts, format="csr").astype(np.float32)
+    else:
+        totals = np.zeros(0, dtype=np.float32)
+        expr = sp.csr_matrix((0, len(selected_idx)), dtype=np.float32)
+    return totals, expr
+
+
+def _expression_source_from_adata(adata: ad.AnnData, *, layer: str | None, use_raw: bool):
+    if layer is not None:
+        return adata.layers[layer]
+    if use_raw:
+        return adata.raw.X
+    return adata.X
+
+
+def _read_expression_shard_worker(payload: tuple) -> tuple[np.ndarray, sp.csr_matrix]:
+    path, layer, use_raw, selected_idx_list, row_batch_lists = payload
+    selected_idx = np.asarray(selected_idx_list, dtype=np.int64)
+    adata = ad.read_h5ad(path, backed="r")
+    try:
+        source = _expression_source_from_adata(adata, layer=layer, use_raw=use_raw)
+        totals_parts: list[np.ndarray] = []
+        selected_parts: list[sp.csr_matrix] = []
+        for row_batch_list in row_batch_lists:
+            row_batch = np.asarray(row_batch_list, dtype=np.int64)
+            batch = _materialize_chunk(source[row_batch, :])
+            if sp.issparse(batch):
+                totals_parts.append(np.asarray(batch.sum(axis=1)).ravel().astype(np.float32))
+                selected_parts.append(batch[:, selected_idx].tocsr().astype(np.float32))
+            else:
+                arr = np.asarray(batch, dtype=np.float32)
+                totals_parts.append(arr.sum(axis=1, dtype=np.float32))
+                selected_parts.append(sp.csr_matrix(arr[:, selected_idx]))
+        return (
+            np.concatenate(totals_parts).astype(np.float32, copy=False),
+            sp.vstack(selected_parts, format="csr").astype(np.float32),
+        )
+    finally:
+        if hasattr(adata, "file") and adata.file is not None:
+            adata.file.close()
+
+
+def _materialize_expression_and_totals_parallel(
+    path: str,
+    *,
+    layer: str | None,
+    use_raw: bool,
+    selected_idx: np.ndarray,
+    n_rows: int,
+    row_indices: np.ndarray | None = None,
+    chunk_size: int = 1024,
+    n_workers: int = 0,
+) -> tuple[np.ndarray, sp.csr_matrix]:
+    rows = _row_batches(n_rows=n_rows, row_indices=row_indices, chunk_size=chunk_size)
+    if not rows:
+        return (
+            np.zeros(0, dtype=np.float32),
+            sp.csr_matrix((0, len(selected_idx)), dtype=np.float32),
+        )
+    shards = _chunk_shards(rows, n_workers)
+    payloads = [
+        (
+            str(path),
+            layer,
+            bool(use_raw),
+            selected_idx.astype(np.int64).tolist(),
+            [row_batch.tolist() for row_batch in shard],
+        )
+        for shard in shards
+    ]
+    totals_parts: list[np.ndarray] = []
+    selected_parts: list[sp.csr_matrix] = []
+    with ProcessPoolExecutor(max_workers=len(payloads)) as pool:
+        for totals, selected in pool.map(_read_expression_shard_worker, payloads):
+            totals_parts.append(totals)
+            selected_parts.append(selected)
+    return (
+        np.concatenate(totals_parts).astype(np.float32, copy=False),
+        sp.vstack(selected_parts, format="csr").astype(np.float32),
+    )
 
 
 def _dense_cache_limit_bytes(max_gb: float) -> int:
@@ -200,6 +327,9 @@ def load_hnscc_expression(
     allow_full_gene_scan: bool = False,
     allow_precomputed_hv_score: bool = False,
     allow_empty_gene_mask_fallback: bool = False,
+    row_indices: Sequence[int] | np.ndarray | None = None,
+    n_workers: int = 0,
+    chunk_size: int = 1024,
 ) -> tuple[pd.DataFrame, sp.csr_matrix, list[str], dict]:
     """Load expression matrix from an h5ad file.
 
@@ -229,6 +359,9 @@ def load_hnscc_expression(
     strict_counts : bool
         If True, a non-count-like matrix raises an error instead of a warning.
     """
+    layer = _normalize_optional_text(layer)
+    gene_mask_col = _normalize_optional_text(gene_mask_col)
+
     adata = ad.read_h5ad(path, backed="r")
     obs = adata.obs.copy()
     if layer is not None and layer in adata.layers:
@@ -260,6 +393,9 @@ def load_hnscc_expression(
         var = adata.var.copy()
 
     n_rows, n_cols = int(source.shape[0]), int(source.shape[1])
+    resolved_rows = _row_index_array(row_indices, n_rows=n_rows)
+    if resolved_rows is not None:
+        obs = obs.iloc[resolved_rows].copy()
     if validate_counts:
         sample_rows = min(256, n_rows)
         sample = _materialize_chunk(source[:sample_rows])
@@ -324,8 +460,27 @@ def load_hnscc_expression(
     else:
         selected_idx = candidate_idx
 
-    full_library_totals = _chunked_row_sums(source, n_rows=n_rows)
-    expr = _materialize_selected_matrix(source, selected_idx, n_rows=n_rows)
+    if int(n_workers) > 1:
+        if hasattr(adata, "file") and adata.file is not None:
+            adata.file.close()
+        full_library_totals, expr = _materialize_expression_and_totals_parallel(
+            path,
+            layer=layer,
+            use_raw=use_raw,
+            selected_idx=selected_idx,
+            n_rows=n_rows,
+            row_indices=resolved_rows,
+            chunk_size=chunk_size,
+            n_workers=n_workers,
+        )
+    else:
+        full_library_totals, expr = _materialize_expression_and_totals_serial(
+            source,
+            selected_idx,
+            n_rows=n_rows,
+            row_indices=resolved_rows,
+            chunk_size=chunk_size,
+        )
 
     gene_names = [str(name) for name in var.index[selected_idx].tolist()]
     meta = {
@@ -337,6 +492,9 @@ def load_hnscc_expression(
         "gene_names": gene_names,
         "selected_gene_indices": selected_idx.astype(np.int64).tolist(),
         "full_library_totals": full_library_totals,
+        "row_indices": resolved_rows.astype(np.int64).tolist() if resolved_rows is not None else None,
+        "expression_workers": int(n_workers),
+        "expression_chunk_size": int(chunk_size),
         "allow_full_gene_scan": bool(allow_full_gene_scan),
         "allow_empty_gene_mask_fallback": bool(allow_empty_gene_mask_fallback),
     }
@@ -883,6 +1041,8 @@ def build_vae_latent(
     vae_grad_clip: float = 1.0,
     vae_seed: int = 0,
     encode_batch_size: int = 4096,
+    expression_workers: int = 0,
+    expression_chunk_size: int = 1024,
     preload_dense_max_gb: float = 4.0,
     reuse_artifact: bool = True,
     vae_use_amp: bool = True,
@@ -973,14 +1133,12 @@ def build_vae_latent(
         strict_counts=strict_counts,
         allow_full_gene_scan=allow_full_gene_scan,
         allow_empty_gene_mask_fallback=allow_empty_gene_mask_fallback,
+        row_indices=kept_positions,
+        n_workers=expression_workers,
+        chunk_size=expression_chunk_size,
     )
     candidate_gene_indices = np.asarray(expr_meta["selected_gene_indices"], dtype=np.int64)
     library_totals = np.asarray(expr_meta["full_library_totals"], dtype=np.float32)
-
-    # Align rows if prepare_hnscc_obs filtered some cells
-    if kept_positions is not None:
-        expr_candidate = expr_candidate[kept_positions]
-        library_totals = library_totals[kept_positions]
 
     n_cells = expr_candidate.shape[0]
     if n_cells != len(obs):

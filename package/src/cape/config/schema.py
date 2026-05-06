@@ -1,4 +1,4 @@
-"""Pydantic configuration schemas for cape.
+"""Pydantic configuration schemas for CREDO.
 
 Every training run is reconstructable from one of these config objects.
 """
@@ -42,6 +42,8 @@ class VAEConfig(BaseModel):
     target_sum: float = 1e4
     strict_layer: bool = True
     strict_counts: bool = True
+    expression_workers: int = 0
+    expression_chunk_size: int = 1024
     batch_aware_hvg: bool = True
     hvg_batch_col: str = "Library"
     hvg_time_col: str = "Time point"

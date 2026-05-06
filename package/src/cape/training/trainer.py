@@ -1137,6 +1137,10 @@ class Trainer:
         self._patience_counter = 0
         active_pids = self._active_perturbation_ids(stage)
         perturbation_batch_size = self._perturbation_batch_size(active_pids)
+        print(
+            f"[{stage}] Active perturbations={len(active_pids)} "
+            f"batch_pids={perturbation_batch_size}"
+        )
 
         # Stage-based parameter freezing
         if stage == "C":

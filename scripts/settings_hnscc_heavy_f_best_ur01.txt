@@ -1,0 +1,7 @@
+# Best fold-0 candidate from local launcher logs in runs/:
+# test acc=0.4333, test UOT=30.2506, test mass err=0.0659,
+# test state TV=0.1943, train peak ~=50.3 GB.
+#
+# Format:
+# tag|embedding|mediator|programs|hidden|depth|particles|eval_particles|eval_target|max_atoms|max_active|lambda_ctrl|lambda_weak|growth_reg|steps|eval_steps|growth_intercept|program_basis|ecology|epochs
+heavy_f_best_ur01_h1344_d7_prog42_p352_s28_active40_lc2e3_lw20_gr5e4_nogint_e1800|116|116|42|1344|7|352|1408|2816|4096|40|2e-3|0.20|5e-4|28|28|0|learned|on|1800
