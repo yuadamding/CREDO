@@ -76,6 +76,23 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
     )
     sig_path = tmp_path / "signature_group_scores.csv"
     sig.to_csv(sig_path, index=False)
+    cf = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "Notch1_sg1",
+                "target_gene": "NOTCH1",
+                "delta_log_mass_fact_vs_ref": 0.7,
+                "geom_shift_fact_vs_ref": 1.2,
+                "growth_action_fact": 0.3,
+                "drift_action_fact": 0.4,
+                "diffusion_action_fact": 0.5,
+                "context_dependence_geom": 0.6,
+                "context_dependence_mass": 0.2,
+            }
+        ]
+    )
+    cf_path = tmp_path / "counterfactual_biology_effects.csv"
+    cf.to_csv(cf_path, index=False)
     out_dir = tmp_path / "out"
     subprocess.run(
         [
@@ -87,6 +104,8 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
             str(shared_root),
             "--signature-scores",
             str(sig_path),
+            "--counterfactual-effects",
+            str(cf_path),
             "--output-dir",
             str(out_dir),
         ],
@@ -97,6 +116,10 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
     assert notch["target_gene"] == "NOTCH1"
     assert notch["delta_tnf_expansion_score"] == 1.5
     assert notch["delta_autocrine_tnf_tsk_score"] == 2.0
+    assert notch["delta_log_mass_fact_vs_ref"] == 0.7
+    assert notch["geom_shift_fact_vs_ref"] == 1.2
+    assert notch["diffusion_action"] == 0.5
+    assert notch["context_dependence_geom"] == 0.6
     assert notch["shared_guide_null_gap"] > 0
 
 

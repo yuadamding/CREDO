@@ -1,10 +1,10 @@
 """Weak-form PINN residual loss.
 
-For diagonal diffusion, the generator of the process applied to a test
-function psi_m(z) is:
+For diagonal diffusion and normalized within-perturbation laws, the generator
+of the process applied to a test function psi_m(z) is:
 
     L_g psi = grad(psi) . v_g  +  (1/2) sum_j sigma_{g,j}^2 d^2psi/dz_j^2
-              + r_g * psi
+              + (r_g - E_g[r_g]) * psi
 
 We use Gaussian RBF test functions:
     psi_m(z) = exp(-||z - c_m||^2 / (2 h_m^2))
@@ -16,6 +16,10 @@ The residual is:
                 - E_hat[w_k L_g psi_m(Z_k)]
 
 and the loss is sum_{g,m,k} R_{g,m,k}^2.
+
+The centering of the reaction term is intentional: total growth changes the
+finite measure mass, while only relative growth reshapes the normalized
+conditional law regularized here.
 
 Memory-efficient implementation: avoids materializing [G, N, M, d] tensors.
 """
@@ -74,13 +78,13 @@ class GaussianRBFTestFunctions:
         z: torch.Tensor,        # [G, N, d]
         v: torch.Tensor,        # [G, N, d]  drift
         sigma: torch.Tensor,    # [G, N, d]  diffusion std
-        r: torch.Tensor,        # [G, N]     growth
+        r: torch.Tensor,        # [G, N]     centered growth for normalized law
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute psi(z) and E_gen = w . (L_g psi) without [G,N,M,d] intermediates.
 
         Returns:
             psi: [G, N, M]
-            gen_psi: [G, N, M]  where gen_psi[g,n,m] = (grad_psi . v + 0.5*sigma^2.hess_psi + r*psi)
+            gen_psi: [G, N, M]  where gen_psi[g,n,m] = (grad_psi . v + 0.5*sigma^2.hess_psi + r_centered*psi)
         """
         diff, psi = self._diff_and_psi(z)  # [G, N, M, d], [G, N, M]
         h2 = self.h ** 2
@@ -107,7 +111,9 @@ class GaussianRBFTestFunctions:
         # Delete diff to free memory before growth term
         del diff, diff_sq, diff_dot_v
 
-        # Growth term: r * psi -> [G, N, M]
+        # Relative growth term: r_centered * psi -> [G, N, M].
+        # The weak-form loss uses normalized weights, so r must be centered
+        # before reaching this contracted generator.
         growth_term = r.unsqueeze(-1) * psi  # [G, N, M]
 
         gen_psi = drift_term + diff_term + growth_term  # [G, N, M]
@@ -213,10 +219,18 @@ class WeakFormLoss(nn.Module):
         for k in range(K):
             dtau_k = tau_steps[k + 1] - tau_steps[k]
 
+            # The weak-form residual regularizes the normalized conditional
+            # law for each perturbation. Center growth under the same
+            # normalized weights; common growth should change mass only, not
+            # the within-perturbation state distribution.
+            growth_k = growth_steps[k]
+            growth_mean_k = (w_norm[k] * growth_k).sum(dim=-1, keepdim=True)
+            growth_centered_k = growth_k - growth_mean_k
+
             # Generator applied to test functions at step k
             # Uses memory-efficient contracted computation
             psi_k, gen_psi_k = test_fns.generator_contracted(
-                z_steps[k], drift_steps[k], sigma_steps[k], growth_steps[k]
+                z_steps[k], drift_steps[k], sigma_steps[k], growth_centered_k
             )
 
             # E_hat[w_k * L_g psi_m]

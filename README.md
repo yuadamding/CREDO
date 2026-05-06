@@ -72,13 +72,16 @@ COMPARE_ROOT=runs/hnscc_random_h100_heavy_f_best_ur01_guide_vs_shared_4cv_YYYYMM
 bash scripts/run_hnscc_biological_findings.sh
 ```
 
-This scores built-in TNF-expansion, autocrine-TNF/TSK, pEMT, and CIS-like signatures in the HNSCC AnnData, combines them with per-perturbation CV endpoint/state metrics, and writes `biological_effects_per_perturbation.csv`. Set `COUNTERFACTUAL_RUN_DIR=/path/to/fold/run` to add factual-vs-reference rollouts with mass, geometry, growth, drift, diffusion, and optional context-clamped readouts. Set `BULK_EXPR` and `BULK_META` to project the same signatures onto a human bulk cohort such as GSE227919.
+This scores built-in TNF-expansion, autocrine-TNF/TSK, pEMT, and CIS-like signatures in the HNSCC AnnData, combines them with per-perturbation CV endpoint/state metrics, and writes `biological_effects_per_perturbation.csv`. Set `COUNTERFACTUAL_RUN_DIR=/path/to/fold/run` to run same-start factual-vs-reference rollouts before final extraction and merge mass, geometry, growth, drift, diffusion, and optional context-clamped readouts into the final table. Set `BULK_EXPR` and `BULK_META` to project the same signatures onto a human bulk cohort such as GSE227919; those trends are signature-level validation, not target-specific human validation.
 
 Implementation notes:
 
 - Reports, run metadata, and new entry points use `CREDO`.
 - Legacy `cape` imports remain valid; `credo` is an alias package for new code.
+- Every new training run writes `software_versions.json` with package version, Git SHA/dirty state, command line, Python/PyTorch/CUDA versions, and data-file metadata. Set `CREDO_DATA_SHA256` to record a precomputed full H5AD hash without re-reading the shared data file in every parallel job.
 - `scripts/_run_hnscc_cv.sh` owns shared launcher logic and CREDO profiles.
 - Parallel expression loading is shard-based: each worker opens the backed h5ad read-only and processes multiple row chunks.
 - Logs start with a `CREDO resource plan` showing GPU, CPU, expression-worker, and command details.
+- The endpoint metric named UOT in summaries is a normalized Sinkhorn geometry proxy plus log-mass penalty, not a full KL-relaxed finite-measure UOT objective.
+- Ecological context is computed from rollout states, weights, and masses; guide identity affects context indirectly through the dynamics, not as a direct argument to the context aggregator.
 - Output goes to `runs/`; reusable model exports go to `models/`.

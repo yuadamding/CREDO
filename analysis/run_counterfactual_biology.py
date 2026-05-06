@@ -24,6 +24,8 @@ from cape.models.full_model import FullDynamicsModel  # noqa: E402
 from cape.models.simulator import _control_embedding_context, initialise_particles  # noqa: E402
 from cape.models.weighted_sde import ParticleRollout, WeightedParticleSimulator  # noqa: E402
 
+from hnscc_biology_common import infer_target_gene  # noqa: E402
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -349,12 +351,14 @@ def main() -> None:
         ref_log_mass = float(_terminal_log_mass(reference)[0].item())
         fact_mean = _weighted_mean(factual.terminal_z[0], factual.terminal_logw[0])
         ref_mean = _weighted_mean(reference.terminal_z[0], reference.terminal_logw[0])
+        geom_shift = float(torch.linalg.norm(fact_mean - ref_mean).item())
         fact_program = _program_summary(model, factual, state_labels)
         ref_program = _program_summary(model, reference, state_labels)
         program_shift = abs(fact_program["dominant_program_fraction"] - ref_program["dominant_program_fraction"])
+        fact_actions = _action_summary(factual)
         row = {
             "perturbation_id": pid,
-            "target_gene": pid,
+            "target_gene": infer_target_gene(pid),
             "source_split": args.source_split,
             "n_p4": int(endpoint.initial[pid].n_atoms),
             "n_p60": int(endpoint.terminal[pid].n_atoms),
@@ -362,19 +366,26 @@ def main() -> None:
             "log_mass_reference": ref_log_mass,
             "delta_log_mass_fact_vs_ref": fact_log_mass - ref_log_mass,
             "mass_ratio_fact_vs_ref": float(np.exp(fact_log_mass - ref_log_mass)),
-            "geometry_shift_l2": float(torch.linalg.norm(fact_mean - ref_mean).item()),
+            "geometry_shift_l2": geom_shift,
+            "geom_shift_fact_vs_ref": geom_shift,
             "terminal_entropy_factual": _entropy(factual.terminal_logw[0]),
             "terminal_entropy_reference": _entropy(reference.terminal_logw[0]),
             "dominant_program_factual": fact_program.get("dominant_program_label", fact_program["dominant_program_index"]),
             "dominant_program_reference": ref_program.get("dominant_program_label", ref_program["dominant_program_index"]),
             "program_fraction_shift_abs": program_shift,
-            **_action_summary(factual),
         }
+        for key, value in fact_actions.items():
+            row[key] = value
+            row[f"{key}_fact"] = value
         if clamped is not None:
             clamped_mean = _weighted_mean(clamped.terminal_z[0], clamped.terminal_logw[0])
-            row["context_dependence"] = float(torch.linalg.norm(fact_mean - clamped_mean).item())
+            context_geom = float(torch.linalg.norm(fact_mean - clamped_mean).item())
             row["log_mass_clamped_context"] = float(_terminal_log_mass(clamped)[0].item())
+            context_mass = row["log_mass_factual"] - row["log_mass_clamped_context"]
+            row["context_dependence"] = context_geom
+            row["context_dependence_geom"] = context_geom
             row["delta_log_mass_self_vs_clamped"] = row["log_mass_factual"] - row["log_mass_clamped_context"]
+            row["context_dependence_mass"] = abs(context_mass)
         rows.append(row)
 
     out = pd.DataFrame(rows).sort_values("delta_log_mass_fact_vs_ref", ascending=False)

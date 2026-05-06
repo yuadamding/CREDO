@@ -24,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--shared-cv-root", default=None, help="Optional shared-guide/null CV root.")
     parser.add_argument("--signature-scores", default=None, help="Optional signature_group_scores.csv.")
     parser.add_argument("--human-trends", default=None, help="Optional bulk_signature_stage_trends.csv.")
+    parser.add_argument("--counterfactual-effects", default=None, help="Optional counterfactual_biology_effects.csv.")
     parser.add_argument("--output-dir", default="results/biology")
     parser.add_argument("--split", choices=["test", "train"], default="test")
     parser.add_argument("--top-n", type=int, default=40)
@@ -205,6 +206,26 @@ def _load_human_trends(path: str | Path) -> pd.DataFrame:
     return out
 
 
+def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    if "perturbation_id" not in df.columns:
+        raise KeyError("Counterfactual effects file must contain perturbation_id.")
+    out = df.copy()
+    if "geometry_shift_l2" in out.columns and "geom_shift_fact_vs_ref" not in out.columns:
+        out["geom_shift_fact_vs_ref"] = out["geometry_shift_l2"]
+    if "context_dependence" in out.columns and "context_dependence_geom" not in out.columns:
+        out["context_dependence_geom"] = out["context_dependence"]
+    if "delta_log_mass_self_vs_clamped" in out.columns and "context_dependence_mass" not in out.columns:
+        out["context_dependence_mass"] = out["delta_log_mass_self_vs_clamped"].abs()
+    if "growth_action_fact" in out.columns and "growth_action" not in out.columns:
+        out["growth_action"] = out["growth_action_fact"]
+    if "drift_action_fact" in out.columns and "drift_action" not in out.columns:
+        out["drift_action"] = out["drift_action_fact"]
+    if "diffusion_action_fact" in out.columns and "diffusion_action" not in out.columns:
+        out["diffusion_action"] = out["diffusion_action_fact"]
+    return out.drop(columns=["target_gene"], errors="ignore")
+
+
 def _add_priority(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["delta_log_mass"] = out.get("pred_log_expansion_mean", out.get("true_log_expansion_mean"))
@@ -266,6 +287,13 @@ def main() -> None:
         human = _load_human_trends(args.human_trends)
         for col, value in human.iloc[0].items():
             effects[col] = value
+
+    if args.counterfactual_effects:
+        effects = effects.merge(
+            _load_counterfactual_effects(args.counterfactual_effects),
+            on="perturbation_id",
+            how="left",
+        )
 
     ranked = _add_priority(effects)
     ranked.to_csv(output_dir / "biological_effects_per_perturbation.csv", index=False)

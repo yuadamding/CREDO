@@ -406,6 +406,11 @@ class PerturbSeqDynamicsData:
         density_correct: bool = False,
     ) -> FiniteMeasure:
         """Build a FiniteMeasure for a given perturbation / time."""
+        if density_correct:
+            raise NotImplementedError(
+                "density_correct=True is not implemented for PerturbSeqDynamicsData.build_measure; "
+                "use explicit precomputed cell weights or leave density_correct=False."
+            )
         cells = self.cell_state.select_time(time_label).select_perturbation(perturbation_id)
         if sample_id != "pooled":
             sample_mask = cells.df["sample_id"].astype(str).eq(str(sample_id)).to_numpy()

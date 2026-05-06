@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import subprocess
 import sys
 import time
@@ -26,6 +28,7 @@ import torch
 ROOT = Path(__file__).parent.parent / "package"
 sys.path.insert(0, str(ROOT / "src"))
 
+import cape
 from cape.config.schema import LatentConfig, ModelConfig, RunConfig, SimulationConfig, TrainingConfig, VAEConfig
 from cape.data.hnscc import (
     DEFAULT_LATENT_KEY,
@@ -252,6 +255,75 @@ def resolve_git_sha(repo_root: Path) -> str | None:
         if sha:
             return sha
     return None
+
+
+def resolve_git_dirty(repo_root: Path) -> bool | None:
+    for candidate in [repo_root, *repo_root.parents]:
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(candidate), "status", "--short"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            continue
+        return bool(result.stdout.strip())
+    return None
+
+
+def file_metadata(path: str | None) -> dict:
+    if not path:
+        return {"path": None, "exists": False}
+    data_path = Path(path).expanduser()
+    exists = data_path.exists()
+    out = {
+        "path": str(data_path),
+        "resolved_path": str(data_path.resolve()) if exists else None,
+        "exists": exists,
+    }
+    if exists:
+        stat = data_path.stat()
+        out.update(
+            {
+                "size_bytes": int(stat.st_size),
+                "mtime_ns": int(stat.st_mtime_ns),
+            }
+        )
+    if os.environ.get("CREDO_DATA_SHA256"):
+        out["sha256"] = os.environ["CREDO_DATA_SHA256"]
+    return out
+
+
+def software_versions_manifest(args: argparse.Namespace, *, git_sha: str | None, git_dirty: bool | None) -> dict:
+    cuda_devices = []
+    if torch.cuda.is_available():
+        cuda_devices = [
+            {
+                "index": idx,
+                "name": torch.cuda.get_device_name(idx),
+                "capability": ".".join(map(str, torch.cuda.get_device_capability(idx))),
+            }
+            for idx in range(torch.cuda.device_count())
+        ]
+    return {
+        "package_name": "credo",
+        "package_version": cape.__version__,
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
+        "command": [sys.executable, *sys.argv],
+        "python": sys.version,
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "torch_cuda": torch.version.cuda,
+        "cudnn": torch.backends.cudnn.version(),
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_devices": cuda_devices,
+        "numpy": np.__version__,
+        "pandas": pd.__version__,
+        "data_file": file_metadata(args.data_path),
+        "data_sha256_note": "Set CREDO_DATA_SHA256 to record a precomputed full data-file SHA256 without re-reading the shared H5AD in every parallel job.",
+    }
 
 
 def parse_device_list_arg(raw: str) -> list[str]:
@@ -539,6 +611,8 @@ def main() -> None:
     multi_gpu_devices = parse_device_list_arg(args.multi_gpu_devices)
     primary_device = multi_gpu_devices[0] if multi_gpu_devices else "auto"
     git_sha = resolve_git_sha(ROOT)
+    git_dirty = resolve_git_dirty(ROOT)
+    software_versions = software_versions_manifest(args, git_sha=git_sha, git_dirty=git_dirty)
     state_eval_enabled = state_key is not None
 
     if args.use_state_centroids and not state_eval_enabled:
@@ -946,8 +1020,10 @@ def main() -> None:
         "control_ids": control_ids,
         "state_labels": train_states if state_eval_enabled else None,
         "config": cfg.model_dump(),
+        "software_versions": software_versions,
     }
     (output_dir / "config.json").write_text(json.dumps(meta, indent=2))
+    (output_dir / "software_versions.json").write_text(json.dumps(software_versions, indent=2))
     split_result.manifest.to_csv(output_dir / "split_manifest.csv", index=False)
     split_summary.to_csv(output_dir / "split_summary.csv", index=False)
     split_assignments.to_csv(output_dir / "split_assignments.csv", index=False)
@@ -1071,6 +1147,9 @@ def main() -> None:
 
     results = {
         "method": "CREDO",
+        "package_version": cape.__version__,
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
         "train_time_s": round(train_time_s, 1),
         "best_checkpoint": str(evaluated_ckpt) if evaluated_ckpt is not None else None,
         "training_best_checkpoint": str(best_ckpt) if best_ckpt.exists() else None,
@@ -1102,6 +1181,8 @@ def main() -> None:
         "stage_d_epochs": args.stage_d_epochs,
         "epochs": args.epochs,
         "lambda_weak": args.lambda_weak,
+        "lambda_count": cfg.training.lambda_count,
+        "mass_supervision": "endpoint_geometry_plus_log_mass",
         "lambda_reg_growth_bias": args.lambda_reg_growth_bias,
         "max_active_perturbations": args.max_active_perturbations,
         "use_growth_intercept": args.use_growth_intercept,

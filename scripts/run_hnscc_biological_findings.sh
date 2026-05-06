@@ -50,6 +50,25 @@ if [[ -z "$WITH_GUIDE_ROOT" ]]; then
   exit 1
 fi
 
+COUNTERFACTUAL_ARGS=()
+if [[ -n "${COUNTERFACTUAL_RUN_DIR:-}" ]]; then
+  CF_OUT="${CF_OUT:-${OUTPUT_DIR}/counterfactual}"
+  CF_CONTEXT_CLAMPED="${CF_CONTEXT_CLAMPED:-1}"
+  CF_ARGS=()
+  if [[ "$CF_CONTEXT_CLAMPED" == "1" ]]; then
+    CF_ARGS=(--context-clamped)
+  fi
+  "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python analysis/run_counterfactual_biology.py \
+    --run-dir "$COUNTERFACTUAL_RUN_DIR" \
+    --data-path "$DATA_PATH" \
+    --output-dir "$CF_OUT" \
+    --source-split "$SPLIT" \
+    --n-particles "${CF_PARTICLES:-512}" \
+    --n-steps "${CF_STEPS:-28}" \
+    "${CF_ARGS[@]}"
+  COUNTERFACTUAL_ARGS=(--counterfactual-effects "$CF_OUT/counterfactual_biology_effects.csv")
+fi
+
 SHARED_ARGS=()
 if [[ -n "$SHARED_GUIDE_ROOT" && -d "$SHARED_GUIDE_ROOT" ]]; then
   SHARED_ARGS=(--shared-cv-root "$SHARED_GUIDE_ROOT")
@@ -75,24 +94,8 @@ fi
   "${SIG_ARGS[@]}" \
   "${HUMAN_ARGS[@]}" \
   --split "$SPLIT" \
+  "${COUNTERFACTUAL_ARGS[@]}" \
   --output-dir "$OUTPUT_DIR"
-
-if [[ -n "${COUNTERFACTUAL_RUN_DIR:-}" ]]; then
-  CF_OUT="${CF_OUT:-${OUTPUT_DIR}/counterfactual}"
-  CF_CONTEXT_CLAMPED="${CF_CONTEXT_CLAMPED:-1}"
-  CF_ARGS=()
-  if [[ "$CF_CONTEXT_CLAMPED" == "1" ]]; then
-    CF_ARGS=(--context-clamped)
-  fi
-  "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python analysis/run_counterfactual_biology.py \
-    --run-dir "$COUNTERFACTUAL_RUN_DIR" \
-    --data-path "$DATA_PATH" \
-    --output-dir "$CF_OUT" \
-    --source-split "$SPLIT" \
-    --n-particles "${CF_PARTICLES:-512}" \
-    --n-steps "${CF_STEPS:-28}" \
-    "${CF_ARGS[@]}"
-fi
 
 echo "CREDO biological findings outputs:"
 find "$OUTPUT_DIR" -maxdepth 2 -type f | sort
