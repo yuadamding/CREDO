@@ -51,8 +51,18 @@ Entry points:
 | `scripts/run_hnscc_h100_heavy_f_parallel_4cv_2gpu.sh` | heavy_f WTA CV, one fold per GPU |
 | `scripts/run_hnscc_h100_heavy_f_fast_300ep.sh` | heavy_f fast random 4-fold CV |
 | `scripts/run_hnscc_h100_heavy_f_vram60_75_search_300ep.sh` | heavy_f fit search |
+| `scripts/run_hnscc_biological_findings.sh` | post-process CREDO CV outputs into perturbation biology, signature, and optional human-projection tables |
 | `scripts/run_hnscc_local_heavy_c_vae_9gb.sh` | local single-GPU 9 GB VAE-first smoke setting |
 | `scripts/prepare_hnscc_heavy_c_reuse.sh` | export a finished heavy_c CV run |
+
+Biological interpretation:
+
+```bash
+COMPARE_ROOT=runs/hnscc_random_h100_heavy_f_best_ur01_guide_vs_shared_4cv_YYYYMMDD_HHMMSS \
+bash scripts/run_hnscc_biological_findings.sh
+```
+
+This scores built-in TNF-expansion, autocrine-TNF/TSK, pEMT, and CIS-like signatures in the HNSCC AnnData, combines them with per-perturbation CV endpoint/state metrics, and writes `biological_effects_per_perturbation.csv`. Set `COUNTERFACTUAL_RUN_DIR=/path/to/fold/run` to add factual-vs-reference rollouts with mass, geometry, growth, drift, diffusion, and optional context-clamped readouts. Set `BULK_EXPR` and `BULK_META` to project the same signatures onto a human bulk cohort such as GSE227919.
 
 Implementation notes:
 
