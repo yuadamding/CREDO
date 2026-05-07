@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "package" / "src"))
 
 from cape.data.hnscc import prepare_hnscc_obs
-from hnscc_biology_common import load_signature_sets
+from hnscc_biology_common import candidate_gene_keys, load_signature_sets, normalize_gene_name
 
 
 def parse_args() -> argparse.Namespace:
@@ -39,7 +39,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _normalize_gene(name: object) -> str:
-    return str(name).strip().upper()
+    return normalize_gene_name(name)
 
 
 def _as_dense(matrix) -> np.ndarray:
@@ -97,12 +97,20 @@ def _resolve_signatures(var_names: pd.Index, signatures: dict[str, list[str]], m
     for sig_name, genes in signatures.items():
         matched = []
         missing = []
+        matched_set = set()
         for gene in genes:
-            idx = lookup.get(_normalize_gene(gene))
+            idx = None
+            for key in candidate_gene_keys(gene):
+                idx = lookup.get(key)
+                if idx is not None:
+                    break
             if idx is None:
                 missing.append(str(gene))
-            else:
+            elif idx not in matched_set:
+                matched_set.add(idx)
                 matched.append(idx)
+            else:
+                continue
         if len(matched) >= min_genes:
             resolved[sig_name] = matched
         coverage_rows.append(

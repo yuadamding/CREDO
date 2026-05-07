@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from hnscc_biology_common import load_signature_sets
+from hnscc_biology_common import candidate_gene_keys, load_signature_sets
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,8 +51,20 @@ def _load_expression(path: str | Path, *, gene_column: str | None, sep: str | No
 
 def _score_signature(expr_z: pd.DataFrame, genes: list[str], min_genes: int) -> tuple[pd.Series | None, list[str], list[str]]:
     lookup = {gene.upper(): gene for gene in expr_z.index.astype(str)}
-    matched = [lookup[gene.upper()] for gene in genes if gene.upper() in lookup]
-    missing = [gene for gene in genes if gene.upper() not in lookup]
+    matched = []
+    missing = []
+    seen = set()
+    for gene in genes:
+        hit = None
+        for key in candidate_gene_keys(gene):
+            if key in lookup:
+                hit = lookup[key]
+                break
+        if hit is None:
+            missing.append(gene)
+        elif hit not in seen:
+            seen.add(hit)
+            matched.append(hit)
     if len(matched) < min_genes:
         return None, matched, missing
     return expr_z.loc[matched].mean(axis=0), matched, missing

@@ -42,6 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-perturbations", type=int, default=0)
     parser.add_argument("--perturbations", default="", help="Comma-separated perturbation ids.")
     parser.add_argument("--context-clamped", action="store_true")
+    parser.add_argument("--fold-id", default=None, help="Optional fold label written to the output table.")
     return parser.parse_args()
 
 
@@ -172,6 +173,14 @@ def _entropy(logw: torch.Tensor) -> float:
     return float((-(w * torch.log(w + 1e-30)).sum(dim=-1)).item())
 
 
+def _action_deltas(fact: dict, ref: dict) -> dict:
+    out = {}
+    for key in ("growth_action", "drift_action", "diffusion_action"):
+        if key in fact and key in ref:
+            out[f"delta_{key}_fact_vs_ref"] = fact[key] - ref[key]
+    return out
+
+
 def _action_summary(rollout: ParticleRollout) -> dict:
     if rollout.growth_steps is None or rollout.drift_steps is None or rollout.sigma_steps is None:
         return {}
@@ -202,6 +211,10 @@ def _rollout_clamped_context(
     *,
     n_steps: int,
 ) -> ParticleRollout:
+    if context_steps.shape[0] < n_steps:
+        raise ValueError(
+            f"Clamped context has {context_steps.shape[0]} steps, but rollout requested {n_steps} steps."
+        )
     device = z0.device
     dtype = z0.dtype
     tau_steps = torch.linspace(0.0, 1.0, n_steps + 1, device=device, dtype=dtype)
@@ -318,6 +331,11 @@ def main() -> None:
     simulator = WeightedParticleSimulator(n_steps=args.n_steps, store_history=True)
 
     state_labels = config.get("state_labels") if bool(config.get("use_state_centroids", False)) else None
+    split_meta = config.get("split", {})
+    fold_id = args.fold_id
+    if fold_id is None:
+        fold_index = split_meta.get("fold_index")
+        fold_id = f"fold_{fold_index}" if fold_index is not None else run_dir.name
     rows = []
     for i, pid in enumerate(supported):
         seed = int(args.seed + i)
@@ -335,6 +353,7 @@ def main() -> None:
             reference = simulator.rollout(z0.clone(), logw0.clone(), model, log_m0.clone(), perturbation_ids=[pid])
 
         clamped = None
+        reference_clamped = None
         if args.context_clamped and reference.context_steps is not None:
             torch.manual_seed(seed)
             clamped = _rollout_clamped_context(
@@ -346,6 +365,17 @@ def main() -> None:
                 reference.context_steps,
                 n_steps=args.n_steps,
             )
+            with _control_embedding_context(model, pid, mode="reference_consistent"):
+                torch.manual_seed(seed)
+                reference_clamped = _rollout_clamped_context(
+                    model,
+                    z0.clone(),
+                    logw0.clone(),
+                    log_m0.clone(),
+                    pid,
+                    reference.context_steps,
+                    n_steps=args.n_steps,
+                )
 
         fact_log_mass = float(_terminal_log_mass(factual)[0].item())
         ref_log_mass = float(_terminal_log_mass(reference)[0].item())
@@ -356,9 +386,16 @@ def main() -> None:
         ref_program = _program_summary(model, reference, state_labels)
         program_shift = abs(fact_program["dominant_program_fraction"] - ref_program["dominant_program_fraction"])
         fact_actions = _action_summary(factual)
+        ref_actions = _action_summary(reference)
+        action_deltas = _action_deltas(fact_actions, ref_actions)
+        terminal_entropy_factual = _entropy(factual.terminal_logw[0])
+        terminal_entropy_reference = _entropy(reference.terminal_logw[0])
         row = {
             "perturbation_id": pid,
             "target_gene": infer_target_gene(pid),
+            "sgRNA_id": pid,
+            "fold_id": fold_id,
+            "run_dir": str(run_dir),
             "source_split": args.source_split,
             "n_p4": int(endpoint.initial[pid].n_atoms),
             "n_p60": int(endpoint.terminal[pid].n_atoms),
@@ -368,8 +405,11 @@ def main() -> None:
             "mass_ratio_fact_vs_ref": float(np.exp(fact_log_mass - ref_log_mass)),
             "geometry_shift_l2": geom_shift,
             "geom_shift_fact_vs_ref": geom_shift,
-            "terminal_entropy_factual": _entropy(factual.terminal_logw[0]),
-            "terminal_entropy_reference": _entropy(reference.terminal_logw[0]),
+            "terminal_entropy_factual": terminal_entropy_factual,
+            "terminal_entropy_reference": terminal_entropy_reference,
+            "terminal_state_entropy_fact": terminal_entropy_factual,
+            "terminal_state_entropy_ref": terminal_entropy_reference,
+            "terminal_entropy_delta_fact_vs_ref": terminal_entropy_factual - terminal_entropy_reference,
             "dominant_program_factual": fact_program.get("dominant_program_label", fact_program["dominant_program_index"]),
             "dominant_program_reference": ref_program.get("dominant_program_label", ref_program["dominant_program_index"]),
             "program_fraction_shift_abs": program_shift,
@@ -377,6 +417,9 @@ def main() -> None:
         for key, value in fact_actions.items():
             row[key] = value
             row[f"{key}_fact"] = value
+        for key, value in ref_actions.items():
+            row[f"{key}_ref"] = value
+        row.update(action_deltas)
         if clamped is not None:
             clamped_mean = _weighted_mean(clamped.terminal_z[0], clamped.terminal_logw[0])
             context_geom = float(torch.linalg.norm(fact_mean - clamped_mean).item())
@@ -386,6 +429,19 @@ def main() -> None:
             row["context_dependence_geom"] = context_geom
             row["delta_log_mass_self_vs_clamped"] = row["log_mass_factual"] - row["log_mass_clamped_context"]
             row["context_dependence_mass"] = abs(context_mass)
+            row["terminal_state_entropy_clamped"] = _entropy(clamped.terminal_logw[0])
+            clamped_actions = _action_summary(clamped)
+            for key, value in clamped_actions.items():
+                row[f"{key}_clamped_context"] = value
+        if reference_clamped is not None:
+            reference_clamped_mean = _weighted_mean(
+                reference_clamped.terminal_z[0],
+                reference_clamped.terminal_logw[0],
+            )
+            row["log_mass_reference_clamped_context"] = float(_terminal_log_mass(reference_clamped)[0].item())
+            row["geom_shift_ref_vs_ref_clamped"] = float(torch.linalg.norm(ref_mean - reference_clamped_mean).item())
+            row["delta_log_mass_ref_vs_ref_clamped"] = row["log_mass_reference"] - row["log_mass_reference_clamped_context"]
+            row["terminal_state_entropy_reference_clamped"] = _entropy(reference_clamped.terminal_logw[0])
         rows.append(row)
 
     out = pd.DataFrame(rows).sort_values("delta_log_mass_fact_vs_ref", ascending=False)

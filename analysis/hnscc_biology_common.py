@@ -67,6 +67,29 @@ BUILTIN_SIGNATURES: dict[str, list[str]] = {
 }
 
 
+GENE_ALIASES: dict[str, list[str]] = {
+    "TP63": ["TP63", "TRP63"],
+    "TRP63": ["TRP63", "TP63"],
+}
+
+
+def normalize_gene_name(name: object) -> str:
+    return str(name).strip().upper()
+
+
+def candidate_gene_keys(name: object) -> list[str]:
+    """Return normalized lookup keys, including simple mouse/human aliases."""
+    key = normalize_gene_name(name)
+    candidates = [normalize_gene_name(item) for item in GENE_ALIASES.get(key, [key])]
+    out: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            out.append(candidate)
+    return out
+
+
 def load_signature_sets(path: str | Path | None = None) -> dict[str, list[str]]:
     signatures = {name: list(genes) for name, genes in BUILTIN_SIGNATURES.items()}
     if path is None:

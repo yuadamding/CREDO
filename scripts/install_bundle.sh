@@ -18,7 +18,8 @@ SOLVER_BIN="$(resolve_solver_executable "$CONDA_BIN")" || {
   exit 1
 }
 ENV_NAME="${1:-cape-hnscc}"
-TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu128}"
+TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
+TORCH_SPEC="${TORCH_SPEC:-torch}"
 INSTALL_TORCH="${INSTALL_TORCH:-auto}"
 export CONDA_NO_PLUGINS="${CONDA_NO_PLUGINS:-true}"
 export PIP_NO_CACHE_DIR="${PIP_NO_CACHE_DIR:-1}"
@@ -79,7 +80,7 @@ then
 fi
 
 if [[ "$INSTALL_TORCH" == "1" || ( "$INSTALL_TORCH" == "auto" && "$torch_ok" != "1" ) ]]; then
-  "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python -m pip install --no-cache-dir --index-url "$TORCH_INDEX_URL" torch
+  "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python -m pip install --no-cache-dir --force-reinstall --index-url "$TORCH_INDEX_URL" "$TORCH_SPEC"
 fi
 "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python -m pip install --no-cache-dir -e package
 "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python scripts/verify_setup.py --data-path "$DATA_PATH"

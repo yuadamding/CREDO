@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "credo"
-version = "1.1.1"
+version = "1.1.2"
 description = "Compact CREDO HNSCC transfer package centered on heavy_c_finalist1_h896_d5_prog20_p320"
 requires-python = ">=3.11"
 dependencies = [

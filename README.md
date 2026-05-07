@@ -14,6 +14,8 @@ Install once:
 CONDA_BIN=/rsrch8/home/bcb/$USER/miniforge3/bin/conda bash scripts/install_bundle.sh cape-hnscc
 ```
 
+The installer defaults to the PyTorch CUDA 12.4 wheel index because the common H100/Jupyter driver stack reports CUDA driver 12.4. If you are on a newer-driver node and deliberately want another wheel family, set `TORCH_INDEX_URL`; if an incompatible Torch build is already installed, use `INSTALL_TORCH=1` to force replacement.
+
 If the env already exists and `python scripts/verify_setup.py` works, skip `conda env update`; just refresh the editable package with `python -m pip install --no-cache-dir -e package`.
 
 Recommended 2-H100 run:
@@ -44,7 +46,7 @@ GPU_LIST=0,1,2,3,4,5,6,7 \
 bash scripts/run_hnscc_h100_heavy_f_best_ur01_guide_vs_shared_4cv.sh
 ```
 
-That wrapper assumes no comparison report exists yet. It runs the best `ur01` setting for 4 folds with distinct guide embeddings and with one shared guide embedding, then writes combined `cv_summary.md`/`cv_summary.csv` under `COMPARE_ROOT`. `PARALLEL_ARMS=auto` is the default: on nodes with more visible GPUs than jobs per arm, it splits GPUs across the two arms so all useful GPUs are fed at once; on 4-GPU nodes it keeps one arm at a time with one fold per GPU. Set `PARALLEL_ARMS=0` only if you deliberately want serial arms, and set `REQUIRE_FULL_GPU_QUEUE=0` if you accept an underfilled queue.
+That wrapper assumes no comparison report exists yet. It runs the best `ur01` setting for 4 folds with distinct guide embeddings and with one shared guide embedding, then writes combined `cv_summary.md`/`cv_summary.csv` under `COMPARE_ROOT`. To reproduce the historical `ur01` comparison, it pins the older VAE/input defaults (`EXPRESSION_WORKERS=8`, `EXPRESSION_CHUNK_SIZE=2048`, `VAE_BATCH_SIZE=2048`, `VAE_ENCODE_BATCH_SIZE=8192`, `VAE_PRELOAD_DENSE_MAX_GB=4.0`) instead of inheriting the v2 launcher's newer throughput-tuned defaults; override those variables explicitly only for a new non-comparable rerun. `PARALLEL_ARMS=auto` is the default: on nodes with more visible GPUs than jobs per arm, it splits GPUs across the two arms so all useful GPUs are fed at once; on 4-GPU nodes it keeps one arm at a time with one fold per GPU. Set `PARALLEL_ARMS=0` only if you deliberately want serial arms, and set `REQUIRE_FULL_GPU_QUEUE=0` if you accept an underfilled queue.
 
 Entry points:
 
@@ -73,6 +75,16 @@ bash scripts/run_hnscc_biological_findings.sh
 ```
 
 This scores built-in TNF-expansion, autocrine-TNF/TSK, pEMT, and CIS-like signatures in the HNSCC AnnData, combines them with per-perturbation CV endpoint/state metrics, and writes `biological_effects_per_perturbation.csv`. Set `COUNTERFACTUAL_RUN_DIR=/path/to/fold/run` to run same-start factual-vs-reference rollouts before final extraction and merge mass, geometry, growth, drift, diffusion, and optional context-clamped readouts into the final table. Set `BULK_EXPR` and `BULK_META` to project the same signatures onto a human bulk cohort such as GSE227919; those trends are signature-level validation, not target-specific human validation.
+
+For the mechanistic biology table, run counterfactual extraction across all with-guide folds:
+
+```bash
+COMPARE_ROOT=runs/hnscc_random_h100_heavy_f_best_ur01_repro_4gpu_YYYYMMDD_HHMMSS \
+RUN_COUNTERFACTUALS=1 CF_CONTEXT_CLAMPED=1 CF_PARTICLES=512 CF_STEPS=28 \
+bash scripts/run_hnscc_biological_findings.sh
+```
+
+This writes `biology/counterfactual/counterfactual_biology_effects.csv` plus `biological_effects_per_perturbation_v2.csv`. The v2 table uses same-start factual-versus-reference `delta_log_mass_fact_vs_ref` when present, keeps the endpoint-only class as `priority_class_pre_counterfactual`, and labels rows without counterfactual support as pending. The built-in CIS-like signature resolves `TP63` to mouse `Trp63` when the data use mouse gene symbols.
 
 Implementation notes:
 

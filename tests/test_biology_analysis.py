@@ -81,6 +81,7 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
             {
                 "perturbation_id": "Notch1_sg1",
                 "target_gene": "NOTCH1",
+                "fold_id": "fold_0",
                 "delta_log_mass_fact_vs_ref": 0.7,
                 "geom_shift_fact_vs_ref": 1.2,
                 "growth_action_fact": 0.3,
@@ -88,7 +89,19 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
                 "diffusion_action_fact": 0.5,
                 "context_dependence_geom": 0.6,
                 "context_dependence_mass": 0.2,
-            }
+            },
+            {
+                "perturbation_id": "Notch1_sg1",
+                "target_gene": "NOTCH1",
+                "fold_id": "fold_1",
+                "delta_log_mass_fact_vs_ref": 0.9,
+                "geom_shift_fact_vs_ref": 1.4,
+                "growth_action_fact": 0.5,
+                "drift_action_fact": 0.6,
+                "diffusion_action_fact": 0.7,
+                "context_dependence_geom": 0.8,
+                "context_dependence_mass": 0.4,
+            },
         ]
     )
     cf_path = tmp_path / "counterfactual_biology_effects.csv"
@@ -116,20 +129,24 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
     assert notch["target_gene"] == "NOTCH1"
     assert notch["delta_tnf_expansion_score"] == 1.5
     assert notch["delta_autocrine_tnf_tsk_score"] == 2.0
-    assert notch["delta_log_mass_fact_vs_ref"] == 0.7
-    assert notch["geom_shift_fact_vs_ref"] == 1.2
-    assert notch["diffusion_action"] == 0.5
-    assert notch["context_dependence_geom"] == 0.6
+    assert np.isclose(notch["delta_log_mass_fact_vs_ref"], 0.8)
+    assert np.isclose(notch["delta_log_mass"], 0.8)
+    assert np.isclose(notch["geom_shift_fact_vs_ref"], 1.3)
+    assert np.isclose(notch["diffusion_action"], 0.6)
+    assert np.isclose(notch["context_dependence_geom"], 0.7)
+    assert notch["counterfactual_n_folds"] == 2
+    assert notch["delta_log_mass_fact_vs_ref_std"] > 0
+    assert "priority_class_v2" in out.columns
     assert notch["shared_guide_null_gap"] > 0
 
 
 def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:
     x = np.array(
         [
-            [5.0, 4.0, 0.0, 0.0],
-            [4.0, 5.0, 0.0, 0.0],
-            [0.0, 0.0, 5.0, 4.0],
-            [0.0, 0.0, 4.0, 5.0],
+            [5.0, 4.0, 0.0, 0.0, 3.0, 3.0],
+            [4.0, 5.0, 0.0, 0.0, 3.0, 3.0],
+            [0.0, 0.0, 5.0, 4.0, 0.0, 0.0],
+            [0.0, 0.0, 4.0, 5.0, 0.0, 0.0],
         ],
         dtype=np.float32,
     )
@@ -144,7 +161,7 @@ def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:
             "Cell type annotation": ["basal", "basal", "TSK", "TSK"],
         }
     )
-    var = pd.DataFrame(index=["JUN", "FOS", "TNF", "MMP9"])
+    var = pd.DataFrame(index=["JUN", "FOS", "TNF", "MMP9", "Trp63", "Atp1b3"])
     data_path = tmp_path / "mini.h5ad"
     ad.AnnData(X=x, obs=obs, var=var).write_h5ad(data_path)
     out_dir = tmp_path / "sig"
@@ -161,6 +178,10 @@ def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:
     )
     scores = pd.read_csv(out_dir / "signature_group_scores.csv")
     assert {"tnf_expansion", "autocrine_tnf_tsk", "n_cells"} <= set(scores.columns)
+    coverage = pd.read_csv(out_dir / "signature_gene_coverage.csv")
+    cis = coverage.loc[coverage["signature"].eq("cis_like")].iloc[0]
+    assert "Trp63" in cis["matched_genes"]
+    assert "TP63" not in str(cis["missing_genes"])
     p4 = scores.loc[scores["time_label"].eq("P4"), "tnf_expansion"].mean()
     p60 = scores.loc[scores["time_label"].eq("P60"), "autocrine_tnf_tsk"].mean()
     assert p4 > 0

@@ -23,6 +23,11 @@ GPU_MONITOR_INTERVAL="${GPU_MONITOR_INTERVAL:-10}"
 PARALLEL_ARMS="${PARALLEL_ARMS:-auto}"
 REQUIRE_FULL_GPU_QUEUE="${REQUIRE_FULL_GPU_QUEUE:-1}"
 NPROC_TOTAL="${NPROC_TOTAL:-$(nproc)}"
+EXPRESSION_WORKERS="${EXPRESSION_WORKERS:-8}"
+EXPRESSION_CHUNK_SIZE="${EXPRESSION_CHUNK_SIZE:-2048}"
+VAE_BATCH_SIZE="${VAE_BATCH_SIZE:-2048}"
+VAE_ENCODE_BATCH_SIZE="${VAE_ENCODE_BATCH_SIZE:-8192}"
+VAE_PRELOAD_DENSE_MAX_GB="${VAE_PRELOAD_DENSE_MAX_GB:-4.0}"
 
 RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
 COMPARE_ROOT="${COMPARE_ROOT:-runs/hnscc_random_h100_heavy_f_best_ur01_guide_vs_shared_4cv_${RUN_STAMP}}"
@@ -116,6 +121,11 @@ run_arm() {
   echo "  gpu_list=${gpu_list:-${GPU_LIST:-auto}}"
   echo "  max_parallel_jobs=${max_jobs:-${MAX_PARALLEL_JOBS:-auto}}"
   echo "  threads_per_gpu=${ARM_THREADS_PER_GPU:-${THREADS_PER_GPU:-auto}}"
+  echo "  expression_workers=$EXPRESSION_WORKERS"
+  echo "  expression_chunk_size=$EXPRESSION_CHUNK_SIZE"
+  echo "  vae_batch_size=$VAE_BATCH_SIZE"
+  echo "  vae_encode_batch_size=$VAE_ENCODE_BATCH_SIZE"
+  echo "  vae_preload_dense_max_gb=$VAE_PRELOAD_DENSE_MAX_GB"
 
   SETTINGS_FILE="$SETTINGS_FILE" \
   CV_ROOT="$root" \
@@ -130,6 +140,11 @@ run_arm() {
   MAX_PARALLEL_JOBS="$max_jobs" \
   NPROC_TOTAL="$NPROC_TOTAL" \
   THREADS_PER_GPU="${ARM_THREADS_PER_GPU:-${THREADS_PER_GPU:-}}" \
+  EXPRESSION_WORKERS="$EXPRESSION_WORKERS" \
+  EXPRESSION_CHUNK_SIZE="$EXPRESSION_CHUNK_SIZE" \
+  VAE_BATCH_SIZE="$VAE_BATCH_SIZE" \
+  VAE_ENCODE_BATCH_SIZE="$VAE_ENCODE_BATCH_SIZE" \
+  VAE_PRELOAD_DENSE_MAX_GB="$VAE_PRELOAD_DENSE_MAX_GB" \
   bash scripts/run_hnscc_h100_heavy_f_optimal_search_4cv_2gpu_v2.sh
 }
 
@@ -169,6 +184,7 @@ echo "  settings=$SETTINGS_COUNT folds=$FOLD_COUNT jobs_per_arm=$JOBS_PER_ARM"
 echo "  detected_gpus=${GPU_DEVICES[*]} active_gpus=${ACTIVE_GPU_DEVICES[*]}"
 echo "  nproc_total=$NPROC_TOTAL"
 echo "  parallel_arms=$PARALLEL_ARMS resolved_concurrent=$RUN_ARMS_CONCURRENT"
+echo "  pinned historical VAE/input defaults: expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE vae_batch_size=$VAE_BATCH_SIZE vae_encode_batch_size=$VAE_ENCODE_BATCH_SIZE vae_preload_dense_max_gb=$VAE_PRELOAD_DENSE_MAX_GB"
 
 if [[ "$RUN_ARMS_CONCURRENT" == "1" ]]; then
   SPLIT_GPU_COUNT="$ACTIVE_GPU_COUNT"

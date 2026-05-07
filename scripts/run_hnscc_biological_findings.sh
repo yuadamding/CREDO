@@ -33,6 +33,7 @@ OUTPUT_DIR="${OUTPUT_DIR:-${COMPARE_ROOT:+${COMPARE_ROOT}/biology}}"
 OUTPUT_DIR="${OUTPUT_DIR:-results/biology}"
 SCORE_SIGNATURES="${SCORE_SIGNATURES:-1}"
 SPLIT="${SPLIT:-test}"
+RUN_COUNTERFACTUALS="${RUN_COUNTERFACTUALS:-0}"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -51,21 +52,55 @@ if [[ -z "$WITH_GUIDE_ROOT" ]]; then
 fi
 
 COUNTERFACTUAL_ARGS=()
-if [[ -n "${COUNTERFACTUAL_RUN_DIR:-}" ]]; then
+if [[ "$RUN_COUNTERFACTUALS" == "1" || -n "${COUNTERFACTUAL_RUN_DIR:-}" || -n "${COUNTERFACTUAL_RUN_DIRS:-}" ]]; then
   CF_OUT="${CF_OUT:-${OUTPUT_DIR}/counterfactual}"
   CF_CONTEXT_CLAMPED="${CF_CONTEXT_CLAMPED:-1}"
   CF_ARGS=()
   if [[ "$CF_CONTEXT_CLAMPED" == "1" ]]; then
     CF_ARGS=(--context-clamped)
   fi
-  "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python analysis/run_counterfactual_biology.py \
-    --run-dir "$COUNTERFACTUAL_RUN_DIR" \
-    --data-path "$DATA_PATH" \
-    --output-dir "$CF_OUT" \
-    --source-split "$SPLIT" \
-    --n-particles "${CF_PARTICLES:-512}" \
-    --n-steps "${CF_STEPS:-28}" \
-    "${CF_ARGS[@]}"
+  mkdir -p "$CF_OUT"
+  CF_RUN_DIR_LIST=()
+  if [[ -n "${COUNTERFACTUAL_RUN_DIRS:-}" ]]; then
+    IFS=',' read -r -a CF_RUN_DIR_LIST <<< "$COUNTERFACTUAL_RUN_DIRS"
+  elif [[ -n "${COUNTERFACTUAL_RUN_DIR:-}" ]]; then
+    CF_RUN_DIR_LIST=("$COUNTERFACTUAL_RUN_DIR")
+  else
+    mapfile -t CF_RUN_DIR_LIST < <(
+      find "$WITH_GUIDE_ROOT" -type f \( -name 'checkpoint_best_ema.pt' -o -name 'checkpoint_best.pt' \) \
+        -printf '%h\n' | sort -u
+    )
+  fi
+  if [[ "${#CF_RUN_DIR_LIST[@]}" -eq 0 ]]; then
+    echo "No counterfactual run directories found. Set COUNTERFACTUAL_RUN_DIR, COUNTERFACTUAL_RUN_DIRS, or WITH_GUIDE_ROOT." >&2
+    exit 1
+  fi
+  CF_INPUTS=()
+  for cf_run_dir in "${CF_RUN_DIR_LIST[@]}"; do
+    cf_run_dir="${cf_run_dir#"${cf_run_dir%%[![:space:]]*}"}"
+    cf_run_dir="${cf_run_dir%"${cf_run_dir##*[![:space:]]}"}"
+    [[ -z "$cf_run_dir" ]] && continue
+    cf_label="$(basename "$(dirname "$cf_run_dir")")_$(basename "$cf_run_dir")"
+    cf_label="${cf_label//[^A-Za-z0-9_.-]/_}"
+    cf_dir="$CF_OUT/$cf_label"
+    "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python analysis/run_counterfactual_biology.py \
+      --run-dir "$cf_run_dir" \
+      --data-path "$DATA_PATH" \
+      --output-dir "$cf_dir" \
+      --source-split "$SPLIT" \
+      --n-particles "${CF_PARTICLES:-512}" \
+      --n-steps "${CF_STEPS:-28}" \
+      --device "${CF_DEVICE:-auto}" \
+      --seed "${CF_SEED:-0}" \
+      --max-perturbations "${CF_MAX_PERTURBATIONS:-0}" \
+      --perturbations "${CF_PERTURBATIONS:-}" \
+      --fold-id "$(basename "$cf_run_dir")" \
+      "${CF_ARGS[@]}"
+    CF_INPUTS+=("$cf_dir/counterfactual_biology_effects.csv")
+  done
+  "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python analysis/merge_counterfactual_biology.py \
+    --inputs "${CF_INPUTS[@]}" \
+    --output "$CF_OUT/counterfactual_biology_effects.csv"
   COUNTERFACTUAL_ARGS=(--counterfactual-effects "$CF_OUT/counterfactual_biology_effects.csv")
 fi
 

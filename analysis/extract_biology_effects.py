@@ -109,6 +109,11 @@ def _mode_or_first(series: pd.Series):
     return mode.iloc[0] if not mode.empty else clean.iloc[0]
 
 
+def _q75(series: pd.Series) -> float:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    return float(values.quantile(0.75)) if not values.empty else float("nan")
+
+
 def _aggregate(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
     work = df.copy()
     if "pred_expansion_ratio" in work.columns:
@@ -210,7 +215,32 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     if "perturbation_id" not in df.columns:
         raise KeyError("Counterfactual effects file must contain perturbation_id.")
-    out = df.copy()
+    raw = df.copy()
+    if raw["perturbation_id"].duplicated().any():
+        agg_spec = {}
+        for col in raw.columns:
+            if col == "perturbation_id":
+                continue
+            if pd.api.types.is_numeric_dtype(raw[col]):
+                agg_spec[col] = "mean"
+                if col in {
+                    "delta_log_mass_fact_vs_ref",
+                    "geom_shift_fact_vs_ref",
+                    "growth_action_fact",
+                    "drift_action_fact",
+                    "diffusion_action_fact",
+                    "context_dependence_geom",
+                    "context_dependence_mass",
+                }:
+                    raw[f"{col}_std"] = pd.to_numeric(raw[col], errors="coerce")
+                    agg_spec[f"{col}_std"] = "std"
+            else:
+                agg_spec[col] = _mode_or_first
+        out = raw.groupby("perturbation_id", dropna=False).agg(agg_spec).reset_index()
+        out["counterfactual_n_folds"] = raw.groupby("perturbation_id", dropna=False)["perturbation_id"].size().to_numpy()
+    else:
+        out = raw
+        out["counterfactual_n_folds"] = 1
     if "geometry_shift_l2" in out.columns and "geom_shift_fact_vs_ref" not in out.columns:
         out["geom_shift_fact_vs_ref"] = out["geometry_shift_l2"]
     if "context_dependence" in out.columns and "context_dependence_geom" not in out.columns:
@@ -223,12 +253,58 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
         out["drift_action"] = out["drift_action_fact"]
     if "diffusion_action_fact" in out.columns and "diffusion_action" not in out.columns:
         out["diffusion_action"] = out["diffusion_action_fact"]
+    if "terminal_entropy_factual" in out.columns and "terminal_state_entropy_fact" not in out.columns:
+        out["terminal_state_entropy_fact"] = out["terminal_entropy_factual"]
+    if "terminal_entropy_reference" in out.columns and "terminal_state_entropy_ref" not in out.columns:
+        out["terminal_state_entropy_ref"] = out["terminal_entropy_reference"]
     return out.drop(columns=["target_gene"], errors="ignore")
+
+
+def classify_mechanistic_v2(row: pd.Series) -> str:
+    cf_mass = row.get("delta_log_mass_fact_vs_ref", np.nan)
+    if pd.isna(cf_mass):
+        pre = str(row.get("priority_class_pre_counterfactual", "watch"))
+        if pre == "Class I":
+            return "growth-high / relatively TSK-high (counterfactual pending)"
+        if pre == "Class II":
+            return "growth-high / TNF-expansion-only (counterfactual pending)"
+        if pre in {"Class III", "Class IV"}:
+            return f"{pre} (counterfactual pending)"
+        return "watch (counterfactual pending)"
+    growth = float(row.get("z_delta_log_mass", 0.0) or 0.0)
+    tnf = float(row.get("z_delta_tnf_expansion_score", 0.0) or 0.0)
+    tsk = float(row.get("z_delta_autocrine_tnf_tsk_score", 0.0) or 0.0)
+    pemt = float(row.get("z_delta_pemt_score", 0.0) or 0.0)
+    diffusion = float(row.get("z_diffusion_action", 0.0) or 0.0)
+    context = float(row.get("z_context_dependence", 0.0) or 0.0)
+    shared_gap = row.get("shared_guide_null_gap", np.nan)
+    mass_err = row.get("mass_rel_error_mean", np.nan)
+    mass_err_cut = row.get("_mass_error_q75", np.nan)
+    if pd.notna(shared_gap) and float(shared_gap) < -0.25:
+        return "artifact-watch"
+    if pd.notna(mass_err) and pd.notna(mass_err_cut) and float(mass_err) > float(mass_err_cut) and growth < 0.5:
+        return "artifact-watch"
+    if context >= 0.75:
+        return "ecology-dependent"
+    if diffusion >= 0.75 and (tsk >= 0.0 or pemt >= 0.0):
+        return "plasticity/state-shift"
+    if growth >= 0.5 and (tsk >= 0.5 or pemt >= 0.5):
+        return "transformation-prone"
+    if growth >= 0.5 and tnf >= 0.5 and tsk < 0.5 and pemt < 0.5:
+        return "expansion-only"
+    if growth >= 0.5:
+        return "growth-high"
+    return "watch"
 
 
 def _add_priority(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
-    out["delta_log_mass"] = out.get("pred_log_expansion_mean", out.get("true_log_expansion_mean"))
+    endpoint_delta = out.get("pred_log_expansion_mean", out.get("true_log_expansion_mean"))
+    out["delta_log_mass_observed_endpoint"] = endpoint_delta
+    if "delta_log_mass_fact_vs_ref" in out.columns:
+        out["delta_log_mass"] = pd.to_numeric(out["delta_log_mass_fact_vs_ref"], errors="coerce").fillna(endpoint_delta)
+    else:
+        out["delta_log_mass"] = endpoint_delta
     for col in [
         "delta_log_mass",
         "delta_tnf_expansion_score",
@@ -236,6 +312,7 @@ def _add_priority(df: pd.DataFrame) -> pd.DataFrame:
         "delta_pemt_score",
         "diffusion_action",
         "context_dependence",
+        "context_dependence_geom",
         "human_autocrine_tnf_tsk_trend",
     ]:
         if col not in out.columns:
@@ -245,7 +322,10 @@ def _add_priority(df: pd.DataFrame) -> pd.DataFrame:
     out["z_delta_autocrine_tnf_tsk_score"] = zscore(out["delta_autocrine_tnf_tsk_score"]).fillna(0.0)
     out["z_delta_pemt_score"] = zscore(out["delta_pemt_score"]).fillna(0.0)
     out["z_diffusion_action"] = zscore(out["diffusion_action"]).fillna(0.0)
-    out["z_context_dependence"] = zscore(out["context_dependence"]).fillna(0.0)
+    context_for_priority = out["context_dependence"]
+    if context_for_priority.isna().all() and "context_dependence_geom" in out.columns:
+        context_for_priority = out["context_dependence_geom"]
+    out["z_context_dependence"] = zscore(context_for_priority).fillna(0.0)
     out["z_human_stage_trend"] = zscore(out["human_autocrine_tnf_tsk_trend"]).fillna(0.0)
 
     out["priority_score"] = (
@@ -262,7 +342,11 @@ def _add_priority(df: pd.DataFrame) -> pd.DataFrame:
             pd.to_numeric(out["dominant_state_match_rate"], errors="coerce")
             - pd.to_numeric(out["shared_dominant_state_match_rate"], errors="coerce")
         )
-    out["priority_class"] = out.apply(classify_priority, axis=1)
+    out["priority_class_pre_counterfactual"] = out.apply(classify_priority, axis=1)
+    out["_mass_error_q75"] = _q75(out["mass_rel_error_mean"]) if "mass_rel_error_mean" in out.columns else np.nan
+    out["priority_class_v2"] = out.apply(classify_mechanistic_v2, axis=1)
+    out["priority_class"] = out["priority_class_v2"]
+    out = out.drop(columns=["_mass_error_q75"], errors="ignore")
     return out.sort_values("priority_score", ascending=False, na_position="last").reset_index(drop=True)
 
 
@@ -297,17 +381,25 @@ def main() -> None:
 
     ranked = _add_priority(effects)
     ranked.to_csv(output_dir / "biological_effects_per_perturbation.csv", index=False)
+    ranked.to_csv(output_dir / "biological_effects_per_perturbation_v2.csv", index=False)
 
     preview_cols = [
         col
         for col in [
             "perturbation_id",
             "target_gene",
+            "sgRNA_id",
             "priority_class",
+            "priority_class_pre_counterfactual",
             "priority_score",
             "delta_log_mass",
+            "delta_log_mass_fact_vs_ref",
+            "geom_shift_fact_vs_ref",
             "delta_tnf_expansion_score",
             "delta_autocrine_tnf_tsk_score",
+            "delta_pemt_score",
+            "diffusion_action",
+            "context_dependence_geom",
             "dominant_state_match_rate",
             "state_tv_mean",
             "mass_rel_error_mean",
