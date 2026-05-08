@@ -17,6 +17,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 SETTINGS_FILE="${SETTINGS_FILE:-scripts/settings_hnscc_heavy_f_best_ur01.txt}"
 SEARCH_FOLDS="${SEARCH_FOLDS:-0,1,2,3}"
 SUMMARY_RANKING_MODE="${SUMMARY_RANKING_MODE:-test_acc}"
+SEED="${SEED:-0}"
+export PYTHONHASHSEED="${PYTHONHASHSEED:-$SEED}"
 GUIDE_CONFIDENT_ONLY="${GUIDE_CONFIDENT_ONLY:-1}"
 GPU_MONITOR="${GPU_MONITOR:-1}"
 GPU_MONITOR_INTERVAL="${GPU_MONITOR_INTERVAL:-10}"
@@ -116,6 +118,7 @@ run_arm() {
   echo "  root=$root"
   echo "  settings_file=$SETTINGS_FILE"
   echo "  search_folds=$SEARCH_FOLDS"
+  echo "  seed=$SEED py_hash_seed=$PYTHONHASHSEED"
   echo "  guide_confident_only=$GUIDE_CONFIDENT_ONLY"
   echo "  shared_guide_embedding=$shared"
   echo "  gpu_list=${gpu_list:-${GPU_LIST:-auto}}"
@@ -131,6 +134,8 @@ run_arm() {
   CV_ROOT="$root" \
   SEARCH_FOLDS="$SEARCH_FOLDS" \
   SUMMARY_RANKING_MODE="$SUMMARY_RANKING_MODE" \
+  SEED="$SEED" \
+  PYTHONHASHSEED="$PYTHONHASHSEED" \
   GUIDE_CONFIDENT_ONLY="$GUIDE_CONFIDENT_ONLY" \
   SHARED_GUIDE_EMBEDDING="$shared" \
   GPU_MONITOR="$GPU_MONITOR" \

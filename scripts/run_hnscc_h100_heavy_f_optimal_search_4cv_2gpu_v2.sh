@@ -295,6 +295,8 @@ load_settings() {
 ENV_NAME="${ENV_NAME:-cape-hnscc}"
 DATA_PATH="${DATA_PATH:-../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad}"
 CV_FOLDS="${CV_FOLDS:-4}"
+SEED="${SEED:-0}"
+export PYTHONHASHSEED="${PYTHONHASHSEED:-$SEED}"
 SETTINGS_PRESET="${SETTINGS_PRESET:-gpu_util_ladder}"
 if [[ -n "${SEARCH_N_STEPS:-}" ]]; then
   N_STEPS="$SEARCH_N_STEPS"
@@ -317,7 +319,11 @@ elif [[ -n "${EVAL_STEPS:-}" ]]; then
 else
   EVAL_STEPS="$N_STEPS"
 fi
-EPOCHS="${SEARCH_EPOCHS:-${EPOCHS:-2000}}"
+EPOCHS="${SEARCH_EPOCHS:-${EPOCHS:-1800}}"
+USE_SETTING_EPOCHS="${USE_SETTING_EPOCHS:-0}"
+if [[ -z "${SEARCH_EPOCHS:-}" && "$USE_SETTING_EPOCHS" != "1" ]]; then
+  SEARCH_EPOCHS="$EPOCHS"
+fi
 STAGE_C_EPOCHS="${STAGE_C_EPOCHS:-150}"
 STAGE_D_EPOCHS="${STAGE_D_EPOCHS:-150}"
 STATE_KEY="${STATE_KEY:-Cell type annotation}"
@@ -422,7 +428,9 @@ echo "CREDO optimal search v2 settings: ${#SETTINGS[@]}"
 echo "CREDO optimal search v2 planned setting/fold jobs: $TOTAL_JOB_COUNT"
 echo "CREDO optimal search v2 preset: ${SETTINGS_FILE:-$SETTINGS_PRESET}"
 echo "CREDO optimal search v2 folds: ${SEARCH_FOLD_ITEMS[*]} / CV_FOLDS=$CV_FOLDS"
+echo "CREDO optimal search v2 seed: $SEED py_hash_seed=$PYTHONHASHSEED"
 echo "CREDO optimal search v2 default epochs: $EPOCHS"
+echo "CREDO optimal search v2 use setting epochs: $USE_SETTING_EPOCHS"
 echo "CREDO optimal search v2 default train/eval steps: $N_STEPS/$EVAL_STEPS"
 echo "CREDO optimal search v2 state key: $STATE_KEY"
 echo "CREDO optimal search v2 guide-confident only: $GUIDE_CONFIDENT_ONLY"
@@ -442,7 +450,15 @@ printf '%s\n' "${SETTINGS[@]}" | awk -F'|' -v epochs="$EPOCHS" -v force_epochs="
   basis=($18 == "" ? "learned" : $18)
   ecology=($19 == "" ? "on" : $19)
   setting_epochs=(force_epochs != "" ? epochs : ($20 == "" ? epochs : $20))
-  printf "  %s hidden=%s depth=%s programs=%s basis=%s ecology=%s particles=%s steps=%s eval_steps=%s active=%s max_atoms=%s eval_particles=%s eval_target=%s lam_ctrl=%s lam_weak=%s growth_reg=%s growth_intercept=%s epochs=%s\n", $1, $5, $6, $4, basis, ecology, $7, setting_steps, setting_eval_steps, $11, $10, $8, $9, $12, $13, $14, growth_intercept, setting_epochs
+  display_tag=$1
+  if (force_epochs != "") {
+    if (display_tag ~ /_e[0-9]+$/) {
+      sub(/_e[0-9]+$/, "_e" setting_epochs, display_tag)
+    } else {
+      display_tag=display_tag "_e" setting_epochs
+    }
+  }
+  printf "  %s hidden=%s depth=%s programs=%s basis=%s ecology=%s particles=%s steps=%s eval_steps=%s active=%s max_atoms=%s eval_particles=%s eval_target=%s lam_ctrl=%s lam_weak=%s growth_reg=%s growth_intercept=%s epochs=%s\n", display_tag, $5, $6, $4, basis, ecology, $7, setting_steps, setting_eval_steps, $11, $10, $8, $9, $12, $13, $14, growth_intercept, setting_epochs
 }'
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "CREDO optimal search v2 dry run complete."
@@ -520,6 +536,11 @@ launch_job() {
   setting_epochs="${setting_epochs:-$EPOCHS}"
   if [[ -n "${SEARCH_EPOCHS:-}" ]]; then
     setting_epochs="$EPOCHS"
+    if [[ "$tag" =~ _e[0-9]+$ ]]; then
+      tag="${tag%_e*}_e${setting_epochs}"
+    else
+      tag="${tag}_e${setting_epochs}"
+    fi
   fi
   local job_activation_checkpointing="$ACTIVATION_CHECKPOINTING"
   if [[ "${job_activation_checkpointing,,}" =~ ^(0|false|off|no)$ ]] \
@@ -575,7 +596,7 @@ launch_job() {
       --cv-folds "$CV_FOLDS"
       --cv-fold-index "$fold"
       --random-stratify-cols "$RANDOM_STRATIFY_COLS"
-      --seed 0
+      --seed "$SEED"
       --precision bf16
       --state-key "$STATE_KEY"
       --mass-scope subset_only
@@ -687,7 +708,7 @@ launch_job() {
     if [[ -n "$multi_gpu_devices_arg" ]]; then
       CMD+=(--multi-gpu-devices "$multi_gpu_devices_arg")
     fi
-    echo "CREDO resource plan: mode=v2-direct gpu_resource=$gpu split=$fold fold=$fold threads_per_job=$THREADS_PER_JOB cpu_affinity=${core_range:-unpinned} multi_gpu_per_job=$MULTI_GPU_PER_JOB epochs=$setting_epochs steps=$setting_steps eval_steps=$setting_eval_steps basis=$program_basis ecology=$ecology_mode growth_intercept=$growth_intercept guide_confident_only=$GUIDE_CONFIDENT_ONLY shared_guide_embedding=$SHARED_GUIDE_EMBEDDING activation_checkpointing=$job_activation_checkpointing expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE vae_batch_size=$VAE_BATCH_SIZE vae_encode_batch_size=$VAE_ENCODE_BATCH_SIZE vae_preload_dense_max_gb=$VAE_PRELOAD_DENSE_MAX_GB"
+    echo "CREDO resource plan: mode=v2-direct gpu_resource=$gpu split=$fold fold=$fold seed=$SEED threads_per_job=$THREADS_PER_JOB cpu_affinity=${core_range:-unpinned} multi_gpu_per_job=$MULTI_GPU_PER_JOB epochs=$setting_epochs steps=$setting_steps eval_steps=$setting_eval_steps basis=$program_basis ecology=$ecology_mode growth_intercept=$growth_intercept guide_confident_only=$GUIDE_CONFIDENT_ONLY shared_guide_embedding=$SHARED_GUIDE_EMBEDDING activation_checkpointing=$job_activation_checkpointing expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE vae_batch_size=$VAE_BATCH_SIZE vae_encode_batch_size=$VAE_ENCODE_BATCH_SIZE vae_preload_dense_max_gb=$VAE_PRELOAD_DENSE_MAX_GB"
     if [[ "$job_activation_checkpointing" != "$ACTIVATION_CHECKPOINTING" ]]; then
       echo "CREDO warning: requested ACTIVATION_CHECKPOINTING=$ACTIVATION_CHECKPOINTING but max_active=$max_active is high; using activation_checkpointing=$job_activation_checkpointing for this job. Set ALLOW_UNSAFE_NO_CHECKPOINTING=1 to override."
     fi

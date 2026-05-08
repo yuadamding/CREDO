@@ -64,6 +64,65 @@ BUILTIN_SIGNATURES: dict[str, list[str]] = {
         "EPCAM",
         "ATP1B3",
     ],
+    # Proxy module for the CREDO-nominated Lrp1 TSK/pEMT direction.
+    # This is not a decoded perturbation-specific residual module; it is a
+    # named gene-set proxy so downstream human validation can test whether the
+    # Lrp1-associated TSK/pEMT biology localizes to epithelial, stromal, or
+    # myeloid compartments.
+    "lrp1_proxy_module": [
+        "TNF",
+        "MMP9",
+        "MMP10",
+        "TGFA",
+        "IL1A",
+        "LAMC2",
+        "INHBA",
+        "NT5E",
+        "CD44",
+        "VIM",
+        "SNAI2",
+        "SERPINE1",
+        "ITGA5",
+        "PLAU",
+        "FN1",
+        "TGFBI",
+    ],
+    "lrp1_epithelial_tsk_pemt_core": [
+        "LAMC2",
+        "MMP10",
+        "SNAI2",
+        "SERPINE1",
+        "ITGA5",
+        "PLAU",
+        "INHBA",
+        "NT5E",
+    ],
+    "lrp1_caf_ecm_core": [
+        "FN1",
+        "TGFBI",
+        "VIM",
+        "COL1A1",
+        "COL1A2",
+        "COL3A1",
+        "FAP",
+        "CXCL8",
+        "LUM",
+        "DCN",
+    ],
+    "lrp1_inflammatory_myeloid_core": [
+        "TNF",
+        "IL1B",
+        "IL1A",
+        "CXCL8",
+        "MMP9",
+        "S100A8",
+        "S100A9",
+        "LST1",
+        "AIF1",
+        "C1QA",
+        "C1QB",
+        "C1QC",
+    ],
 }
 
 

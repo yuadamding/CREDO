@@ -25,6 +25,9 @@ CONDA_BIN="$(resolve_conda_executable)" || {
 }
 
 ENV_NAME="${ENV_NAME:-cape-hnscc}"
+SEED="${SEED:-0}"
+CF_SEED="${CF_SEED:-$SEED}"
+export PYTHONHASHSEED="${PYTHONHASHSEED:-$SEED}"
 DATA_PATH="${DATA_PATH:-../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad}"
 COMPARE_ROOT="${COMPARE_ROOT:-}"
 WITH_GUIDE_ROOT="${WITH_GUIDE_ROOT:-${COMPARE_ROOT:+${COMPARE_ROOT}/with_guide}}"
@@ -34,15 +37,22 @@ OUTPUT_DIR="${OUTPUT_DIR:-results/biology}"
 SCORE_SIGNATURES="${SCORE_SIGNATURES:-1}"
 SPLIT="${SPLIT:-test}"
 RUN_COUNTERFACTUALS="${RUN_COUNTERFACTUALS:-0}"
+CUSTOM_SIGNATURES="${CUSTOM_SIGNATURES:-}"
+CUSTOM_SIGNATURE_ARGS=()
+if [[ -n "$CUSTOM_SIGNATURES" ]]; then
+  CUSTOM_SIGNATURE_ARGS=(--custom-signatures "$CUSTOM_SIGNATURES")
+fi
 
 mkdir -p "$OUTPUT_DIR"
+echo "CREDO biology extraction seed: $SEED cf_seed=$CF_SEED py_hash_seed=$PYTHONHASHSEED"
 
 SIG_ARGS=()
 if [[ "$SCORE_SIGNATURES" == "1" ]]; then
   SIG_OUT="${SIG_OUT:-${OUTPUT_DIR}/signatures}"
   "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python analysis/score_hnscc_signatures.py \
     --data-path "$DATA_PATH" \
-    --output-dir "$SIG_OUT"
+    --output-dir "$SIG_OUT" \
+    "${CUSTOM_SIGNATURE_ARGS[@]}"
   SIG_ARGS=(--signature-scores "$SIG_OUT/signature_group_scores.csv")
 fi
 
@@ -91,7 +101,7 @@ if [[ "$RUN_COUNTERFACTUALS" == "1" || -n "${COUNTERFACTUAL_RUN_DIR:-}" || -n "$
       --n-particles "${CF_PARTICLES:-512}" \
       --n-steps "${CF_STEPS:-28}" \
       --device "${CF_DEVICE:-auto}" \
-      --seed "${CF_SEED:-0}" \
+      --seed "$CF_SEED" \
       --max-perturbations "${CF_MAX_PERTURBATIONS:-0}" \
       --perturbations "${CF_PERTURBATIONS:-}" \
       --fold-id "$(basename "$cf_run_dir")" \
@@ -119,7 +129,8 @@ if [[ -n "${BULK_EXPR:-}" || -n "${BULK_META:-}" ]]; then
   "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python analysis/project_bulk_signatures.py \
     --expression "$BULK_EXPR" \
     --metadata "$BULK_META" \
-    --output-dir "$HUMAN_OUT"
+    --output-dir "$HUMAN_OUT" \
+    "${CUSTOM_SIGNATURE_ARGS[@]}"
   HUMAN_ARGS=(--human-trends "$HUMAN_OUT/bulk_signature_stage_trends.csv")
 fi
 

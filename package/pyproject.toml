@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "credo"
-version = "1.1.2"
-description = "Compact CREDO HNSCC transfer package centered on heavy_c_finalist1_h896_d5_prog20_p320"
+version = "1.1.3"
+description = "Compact CREDO HNSCC transfer package with H100 training launchers and biology extraction"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.1",

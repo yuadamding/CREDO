@@ -385,7 +385,7 @@ apply_h100_heavy_c_profile() {
   default_var MEDIATOR_DIM 56
   default_var HIDDEN_DIM 896
   default_var DEPTH 5
-  default_var EPOCHS 1500
+  default_var EPOCHS 1800
   default_var N_PARTICLES 320
   default_var EVAL_PARTICLES 1408
   default_var EVAL_TARGET_PARTICLES 3584
@@ -402,7 +402,7 @@ apply_h100_heavy_f_profile() {
   default_var MEDIATOR_DIM 96
   default_var HIDDEN_DIM 1024
   default_var DEPTH 6
-  default_var EPOCHS 1500
+  default_var EPOCHS 1800
   default_var N_PARTICLES 256
   default_var EVAL_PARTICLES 1024
   default_var EVAL_TARGET_PARTICLES 2560
@@ -423,7 +423,7 @@ apply_h100_heavy_f_full_profile() {
   default_var MEDIATOR_DIM 96
   default_var HIDDEN_DIM 1024
   default_var DEPTH 6
-  default_var EPOCHS 1500
+  default_var EPOCHS 1800
   default_var N_PARTICLES 512
   default_var EVAL_PARTICLES 2048
   default_var EVAL_TARGET_PARTICLES 4096
@@ -554,7 +554,7 @@ run_joint_cv() {
     build_common_cmd "$out_dir" "$cpu_threads"
     CMD+=(--multi-gpu-devices "$multi_gpu_devices")
     {
-      echo "CREDO resource plan: mode=joint split=$split_item fold=$fold_idx devices=$multi_gpu_devices cpu_threads=$cpu_threads expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE"
+      echo "CREDO resource plan: mode=joint split=$split_item fold=$fold_idx seed=$SEED devices=$multi_gpu_devices cpu_threads=$cpu_threads expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE"
       printf 'CREDO command:'
       printf ' %q' "${CMD[@]}"
       printf '\n'
@@ -619,7 +619,7 @@ run_parallel_cv() {
       export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-$threads_per_gpu}"
       build_split_args "$split_item"
       build_common_cmd "$out_dir" "$threads_per_gpu"
-      echo "CREDO resource plan: mode=parallel gpu=$gpu slot=$slot_idx split=$split_item fold=$fold_idx threads_per_gpu=$threads_per_gpu expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE"
+      echo "CREDO resource plan: mode=parallel gpu=$gpu slot=$slot_idx split=$split_item fold=$fold_idx seed=$SEED threads_per_gpu=$threads_per_gpu expression_workers=$EXPRESSION_WORKERS expression_chunk_size=$EXPRESSION_CHUNK_SIZE"
       echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
       printf 'CREDO command:'
       printf ' %q' "${CMD[@]}"
@@ -676,6 +676,7 @@ DATA_PATH="${DATA_PATH:-$(default_data_path)}"
 CV_ROOT="${CV_ROOT:-${RUN_ROOT_PREFIX}_$(date +%Y%m%d_%H%M%S)}"
 SETTING_ROOT="$CV_ROOT/$SETTING_TAG"
 SEED="${SEED:-0}"
+export PYTHONHASHSEED="${PYTHONHASHSEED:-$SEED}"
 SPLIT_STRATEGY="${SPLIT_STRATEGY:?SPLIT_STRATEGY must be set by the wrapper script}"
 CPU_INTEROP_THREADS="${CPU_INTEROP_THREADS:-2}"
 PRECISION="${PRECISION:-bf16}"
@@ -730,7 +731,7 @@ N_PROGRAMS="${N_PROGRAMS:?N_PROGRAMS must be set by the wrapper script}"
 MEDIATOR_DIM="${MEDIATOR_DIM:?MEDIATOR_DIM must be set by the wrapper script}"
 HIDDEN_DIM="${HIDDEN_DIM:?HIDDEN_DIM must be set by the wrapper script}"
 DEPTH="${DEPTH:?DEPTH must be set by the wrapper script}"
-EPOCHS="${EPOCHS:-1500}"
+EPOCHS="${EPOCHS:-1800}"
 N_PARTICLES="${N_PARTICLES:?N_PARTICLES must be set by the wrapper script}"
 N_STEPS="${N_STEPS:-32}"
 EVAL_PARTICLES="${EVAL_PARTICLES:?EVAL_PARTICLES must be set by the wrapper script}"
@@ -758,7 +759,7 @@ mkdir -p "$SETTING_ROOT"
 IFS=';' read -r -a SPLIT_ITEMS_ARRAY <<< "$(default_split_items)"
 echo "CREDO run root: $CV_ROOT"
 echo "CREDO setting: $SETTING_TAG"
-echo "CREDO mode: $RUN_MODE splits=${#SPLIT_ITEMS_ARRAY[@]} skip_summary=$SKIP_SUMMARY summary_ranking=$SUMMARY_RANKING_MODE"
+echo "CREDO mode: $RUN_MODE splits=${#SPLIT_ITEMS_ARRAY[@]} seed=$SEED py_hash_seed=$PYTHONHASHSEED skip_summary=$SKIP_SUMMARY summary_ranking=$SUMMARY_RANKING_MODE"
 
 case "$RUN_MODE" in
   joint)

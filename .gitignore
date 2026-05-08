@@ -1,8 +1,16 @@
 runs/
+/outputs/
 /results/
 /models/
+*.h5ad
+*.pt
+*.pth
+*.ckpt
 *.log
 __pycache__/
 *.py[cod]
 .pytest_cache/
 *.egg-info/
+dist/
+build/
+.ruff_cache/
