@@ -20,7 +20,7 @@ def test_credo_model_stack_imports() -> None:
     from credo.training import TrajectoryTrainer
     from credo.training.trainer import Trainer
 
-    assert credo.__version__ == "2.0.6"
+    assert credo.__version__ == "2.0.8"
     assert FullDynamicsModel.__name__ == "FullDynamicsModel"
     assert Trainer.__name__ == "Trainer"
     assert PublicFullDynamicsModel is FullDynamicsModel

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.0.8
+
+- Marked the package release as `credo==2.0.8`.
+- Preserved the stabilized trajectory-trainer package state from the 2.0.6
+  hardening pass.
+
 ## 2.0.6
 
 - Marked the package release as `credo==2.0.6`.

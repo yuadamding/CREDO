@@ -7,7 +7,9 @@ to all downstream observed checkpoints.
 from __future__ import annotations
 
 import argparse
+import subprocess
 import sys
+import warnings
 from pathlib import Path
 
 import anndata as ad
@@ -29,6 +31,7 @@ from credo.data.core import (
 )
 from credo.models.full_model import FullDynamicsModel
 from credo.models.expression_vae import (
+    VAEArtifactBundle,
     encode_expression_vae,
     fit_expression_vae,
     log1p_normalize_expression_matrix,
@@ -60,6 +63,18 @@ def _as_bool(series: pd.Series) -> pd.Series:
         return series.astype(float) != 0.0
     values = series.astype(str).str.strip().str.lower()
     return values.isin({"1", "true", "t", "yes", "y", "control", "ctrl"})
+
+
+def _git_sha() -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parent.parent,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        return None
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -238,7 +253,41 @@ def _load_latent(
         amp_dtype=args.vae_amp_dtype,
     )
     _, stats = standardize_latent(fit_latent)
-    return stats.transform(latent).astype(np.float32, copy=False)
+    latent_std = stats.transform(latent).astype(np.float32, copy=False)
+
+    artifact_dir = Path(args.output_dir) / "vae_artifact"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    selected_gene_indices = np.flatnonzero(gene_mask).astype(int).tolist()
+    gene_names = [str(adata.var_names[i]) for i in selected_gene_indices]
+    bundle = VAEArtifactBundle(
+        gene_names=gene_names,
+        source_layer=args.vae_layer if args.vae_layer in adata.layers else None,
+        requested_layer=args.vae_layer,
+        target_sum=1e4,
+        vae_hyperparams={
+            "input_dim": int(matrix_fit.shape[1]),
+            "latent_dim": int(args.vae_latent_dim),
+            "hidden_dim": int(args.vae_hidden_dim),
+            "depth": int(args.vae_depth),
+            "dropout": float(args.vae_dropout),
+            "epochs": int(args.vae_epochs),
+            "batch_size": int(args.vae_batch_size),
+            "learning_rate": float(args.vae_lr),
+            "weight_decay": float(args.vae_weight_decay),
+            "kl_weight": float(args.vae_kl_weight),
+            "kl_warmup_epochs": int(args.vae_kl_warmup_epochs),
+        },
+        train_cell_indices=np.flatnonzero(fit_mask).astype(int).tolist(),
+        latent_standardization=stats,
+        training_summary=_summary,
+        selected_gene_indices=selected_gene_indices,
+        commit_sha=_git_sha(),
+    )
+    bundle.save(artifact_dir, model, latent_all_std=latent_std)
+    history.to_csv(artifact_dir / "vae_history.csv", index=False)
+    np.save(artifact_dir / "vae_gene_mask.npy", gene_mask.astype(bool))
+    (artifact_dir / "vae_gene_names.txt").write_text("\n".join(gene_names) + "\n", encoding="utf-8")
+    return latent_std
 
 
 def _physical_times(obs: pd.DataFrame, labels: list[str], args: argparse.Namespace) -> list[float]:
@@ -297,6 +346,17 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
         mass_values = obs[args.mass_col].astype(float)
         if not np.isfinite(mass_values.to_numpy()).all() or np.any(mass_values.to_numpy() <= 0):
             raise ValueError("--mass-col must contain positive finite per-cell mass contributions.")
+        mass_group_cols = [args.perturbation_col, args.time_col]
+        if args.key_mode == "sample_aware":
+            mass_group_cols.append(args.sample_col)
+        group = obs.assign(_mass=mass_values).groupby(mass_group_cols, observed=True)["_mass"]
+        if group.size().median() > 10 and group.nunique().median() <= 1:
+            warnings.warn(
+                "--mass-col appears constant within many groups. Confirm it is a per-cell "
+                "finite-measure contribution, not a repeated group-level mass.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         mass_df = (
             obs.assign(_mass=mass_values)
             .groupby(["perturbation_id", "time_label", "sample_id"], observed=True)["_mass"]
@@ -329,6 +389,7 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
 
 def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg = RunConfig(output_dir=args.output_dir, device=args.device)
+    cfg.git_sha = _git_sha()
     cfg.latent.source = "vae" if args.latent_source == "vae" else "pca"
     cfg.latent.key = "X_vae" if args.latent_source == "vae" else args.latent_key
     cfg.latent.dim = latent_dim
@@ -370,9 +431,32 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     return cfg
 
 
+def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path) -> None:
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    study.mass_table.df.to_csv(out / "mass_table.csv", index=False)
+    cell_counts = (
+        study.cell_state.df
+        .groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
+        .size()
+        .rename("n_cells")
+        .reset_index()
+    )
+    cell_counts.to_csv(out / "cell_count_table.csv", index=False)
+    mass_summary = (
+        study.mass_table.df
+        .groupby(["time_label", "sample_id"], observed=True)["mass"]
+        .sum()
+        .rename("total_mass")
+        .reset_index()
+    )
+    mass_summary.to_csv(out / "mass_summary_by_time_sample.csv", index=False)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     study = build_study_from_anndata(args)
+    write_input_manifests(study, args.output_dir)
     labels = [args.source_label] + _parse_csv(args.target_labels)
     by_sample = args.key_mode == "sample_aware"
     trajectory = study.to_sparse_trajectory_problem(by_sample=by_sample, time_labels=labels)

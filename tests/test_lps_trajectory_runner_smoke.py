@@ -61,6 +61,9 @@ def test_lps_trajectory_runner_smoke(tmp_path) -> None:
     assert (output_dir / "checkpoint_last.pt").exists()
     assert (output_dir / "measure_key_manifest.csv").exists()
     assert (output_dir / "predicted_metrics_by_key_time.csv").exists()
+    assert (output_dir / "mass_table.csv").exists()
+    assert (output_dir / "cell_count_table.csv").exists()
+    assert (output_dir / "mass_summary_by_time_sample.csv").exists()
 
 
 def test_lps_trajectory_runner_vae_source_only_with_extra_timepoint(tmp_path) -> None:
@@ -128,3 +131,8 @@ def test_lps_trajectory_runner_vae_source_only_with_extra_timepoint(tmp_path) ->
     )
 
     assert (output_dir / "checkpoint_last.pt").exists()
+    assert (output_dir / "vae_artifact" / "vae_metadata.json").exists()
+    assert (output_dir / "vae_artifact" / "vae_state_dict.pt").exists()
+    assert (output_dir / "vae_artifact" / "vae_history.csv").exists()
+    assert (output_dir / "vae_artifact" / "vae_gene_mask.npy").exists()
+    assert (output_dir / "vae_artifact" / "vae_gene_names.txt").exists()
