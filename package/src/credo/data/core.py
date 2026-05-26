@@ -1,4 +1,4 @@
-"""Core data structures for the P4/P60 Perturb-seq dynamics model.
+"""Core finite-measure data structures for CREDO dynamics.
 
 The canonical study object is PerturbSeqDynamicsData, which combines
 TimeAxis, PerturbationCatalog, CellStateTable, MassTable, and optional
@@ -18,6 +18,14 @@ import torch
 
 
 MeasureKey = str | Tuple[str, str]
+POOLED_SAMPLE_ID = "__pooled__"
+LEGACY_POOLED_SAMPLE_ID = "pooled"
+POOLED_SAMPLE_IDS = frozenset({POOLED_SAMPLE_ID, LEGACY_POOLED_SAMPLE_ID})
+
+
+def is_pooled_sample_id(sample_id: str) -> bool:
+    """Return True for canonical or legacy pooled-sample sentinels."""
+    return str(sample_id) in POOLED_SAMPLE_IDS
 
 
 def _is_valid_measure_key(key: MeasureKey) -> bool:
@@ -180,17 +188,30 @@ class MassTable:
             raise ValueError("All masses must be finite")
         if not (mass > 0).all():
             raise ValueError("All masses must be positive")
-        duplicated = self.df.duplicated(["perturbation_id", "time_label", "sample_id"])
+        key_frame = pd.DataFrame(
+            {
+                "perturbation_id": self.df["perturbation_id"].astype(str),
+                "time_label": self.df["time_label"].astype(str),
+                "sample_id": self.df["sample_id"].astype(str),
+            }
+        )
+        duplicated = key_frame.duplicated(["perturbation_id", "time_label", "sample_id"])
         if duplicated.any():
             row = self.df.loc[duplicated].iloc[0]
             raise ValueError(
                 "Duplicate MassTable row for "
                 f"({row['perturbation_id']}, {row['time_label']}, {row['sample_id']})"
             )
-        for (pid, time_label), sub in self.df.groupby(["perturbation_id", "time_label"], observed=True):
-            sample_ids = sub["sample_id"].astype(str)
-            has_pooled = sample_ids.eq("pooled").any()
-            has_sample_specific = sample_ids.ne("pooled").any()
+        for (pid, time_label), sub in key_frame.groupby(["perturbation_id", "time_label"], observed=True):
+            sample_ids = sub["sample_id"]
+            pooled_mask = sample_ids.map(is_pooled_sample_id)
+            if int(pooled_mask.sum()) > 1:
+                raise ValueError(
+                    "MassTable has multiple pooled sentinel rows for "
+                    f"({pid}, {time_label}); use only {POOLED_SAMPLE_ID!r}"
+                )
+            has_pooled = pooled_mask.any()
+            has_sample_specific = (~pooled_mask).any()
             if has_pooled and has_sample_specific:
                 raise ValueError(
                     "MassTable mixes pooled and sample-specific rows for "
@@ -198,10 +219,12 @@ class MassTable:
                 )
 
     def get(self, perturbation_id: str, time_label: str, sample_id: str) -> float:
+        if is_pooled_sample_id(sample_id):
+            return self.get_pooled(perturbation_id, time_label)
         row = self.df[
-            (self.df["perturbation_id"] == perturbation_id) &
-            (self.df["time_label"] == time_label) &
-            (self.df["sample_id"] == sample_id)
+            self.df["perturbation_id"].astype(str).eq(str(perturbation_id)) &
+            self.df["time_label"].astype(str).eq(str(time_label)) &
+            self.df["sample_id"].astype(str).eq(str(sample_id))
         ]
         if len(row) != 1:
             raise KeyError(
@@ -212,15 +235,24 @@ class MassTable:
     def get_pooled(self, perturbation_id: str, time_label: str) -> float:
         """Sum mass across all sample_ids for this perturbation and time."""
         row = self.df[
-            (self.df["perturbation_id"] == perturbation_id) &
-            (self.df["time_label"] == time_label)
+            self.df["perturbation_id"].astype(str).eq(str(perturbation_id)) &
+            self.df["time_label"].astype(str).eq(str(time_label))
         ]
         if len(row) == 0:
             raise KeyError(f"No mass rows for pooled ({perturbation_id}, {time_label})")
-        pooled = row[row["sample_id"].astype(str) == "pooled"]
+        pooled = row[row["sample_id"].astype(str).map(is_pooled_sample_id)]
         if len(pooled) == 1:
             return float(pooled["mass"].iloc[0])
+        if len(pooled) > 1:
+            raise ValueError(f"Multiple pooled mass rows for ({perturbation_id}, {time_label})")
         return float(row["mass"].sum())
+
+    def has_pooled(self, perturbation_id: str, time_label: str) -> bool:
+        row = self.df[
+            self.df["perturbation_id"].astype(str).eq(str(perturbation_id)) &
+            self.df["time_label"].astype(str).eq(str(time_label))
+        ]
+        return bool(row["sample_id"].astype(str).map(is_pooled_sample_id).any())
 
 
 # ---------------------------------------------------------------------------
@@ -691,15 +723,42 @@ class PerturbSeqDynamicsData:
                 self.mass_table.df["sample_id"].astype(str),
             )
         )
-        missing_mass = {
-            (pid, time_label, sample_id)
-            for pid, time_label, sample_id in cell_keys
-            if (pid, time_label, sample_id) not in mass_keys
-            and (pid, time_label, "pooled") not in mass_keys
+        pooled_mass_keys = {
+            (pid, time_label)
+            for pid, time_label, sample_id in mass_keys
+            if is_pooled_sample_id(sample_id)
         }
+        observed_samples = (
+            self.cell_state.df.assign(
+                perturbation_id=self.cell_state.df["perturbation_id"].astype(str),
+                time_label=self.cell_state.df["time_label"].astype(str),
+                sample_id=self.cell_state.df["sample_id"].astype(str),
+            )
+            .groupby(["perturbation_id", "time_label"], observed=True)["sample_id"]
+            .agg(lambda values: set(values))
+            .to_dict()
+        )
+        missing_mass = set()
+        unsafe_pooled_fallback = set()
+        for pid, time_label, sample_id in cell_keys:
+            if (pid, time_label, sample_id) in mass_keys:
+                continue
+            if (pid, time_label) in pooled_mass_keys:
+                samples = observed_samples.get((pid, time_label), set())
+                if len(samples) <= 1 or is_pooled_sample_id(sample_id):
+                    continue
+                unsafe_pooled_fallback.add((pid, time_label, sample_id))
+                continue
+            missing_mass.add((pid, time_label, sample_id))
         if missing_mass:
             preview = sorted(str(key) for key in missing_mass)[:5]
             raise ValueError(f"Missing MassTable rows for observed cell groups: {preview}")
+        if unsafe_pooled_fallback:
+            preview = sorted(str(key) for key in unsafe_pooled_fallback)[:5]
+            raise ValueError(
+                "Sample-specific MassTable rows are required when multiple samples "
+                f"share a perturbation/time group: {preview}"
+            )
 
         if self.exposure_table is not None:
             exposure_pids = set(self.exposure_table.df["perturbation_id"].astype(str))
@@ -728,7 +787,7 @@ class PerturbSeqDynamicsData:
         self,
         perturbation_id: str,
         time_label: str,
-        sample_id: str = "pooled",
+        sample_id: str = POOLED_SAMPLE_ID,
         density_correct: bool = False,
     ) -> FiniteMeasure:
         """Build a FiniteMeasure for a given perturbation / time."""
@@ -737,18 +796,30 @@ class PerturbSeqDynamicsData:
                 "density_correct=True is not implemented for PerturbSeqDynamicsData.build_measure; "
                 "use explicit precomputed cell weights or leave density_correct=False."
             )
-        cells = self.cell_state.select_time(time_label).select_perturbation(perturbation_id)
-        if sample_id != "pooled":
+        cells_all = self.cell_state.select_time(time_label).select_perturbation(perturbation_id)
+        cells = cells_all
+        if not is_pooled_sample_id(sample_id):
             sample_mask = cells.df["sample_id"].astype(str).eq(str(sample_id)).to_numpy()
             cells = cells.filter(sample_mask)
         n = cells.n_cells
         if n <= 0:
             raise ValueError(f"No cells for ({perturbation_id}, {time_label}, {sample_id})")
 
-        if sample_id == "pooled":
+        if is_pooled_sample_id(sample_id):
             total_mass = self.mass_table.get_pooled(perturbation_id, time_label)
         else:
-            total_mass = self.mass_table.get(perturbation_id, time_label, sample_id)
+            try:
+                total_mass = self.mass_table.get(perturbation_id, time_label, sample_id)
+            except KeyError as exc:
+                observed = set(cells_all.df["sample_id"].astype(str))
+                if self.mass_table.has_pooled(perturbation_id, time_label) and len(observed) <= 1:
+                    total_mass = self.mass_table.get_pooled(perturbation_id, time_label)
+                else:
+                    raise KeyError(
+                        "Missing sample-specific mass row for "
+                        f"({perturbation_id}, {time_label}, {sample_id}); "
+                        "pooled fallback is only allowed for single-sample groups."
+                    ) from exc
 
         support = cells.latent.copy()
         weights = np.full(n, total_mass / n)

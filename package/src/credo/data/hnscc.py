@@ -13,7 +13,14 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 
-from .core import CellStateTable, MassTable, PerturbSeqDynamicsData, PerturbationCatalog, TimeAxis
+from .core import (
+    CellStateTable,
+    MassTable,
+    POOLED_SAMPLE_ID,
+    PerturbSeqDynamicsData,
+    PerturbationCatalog,
+    TimeAxis,
+)
 from .filters import filter_state_supported_perturbations
 
 P4 = "P4"
@@ -684,7 +691,9 @@ def prepare_hnscc_obs(
     prepared["perturbation_id"] = clean_perturbation_ids(prepared)
     prepared["time_label"] = time_labels(prepared)
     prepared["sample_id"] = (
-        prepared["Library"].astype(str).replace({"": "pooled", "nan": "pooled", "None": "pooled"})
+        prepared["Library"]
+        .astype(str)
+        .replace({"": POOLED_SAMPLE_ID, "nan": POOLED_SAMPLE_ID, "None": POOLED_SAMPLE_ID})
     )
     prepared["cell_id"] = prepared["cell_id"].astype(str)
     if state_key:

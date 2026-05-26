@@ -94,9 +94,11 @@ class WeightedParticleSimulator(nn.Module):
         tau_start, tau_end: time interval in normalized coordinates
         tau_grid: optional explicit grid.  When provided, it must begin at
             ``tau_start`` and end at ``tau_end`` and may use non-uniform steps.
-        generator: optional random generator for Brownian increments.
-        noise_steps: optional explicit Brownian increments with shape
-            ``[K, G, N, d]``.  This is useful for same-noise counterfactuals.
+        generator: optional random generator for standard normal innovations.
+        noise_steps: optional explicit standard normal innovations with shape
+            ``[K, G, N, d]``.  They are multiplied by ``sqrt(dtau)`` inside
+            the Euler-Maruyama update and are useful for same-noise
+            counterfactuals.
         """
         device = z0.device
         dtype = z0.dtype
@@ -208,7 +210,7 @@ class WeightedParticleSimulator(nn.Module):
         seed: Optional[int] = None,
         generator: Optional[torch.Generator] = None,
     ) -> torch.Tensor:
-        """Sample Brownian increments with shape ``[n_steps, *z0.shape]``."""
+        """Sample standard normal innovations with shape ``[n_steps, *z0.shape]``."""
         if seed is not None and generator is not None:
             raise ValueError("Pass either seed or generator, not both")
         if generator is None and seed is not None:
@@ -218,6 +220,24 @@ class WeightedParticleSimulator(nn.Module):
             (int(n_steps),) + tuple(z0.shape),
             dtype=z0.dtype,
             device=z0.device,
+            generator=generator,
+        )
+
+    @staticmethod
+    def sample_noise_for_tau_grid(
+        z0: torch.Tensor,
+        tau_grid: torch.Tensor,
+        *,
+        seed: Optional[int] = None,
+        generator: Optional[torch.Generator] = None,
+    ) -> torch.Tensor:
+        """Sample standard normal innovations for ``len(tau_grid) - 1`` steps."""
+        if tau_grid.ndim != 1 or len(tau_grid) < 2:
+            raise ValueError("tau_grid must be a 1D tensor with at least two points")
+        return WeightedParticleSimulator.sample_noise_like(
+            z0,
+            len(tau_grid) - 1,
+            seed=seed,
             generator=generator,
         )
 

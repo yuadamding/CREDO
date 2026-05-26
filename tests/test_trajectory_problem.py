@@ -9,6 +9,7 @@ from credo.data.core import (
     CellStateTable,
     FiniteMeasure,
     MassTable,
+    POOLED_SAMPLE_ID,
     PerturbSeqDynamicsData,
     PerturbationCatalog,
     SparseTrajectoryProblem,
@@ -109,7 +110,7 @@ def test_mass_table_get_pooled_prefers_explicit_pooled_row() -> None:
     table = MassTable(
         pd.DataFrame(
             [
-                {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "pooled", "mass": 3.0},
+                {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": POOLED_SAMPLE_ID, "mass": 3.0},
                 {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D1", "mass": 1.0},
                 {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D2", "mass": 2.0},
             ]
@@ -118,6 +119,55 @@ def test_mass_table_get_pooled_prefers_explicit_pooled_row() -> None:
 
     assert table.get_pooled("ctrl", "t0") == 3.0
     assert table.get_pooled("ctrl", "t1") == 3.0
+
+
+def test_mass_table_keys_are_string_canonicalized() -> None:
+    table = MassTable(
+        pd.DataFrame(
+            [
+                {"perturbation_id": 1, "time_label": 0, "sample_id": 7, "mass": 2.0},
+            ]
+        )
+    )
+
+    assert table.get("1", "0", "7") == 2.0
+    assert table.get_pooled("1", "0") == 2.0
+
+
+def test_mass_table_rejects_string_equivalent_duplicate_keys() -> None:
+    with pytest.raises(ValueError, match="Duplicate MassTable row"):
+        MassTable(
+            pd.DataFrame(
+                [
+                    {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": 1, "mass": 1.0},
+                    {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "1", "mass": 1.0},
+                ]
+            )
+        )
+
+
+def test_mass_table_rejects_string_equivalent_mixed_mass_modes() -> None:
+    with pytest.raises(ValueError, match="mixes pooled and sample-specific rows"):
+        MassTable(
+            pd.DataFrame(
+                [
+                    {"perturbation_id": 1, "time_label": 0, "sample_id": POOLED_SAMPLE_ID, "mass": 1.0},
+                    {"perturbation_id": "1", "time_label": "0", "sample_id": "D1", "mass": 1.0},
+                ]
+            )
+        )
+
+
+def test_mass_table_rejects_multiple_pooled_sentinels() -> None:
+    with pytest.raises(ValueError, match="multiple pooled sentinel"):
+        MassTable(
+            pd.DataFrame(
+                [
+                    {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": POOLED_SAMPLE_ID, "mass": 1.0},
+                    {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "pooled", "mass": 1.0},
+                ]
+            )
+        )
 
 
 def test_perturbseq_data_validation_rejects_missing_mass_rows() -> None:
@@ -162,6 +212,32 @@ def test_perturbseq_data_validation_allows_pooled_mass_rows() -> None:
     )
 
     assert data.build_measure("ctrl", "t0").total_mass == 1.0
+    assert data.build_measure("ctrl", "t0", sample_id="D1").total_mass == 1.0
+
+
+def test_perturbseq_data_rejects_multi_sample_pooled_mass_fallback() -> None:
+    cell_df = pd.DataFrame(
+        [
+            {"cell_id": "c1", "perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1"},
+            {"cell_id": "c2", "perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D2"},
+            {"cell_id": "c3", "perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D1"},
+            {"cell_id": "c4", "perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D2"},
+        ]
+    )
+    mass_df = pd.DataFrame(
+        [
+            {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": POOLED_SAMPLE_ID, "mass": 2.0},
+            {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": POOLED_SAMPLE_ID, "mass": 2.0},
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Sample-specific MassTable rows are required"):
+        PerturbSeqDynamicsData(
+            time_axis=TimeAxis(labels=["t0", "t1"], physical_times=[0.0, 1.0]),
+            catalog=PerturbationCatalog(["ctrl"], ["ctrl"]),
+            cell_state=CellStateTable(cell_df, np.zeros((4, 1), dtype=np.float32)),
+            mass_table=MassTable(mass_df),
+        )
 
 
 def test_trajectory_to_endpoint_backward_compatibility() -> None:

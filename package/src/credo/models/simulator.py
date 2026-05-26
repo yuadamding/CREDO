@@ -330,7 +330,8 @@ class CounterfactualEngine:
             - ``zero_centered``: force the full effective embedding to zero as a
               diagnostic rollout
         common_noise: if True, factual and reference branches reuse the same
-            Brownian stream after sharing the same initial particles.
+            standard normal innovation stream after sharing the same initial
+            particles.
         """
         results = []
 

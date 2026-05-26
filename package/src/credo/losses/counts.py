@@ -24,11 +24,13 @@ def _as_float_tensor(x: torch.Tensor, *, device: torch.device, dtype: torch.dtyp
     return x.to(device=device, dtype=dtype)
 
 
-def _validate_count_matrix(count_matrix: torch.Tensor) -> None:
+def _validate_count_matrix(count_matrix: torch.Tensor, *, require_integer: bool = False) -> None:
     if count_matrix.ndim != 2:
         raise ValueError(f"count_matrix must be 2D [samples, perturbations], got {count_matrix.ndim}D")
     if not torch.isfinite(count_matrix).all() or torch.any(count_matrix < 0):
         raise ValueError("count_matrix must be nonnegative and finite")
+    if require_integer and not torch.allclose(count_matrix, count_matrix.round(), rtol=0.0, atol=1e-6):
+        raise ValueError("count_matrix must contain integer-like counts")
 
 
 def integrated_fitness(
@@ -76,6 +78,8 @@ def count_fractions_from_zeta(
     """Predict replicate perturbation fractions from exposure and fitness."""
     if not torch.is_floating_point(zeta):
         zeta = zeta.float()
+    if zeta.ndim != 1:
+        raise ValueError(f"zeta must be 1D [perturbations], got {zeta.ndim}D")
     count_matrix = _as_float_tensor(count_matrix, device=zeta.device, dtype=zeta.dtype)
     exposures = _as_float_tensor(exposures, device=zeta.device, dtype=zeta.dtype)
     _validate_count_matrix(count_matrix)
@@ -83,6 +87,11 @@ def count_fractions_from_zeta(
         raise ValueError("exposures must be positive and finite")
     G = zeta.shape[0]
     n_samples = count_matrix.shape[0]
+    if count_matrix.shape[1] != G:
+        raise ValueError(
+            "count_matrix perturbation dimension must match zeta length "
+            f"{G}, got {count_matrix.shape[1]}"
+        )
     if exposures.ndim == 1:
         if exposures.shape[0] != G:
             raise ValueError(f"1D exposures must have length {G}, got {tuple(exposures.shape)}.")
@@ -103,11 +112,13 @@ def count_fractions_from_zeta(
     raise ValueError(f"exposures must be 1D or 2D, got {exposures.ndim}D tensor.")
 
 
-def _validate_pi(pi: torch.Tensor, counts: torch.Tensor) -> None:
+def _validate_pi(pi: torch.Tensor, counts: torch.Tensor, *, strict_positive: bool = False) -> None:
     if pi.shape != counts.shape:
         raise ValueError(f"pi shape must match counts shape {tuple(counts.shape)}, got {tuple(pi.shape)}")
     if not torch.isfinite(pi).all() or torch.any(pi < 0):
         raise ValueError("pi must be nonnegative and finite")
+    if strict_positive and torch.any(pi <= 0):
+        raise ValueError("pi must be strictly positive for Dirichlet-multinomial likelihood")
     row_sums = pi.sum(dim=1)
     if not torch.allclose(row_sums, torch.ones_like(row_sums), rtol=1e-4, atol=1e-5):
         raise ValueError("pi rows must sum to 1")
@@ -134,8 +145,8 @@ class DirichletMultinomialLikelihood(nn.Module):
             counts = counts.float()
         pi = pi.to(device=counts.device, dtype=counts.dtype)
         n_total = n_total.to(device=counts.device, dtype=counts.dtype)
-        _validate_count_matrix(counts)
-        _validate_pi(pi, counts)
+        _validate_count_matrix(counts, require_integer=True)
+        _validate_pi(pi, counts, strict_positive=True)
         observed_totals = counts.sum(dim=1)
         if not torch.allclose(observed_totals, n_total, rtol=1e-5, atol=1e-5):
             raise ValueError("n_total must equal counts.sum(dim=1) for Dirichlet-multinomial likelihood.")
@@ -182,7 +193,7 @@ class CountLikelihood(nn.Module):
         else:
             # Standard multinomial
             count_matrix = count_matrix.to(device=pi_rep.device, dtype=pi_rep.dtype)
-            _validate_count_matrix(count_matrix)
+            _validate_count_matrix(count_matrix, require_integer=True)
             log_lik = (count_matrix * torch.log(pi_rep + 1e-30)).sum(-1)
             return -log_lik.sum()
 
@@ -227,7 +238,7 @@ class MultiTimeCountLikelihood(nn.Module):
                 loss_t = self.dm_lik(count_matrix, pi_rep, n_totals[time_label])
             else:
                 count_matrix = count_matrix.to(device=pi_rep.device, dtype=pi_rep.dtype)
-                _validate_count_matrix(count_matrix)
+                _validate_count_matrix(count_matrix, require_integer=True)
                 log_lik = (count_matrix * torch.log(pi_rep + 1e-30)).sum(-1)
                 loss_t = -log_lik.sum()
             weight = float(self.time_weights.get(time_label, 1.0))
@@ -242,6 +253,7 @@ class MultiTimeCountLikelihood(nn.Module):
             logs[f"counts/{time_label}/n_perturbations"] = torch.tensor(
                 count_matrix.shape[1], device=growth_steps.device
             )
+            logs[f"counts/{time_label}/n_total_sum"] = count_matrix.sum().detach()
 
         return total, logs
 

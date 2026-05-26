@@ -138,3 +138,16 @@ def test_rollout_rejects_bad_noise_shape() -> None:
             log_m0=log_m0,
             noise_steps=torch.zeros(2, 1, 4, 2),
         )
+
+
+def test_sample_noise_for_tau_grid_uses_grid_step_count_without_global_rng() -> None:
+    z0 = torch.zeros(1, 4, 2)
+    tau_grid = torch.tensor([0.0, 0.2, 0.7, 1.0])
+
+    torch.manual_seed(123)
+    rng_before = torch.random.get_rng_state()
+    noise = WeightedParticleSimulator.sample_noise_for_tau_grid(z0, tau_grid, seed=5)
+    rng_after = torch.random.get_rng_state()
+
+    assert noise.shape == (len(tau_grid) - 1, 1, 4, 2)
+    assert torch.equal(rng_before, rng_after)

@@ -133,6 +133,7 @@ class MultiTimeEndpointLoss(nn.Module):
         time_weights: Dict[str, float] | None = None,
         reduction: Literal["sum", "mean"] = "sum",
         fail_on_empty: bool = True,
+        normalize_time_weights: bool = False,
     ) -> None:
         super().__init__()
         if reduction not in {"sum", "mean"}:
@@ -141,6 +142,7 @@ class MultiTimeEndpointLoss(nn.Module):
         self.time_weights = time_weights or {}
         self.reduction = reduction
         self.fail_on_empty = fail_on_empty
+        self.normalize_time_weights = normalize_time_weights
 
     def forward(
         self,
@@ -155,6 +157,7 @@ class MultiTimeEndpointLoss(nn.Module):
 
         total = torch.tensor(0.0, device=rollout.z_steps.device, dtype=rollout.z_steps.dtype)
         logs: Dict[str, torch.Tensor] = {}
+        active_weight_sum = 0.0
 
         for time_label, idx in checkpoint_indices.items():
             if time_label not in target_support_by_time:
@@ -190,6 +193,7 @@ class MultiTimeEndpointLoss(nn.Module):
             loss_scaled = loss_t / float(n_active) if self.reduction == "mean" else loss_t
             weight = float(self.time_weights.get(time_label, 1.0))
             total = total + weight * loss_scaled
+            active_weight_sum += weight
             logs[f"endpoint/{time_label}"] = loss_scaled.detach()
             logs[f"endpoint/{time_label}/loss_sum"] = loss_t.detach()
             logs[f"endpoint/{time_label}/loss_mean_per_key"] = (loss_t / float(n_active)).detach()
@@ -198,5 +202,11 @@ class MultiTimeEndpointLoss(nn.Module):
             if geom_values:
                 logs[f"endpoint/{time_label}/geom_mean"] = torch.stack(geom_values).mean().detach()
                 logs[f"endpoint/{time_label}/mass_mean"] = torch.stack(mass_values).mean().detach()
+
+        if self.normalize_time_weights and active_weight_sum > 0.0:
+            total = total / active_weight_sum
+            logs["endpoint/time_weight_normalizer"] = torch.tensor(
+                active_weight_sum, device=rollout.z_steps.device, dtype=rollout.z_steps.dtype
+            )
 
         return total, logs

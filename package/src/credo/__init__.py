@@ -1,4 +1,4 @@
 """CREDO public package."""
-__version__ = "2.0.4"
+__version__ = "2.0.5"
 
 __all__ = ["__version__"]

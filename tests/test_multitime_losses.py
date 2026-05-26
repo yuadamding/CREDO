@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+import torch.nn as nn
 
 from credo.data.core import (
     CellStateTable,
@@ -28,6 +29,21 @@ from credo.losses.multitime import (
 )
 from credo.losses.uot import UOTLoss
 from credo.models.weighted_sde import ParticleRollout
+
+
+class _ConstantComponentLoss(nn.Module):
+    def component_dict(self, pred_z, pred_logw_abs, target_support, target_logw, perturbation_ids):
+        active = [pid for pid in perturbation_ids if pid in target_support]
+        loss = pred_z.new_tensor(float(len(active)))
+        components = {
+            pid: {
+                "geom": pred_z.new_tensor(0.25),
+                "mass": pred_z.new_tensor(0.75),
+                "total": pred_z.new_tensor(1.0),
+            }
+            for pid in active
+        }
+        return loss, components
 
 
 def _trajectory_problem():
@@ -171,6 +187,35 @@ def test_multitime_endpoint_loss_raises_when_checkpoint_has_no_active_keys() -> 
         )
 
 
+def test_multitime_endpoint_loss_can_normalize_time_weights() -> None:
+    support = torch.zeros(1, 2, 2)
+    logw = torch.full((1, 2), -np.log(2.0))
+    rollout = ParticleRollout(
+        z_steps=torch.stack([support, support.clone(), support.clone()], dim=0),
+        logw_steps=torch.stack([logw, logw.clone(), logw.clone()], dim=0),
+        tau_steps=torch.tensor([0.0, 0.5, 1.0]),
+        log_m0=torch.tensor([0.0]),
+    )
+    target_support = {"6h": {"a": support[0]}, "10h": {"a": support[0]}}
+    target_logw = {"6h": {"a": torch.zeros(2)}, "10h": {"a": torch.zeros(2)}}
+    loss_fn = MultiTimeEndpointLoss(
+        _ConstantComponentLoss(),
+        time_weights={"6h": 0.5, "10h": 1.0},
+        normalize_time_weights=True,
+    )
+
+    loss, logs = loss_fn(
+        rollout,
+        checkpoint_indices={"6h": 1, "10h": 2},
+        target_support_by_time=target_support,
+        target_logw_by_time=target_logw,
+        perturbation_ids=["a"],
+    )
+
+    assert torch.allclose(loss, torch.tensor(1.0))
+    assert torch.allclose(logs["endpoint/time_weight_normalizer"], torch.tensor(1.5))
+
+
 def test_build_target_tensors_by_time_accepts_trajectory_problem() -> None:
     trajectory = _trajectory_problem()
     target_support, target_logw = build_target_tensors_by_time(
@@ -280,6 +325,8 @@ def test_count_fractions_reject_bad_count_matrix() -> None:
         count_fractions_from_zeta(torch.zeros(2), torch.ones(2), torch.ones(2))
     with pytest.raises(ValueError, match="count_matrix must be nonnegative and finite"):
         count_fractions_from_zeta(torch.zeros(2), torch.ones(2), torch.tensor([[1.0, -1.0]]))
+    with pytest.raises(ValueError, match="perturbation dimension must match zeta"):
+        count_fractions_from_zeta(torch.zeros(2), torch.ones(2), torch.ones(1, 3))
 
 
 def test_integrated_fitness_curve_uses_variable_dtau() -> None:
@@ -328,6 +375,22 @@ def test_dirichlet_multinomial_validates_pi_rows() -> None:
         lik(
             counts=torch.tensor([[2.0, 1.0]]),
             pi=torch.tensor([[0.4, 0.4]]),
+            n_total=torch.tensor([3.0]),
+        )
+
+
+def test_dirichlet_multinomial_rejects_fractional_counts_and_zero_pi() -> None:
+    lik = DirichletMultinomialLikelihood()
+    with pytest.raises(ValueError, match="integer-like counts"):
+        lik(
+            counts=torch.tensor([[2.5, 0.5]]),
+            pi=torch.tensor([[0.5, 0.5]]),
+            n_total=torch.tensor([3.0]),
+        )
+    with pytest.raises(ValueError, match="strictly positive"):
+        lik(
+            counts=torch.tensor([[2.0, 1.0]]),
+            pi=torch.tensor([[1.0, 0.0]]),
             n_total=torch.tensor([3.0]),
         )
 
@@ -388,4 +451,23 @@ def test_multitime_count_likelihood_returns_per_time_logs() -> None:
         "counts/10h",
         "counts/6h/n_samples",
         "counts/10h/n_perturbations",
+        "counts/6h/n_total_sum",
     }
+
+
+def test_multitime_count_likelihood_rejects_fractional_counts() -> None:
+    likelihood = MultiTimeCountLikelihood()
+    growth_steps = torch.zeros(1, 2, 3)
+    logw_steps = torch.zeros(2, 2, 3)
+    tau_steps = torch.tensor([0.0, 1.0])
+
+    with pytest.raises(ValueError, match="integer-like counts"):
+        likelihood(
+            growth_steps=growth_steps,
+            logw_steps=logw_steps,
+            tau_steps=tau_steps,
+            exposures=torch.ones(2),
+            count_matrices={"10h": torch.tensor([[1.5, 0.5]])},
+            n_totals={"10h": torch.tensor([2.0])},
+            checkpoint_indices={"10h": 1},
+        )
