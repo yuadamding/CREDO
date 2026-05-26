@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -177,6 +178,15 @@ def _entropy(logw: torch.Tensor) -> float:
     return float((-(w * torch.log(w + 1e-30)).sum(dim=-1)).item())
 
 
+def _tensor_sha256(tensor: torch.Tensor) -> str:
+    arr = tensor.detach().cpu().contiguous().numpy()
+    hasher = hashlib.sha256()
+    hasher.update(str(arr.shape).encode("utf-8"))
+    hasher.update(str(arr.dtype).encode("utf-8"))
+    hasher.update(arr.tobytes())
+    return hasher.hexdigest()
+
+
 def _action_deltas(fact: dict, ref: dict) -> dict:
     out = {}
     for key in ("growth_action", "drift_action", "diffusion_action"):
@@ -283,16 +293,29 @@ def main() -> None:
             device=device,
             seed=seed,
         )
-        torch.manual_seed(seed)
-        factual = simulator.rollout(z0, logw0, model, log_m0, perturbation_ids=[pid])
+        noise_seed = seed + 100_000
+        noise_steps = simulator.sample_noise_like(z0, args.n_steps, seed=noise_seed)
+        factual = simulator.rollout(
+            z0,
+            logw0,
+            model,
+            log_m0,
+            perturbation_ids=[pid],
+            noise_steps=noise_steps,
+        )
         with _control_embedding_context(model, pid, mode="reference_consistent"):
-            torch.manual_seed(seed)
-            reference = simulator.rollout(z0.clone(), logw0.clone(), model, log_m0.clone(), perturbation_ids=[pid])
+            reference = simulator.rollout(
+                z0.clone(),
+                logw0.clone(),
+                model,
+                log_m0.clone(),
+                perturbation_ids=[pid],
+                noise_steps=noise_steps,
+            )
 
         clamped = None
         reference_clamped = None
         if args.context_clamped and reference.context_steps is not None:
-            torch.manual_seed(seed)
             clamped = rollout_with_clamped_context(
                 model=model,
                 z0=z0.clone(),
@@ -301,9 +324,9 @@ def main() -> None:
                 perturbation_ids=[pid],
                 context_steps=reference.context_steps,
                 n_steps=args.n_steps,
+                noise_steps=noise_steps,
             )
             with _control_embedding_context(model, pid, mode="reference_consistent"):
-                torch.manual_seed(seed)
                 reference_clamped = rollout_with_clamped_context(
                     model=model,
                     z0=z0.clone(),
@@ -312,8 +335,17 @@ def main() -> None:
                     perturbation_ids=[pid],
                     context_steps=reference.context_steps,
                     n_steps=args.n_steps,
+                    noise_steps=noise_steps,
                 )
 
+        fact_z0_hash = _tensor_sha256(factual.z_steps[0])
+        ref_z0_hash = _tensor_sha256(reference.z_steps[0])
+        fact_logw0_hash = _tensor_sha256(factual.logw_steps[0])
+        ref_logw0_hash = _tensor_sha256(reference.logw_steps[0])
+        fact_log_m0_hash = _tensor_sha256(factual.log_m0)
+        ref_log_m0_hash = _tensor_sha256(reference.log_m0)
+        fact_noise_hash = _tensor_sha256(noise_steps)
+        ref_noise_hash = _tensor_sha256(noise_steps)
         fact_log_mass = float(_terminal_log_mass(factual)[0].item())
         ref_log_mass = float(_terminal_log_mass(reference)[0].item())
         fact_mean = _weighted_mean(factual.terminal_z[0], factual.terminal_logw[0])
@@ -342,11 +374,23 @@ def main() -> None:
             "mass_ratio_fact_vs_ref": float(np.exp(fact_log_mass - ref_log_mass)),
             "weighted_mean_shift_l2_fact_vs_ref": mean_shift_l2,
             "geometry_shift_l2": mean_shift_l2,
+            "legacy_geom_shift_fact_vs_ref": mean_shift_l2,
             "geom_shift_fact_vs_ref": mean_shift_l2,
             "geometry_metric": "weighted_mean_l2",
             "control_rollout_mode": "reference_consistent",
-            "same_initial_particles": True,
-            "common_noise": True,
+            "initial_particles_sha256_factual": fact_z0_hash,
+            "initial_particles_sha256_reference": ref_z0_hash,
+            "initial_logw_sha256_factual": fact_logw0_hash,
+            "initial_logw_sha256_reference": ref_logw0_hash,
+            "initial_log_m0_sha256_factual": fact_log_m0_hash,
+            "initial_log_m0_sha256_reference": ref_log_m0_hash,
+            "noise_seed": noise_seed,
+            "noise_sha256_factual": fact_noise_hash,
+            "noise_sha256_reference": ref_noise_hash,
+            "same_initial_particles": fact_z0_hash == ref_z0_hash,
+            "same_initial_logw": fact_logw0_hash == ref_logw0_hash,
+            "same_initial_log_m0": fact_log_m0_hash == ref_log_m0_hash,
+            "common_noise": fact_noise_hash == ref_noise_hash,
             "terminal_entropy_factual": terminal_entropy_factual,
             "terminal_entropy_reference": terminal_entropy_reference,
             "terminal_state_entropy_fact": terminal_entropy_factual,
@@ -396,8 +440,17 @@ def main() -> None:
         "seed": int(args.seed),
         "context_clamped": bool(args.context_clamped),
         "control_rollout_mode": "reference_consistent",
-        "same_initial_particles": True,
-        "common_noise": True,
+        "same_initial_particles": bool(
+            (out["initial_particles_sha256_factual"] == out["initial_particles_sha256_reference"]).all()
+        ),
+        "same_initial_logw": bool(
+            (out["initial_logw_sha256_factual"] == out["initial_logw_sha256_reference"]).all()
+        ),
+        "same_initial_log_m0": bool(
+            (out["initial_log_m0_sha256_factual"] == out["initial_log_m0_sha256_reference"]).all()
+        ),
+        "common_noise": bool((out["noise_sha256_factual"] == out["noise_sha256_reference"]).all()),
+        "n_counterfactual_rows": int(len(out)),
         "reference_protocol": "delta_zero_soft_ref_reference_consistent",
         "geometry_metric": "weighted_mean_l2",
         "geometry_metric_note": (

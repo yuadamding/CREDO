@@ -108,7 +108,7 @@ def test_lps_trajectory_runner_smoke(tmp_path) -> None:
     pred = pd.read_csv(output_dir / "predicted_metrics_by_key_time.csv")
     assert {"physical_time", "normalized_tau", "interval_physical_duration"}.issubset(pred.columns)
     manifest = json.loads((output_dir / "run_manifest.json").read_text())
-    assert manifest["package_version"] == "2.0.9"
+    assert manifest["package_version"] == "2.0.10"
     assert manifest["resolved_mass_mode"] == "group_total"
 
 
@@ -183,6 +183,13 @@ def test_lps_trajectory_runner_vae_source_only_with_extra_timepoint(tmp_path) ->
     assert (output_dir / "vae_artifact" / "vae_history.csv").exists()
     assert (output_dir / "vae_artifact" / "vae_gene_mask.npy").exists()
     assert (output_dir / "vae_artifact" / "vae_gene_names.txt").exists()
+    metadata = json.loads((output_dir / "vae_artifact" / "vae_metadata.json").read_text())
+    hyperparams = metadata["vae_hyperparams"]
+    assert hyperparams["gene_selection_scope"] == "source_only"
+    assert len(hyperparams["requested_row_mask_sha256"]) == 64
+    assert len(hyperparams["vae_fit_mask_sha256"]) == 64
+    assert len(hyperparams["gene_selection_mask_sha256"]) == 64
+    assert hyperparams["requested_row_mask_sha256"] != hyperparams["vae_fit_mask_sha256"]
 
 
 def test_lps_trajectory_runner_ambiguous_constant_mass_requires_mode(tmp_path) -> None:

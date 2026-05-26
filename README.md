@@ -121,13 +121,18 @@ python scripts/stress_test_trajectory_production.py \
 ```
 
 Biology summary tables include conservative interpretation gates. A ranked hit
-is marked `claim-ready` only when available evidence clears fold-stability,
-same-gene guide-concordance, negative-control null-gap, and claim-specific
-counterfactual checks. Ecology-dependent calls require context-ablation
-evidence; plasticity/state-shift calls require stable diffusion/action evidence.
-Otherwise the table records the missing condition, such as
-`needs-fold-stability`, `needs-guide-concordance`, or
-`needs-context-ablation`.
+is marked `claim-ready` only when evidence clears counterfactual replicate
+support, fold-stability, same-gene guide-concordance, metric-specific
+negative-control null gaps, explicit mass-mode metadata when available, and
+claim-specific counterfactual checks. Single guide genes are reported as
+`not_assessable` for guide concordance, not as a pass. Ecology-dependent calls
+require replicated context-ablation evidence; plasticity/state-shift calls
+require stable diffusion/action evidence and state-shift null support. The
+table records the missing condition, such as
+`needs-counterfactual-replicates`, `needs-fold-stability`,
+`needs-guide-concordance`, `needs-explicit-mass-mode`, `missing-mass-null`,
+`below-context-null-gap`, or `needs-context-ablation`, and it also emits axis-specific columns such as
+`expansion_claim_ready`, `plasticity_claim_ready`, and `ecology_claim_ready`.
 
 ## Public Imports
 
@@ -153,7 +158,8 @@ per-key/time prediction tables.
   shared reference, and non-controls have reference plus residual.
 - Counterfactuals use the same source finite measure and particle seed; the
   reference branch removes the perturbation residual rather than swapping in a
-  control initial population.
+  control initial population. The HNSCC counterfactual manifest computes
+  same-start and same-noise flags from tensor checksums.
 - Ecological context is computed from absolute particle weights, including
   `log_m0`, so expansion and depletion affect global context.
 - Endpoint fitting uses finite-measure geometry plus log-mass consistency; the

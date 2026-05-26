@@ -13,6 +13,15 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _biology_module():
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    import extract_biology_effects
+
+    return extract_biology_effects
+
+
 def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> None:
     with_root = tmp_path / "with"
     shared_root = tmp_path / "shared"
@@ -132,6 +141,7 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
     assert np.isclose(notch["delta_log_mass_fact_vs_ref"], 0.8)
     assert np.isclose(notch["delta_log_mass"], 0.8)
     assert np.isclose(notch["geom_shift_fact_vs_ref"], 1.3)
+    assert np.isclose(notch["legacy_geom_shift_fact_vs_ref"], 1.3)
     assert np.isclose(notch["diffusion_action"], 0.6)
     assert np.isclose(notch["context_dependence_geom"], 0.7)
     assert notch["counterfactual_n_folds"] == 2
@@ -141,7 +151,8 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
     assert "fold_stability_pass" in out.columns
     assert "guide_concordance_pass" in out.columns
     assert "negative_control_gap_pass" in out.columns
-    assert notch["biological_interpretation_gate"] == "needs-fold-stability"
+    assert notch["biological_interpretation_gate"] == "needs-guide-concordance"
+    assert notch["guide_concordance_status"] == "not_assessable"
     assert notch["shared_guide_null_gap"] > 0
 
 
@@ -226,6 +237,291 @@ def test_biological_gates_detect_guide_discordance(tmp_path: Path) -> None:
     assert sg1["same_gene_sgrna_concordance"] == 0.5
     assert sg1["guide_concordance_pass"] == np.False_
     assert sg1["biological_interpretation_gate"] == "needs-guide-concordance"
+
+
+def test_biological_gate_missing_fold_stability_does_not_pass() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["fold_stability_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-fold-stability"
+    assert row["claim_ready"] == np.False_
+
+
+def test_ecology_gate_requires_counterfactual_replicates() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+                "context_dependence_geom": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "ecology-dependent",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 1,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "context_dependence_geom": 1.0,
+                "context_dependence_geom_sign_consistency": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["counterfactual_replicate_pass"] == np.False_
+    assert row["ecology_ablation_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-counterfactual-replicates"
+
+
+def test_context_sign_missing_does_not_pass_ecology() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+                "context_dependence_geom": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "ecology-dependent",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "context_dependence_geom": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["ecology_ablation_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-context-ablation"
+
+
+def test_missing_negative_control_null_blocks_claim_ready() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.iloc[0]
+
+    assert pd.isna(row["mass_null_gap_pass"])
+    assert row["biological_interpretation_gate"] == "missing-mass-null"
+    assert row["claim_ready"] == np.False_
+
+
+def test_single_guide_is_not_claim_ready_strict() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 1,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["guide_concordance_status"] == "not_assessable"
+    assert row["guide_concordance_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-guide-concordance"
+
+
+def test_metric_specific_context_null_blocks_ecology_claim() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+                "context_dependence_geom": 2.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "ecology-dependent",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "context_dependence_geom": 1.0,
+                "context_dependence_geom_sign_consistency": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["context_dependence_null_gap_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "below-context-null-gap"
+
+
+def test_auto_mass_mode_metadata_blocks_claim_ready_when_present() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "resolved_mass_mode": "auto",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["explicit_mass_mode_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-explicit-mass-mode"
+    assert row["claim_ready"] == np.False_
+
+
+def test_biology_collects_resolved_mass_mode_from_run_config(tmp_path: Path) -> None:
+    mod = _biology_module()
+    run_dir = tmp_path / "setting" / "fold_0"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "data": {"mass_mode": "auto"},
+                "split": {"split_strategy": "random_kfold", "fold_index": 0},
+            }
+        )
+    )
+    (run_dir / "results_summary.json").write_text("{}")
+    pd.DataFrame(
+        [
+            {
+                "perturbation_id": "GeneA_sg1",
+                "mass_pred": 2.0,
+                "mass_true": 1.0,
+                "mass_rel_error": 0.1,
+                "is_control": False,
+                "n_init_atoms": 2,
+                "n_term_atoms": 3,
+            }
+        ]
+    ).to_csv(run_dir / "test_endpoint_metrics.csv", index=False)
+
+    collected = mod._collect_single_root(tmp_path, split="test")
+    aggregated = mod._aggregate(collected)
+
+    assert collected["resolved_mass_mode"].iloc[0] == "auto"
+    assert aggregated["resolved_mass_mode"].iloc[0] == "auto"
+
+
+def test_counterfactual_tensor_hashes_reflect_equality() -> None:
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    from run_counterfactual_biology import _tensor_sha256
+    import torch
+
+    x = torch.tensor([[1.0, 2.0]])
+    y = x.clone()
+    z = torch.tensor([[1.0, 3.0]])
+
+    assert _tensor_sha256(x) == _tensor_sha256(y)
+    assert _tensor_sha256(x) != _tensor_sha256(z)
 
 
 def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:

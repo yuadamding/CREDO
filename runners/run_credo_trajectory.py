@@ -7,6 +7,7 @@ to all downstream observed checkpoints.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.metadata
 import json
 import platform
@@ -202,6 +203,14 @@ def _matrix_column_scores(matrix: object, selection_mask: np.ndarray | None = No
     return np.log1p(var / np.maximum(mean, 1e-8))
 
 
+def _sha256_bool_array(mask: np.ndarray) -> str:
+    arr = np.asarray(mask, dtype=np.bool_).reshape(-1)
+    hasher = hashlib.sha256()
+    hasher.update(str(arr.shape).encode("utf-8"))
+    hasher.update(arr.tobytes())
+    return hasher.hexdigest()
+
+
 def _column_mask_for_vae(
     adata: ad.AnnData,
     args: argparse.Namespace,
@@ -347,6 +356,9 @@ def _load_latent(
             "gene_selection_scope": "source_only" if args.vae_fit_source_only else "requested_cells",
             "gene_rank_col": str(args.expression_gene_rank_col or ""),
             "gene_score_col": str(args.expression_gene_score_col or ""),
+            "requested_row_mask_sha256": _sha256_bool_array(row_mask),
+            "vae_fit_mask_sha256": _sha256_bool_array(fit_mask),
+            "gene_selection_mask_sha256": _sha256_bool_array(selection_mask),
         },
         train_cell_indices=np.flatnonzero(fit_mask).astype(int).tolist(),
         latent_standardization=stats,

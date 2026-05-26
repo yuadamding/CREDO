@@ -94,6 +94,16 @@ def _collect_single_root(cv_root: Path, *, split: str) -> pd.DataFrame:
             results.get("shared_guide_embedding", config.get("shared_guide_embedding"))
         )
         df["program_basis"] = "state_centroids" if _as_bool(config.get("use_state_centroids")) else "learned"
+        data_cfg = config.get("data", {}) if isinstance(config.get("data", {}), dict) else {}
+        mass_mode = (
+            data_cfg.get("mass_mode")
+            or config.get("resolved_mass_mode")
+            or config.get("mass_mode")
+            or results.get("resolved_mass_mode")
+            or results.get("train_mass_mode")
+        )
+        if mass_mode is not None:
+            df["resolved_mass_mode"] = mass_mode
         rows.append(df)
 
     if not rows:
@@ -160,6 +170,7 @@ def _aggregate(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
         "mass_rel_error_std": ("mass_rel_error", "std"),
     }
     optional = {
+        "resolved_mass_mode": ("resolved_mass_mode", _mode_or_first),
         "state_tv_mean": ("state_tv", "mean"),
         "state_tv_std": ("state_tv", "std"),
         "dominant_state_match_rate": ("dominant_state_match", "mean"),
@@ -301,6 +312,8 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
         out["counterfactual_n_folds"] = 1
     if "geometry_shift_l2" in out.columns and "geom_shift_fact_vs_ref" not in out.columns:
         out["geom_shift_fact_vs_ref"] = out["geometry_shift_l2"]
+    if "geom_shift_fact_vs_ref" in out.columns and "legacy_geom_shift_fact_vs_ref" not in out.columns:
+        out["legacy_geom_shift_fact_vs_ref"] = out["geom_shift_fact_vs_ref"]
     if "context_dependence" in out.columns and "context_dependence_geom" not in out.columns:
         out["context_dependence_geom"] = out["context_dependence"]
     if "delta_log_mass_self_vs_clamped" in out.columns and "context_dependence_mass" not in out.columns:
@@ -350,19 +363,28 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
         out["delta_log_mass"] = np.nan
     is_control = out.get("is_control", pd.Series(False, index=out.index))
     controls = out.loc[is_control.fillna(False).astype(bool)]
-    control_mass_gap = _q95(controls["delta_log_mass"].abs()) if not controls.empty else float("nan")
-    out["control_null_abs_delta_log_mass_q95"] = control_mass_gap
-    if pd.isna(control_mass_gap):
-        out["negative_control_gap_pass"] = pd.NA
-    else:
-        out["negative_control_gap_pass"] = pd.to_numeric(out["delta_log_mass"], errors="coerce").abs() > control_mass_gap
 
-    n_folds = pd.to_numeric(out.get("n_folds", pd.Series(np.nan, index=out.index)), errors="coerce")
-    fold_sign = pd.to_numeric(
-        out.get("fold_log_expansion_sign_consistency", pd.Series(np.nan, index=out.index)),
-        errors="coerce",
-    )
-    out["fold_stability_pass"] = (n_folds >= 2) & (fold_sign.fillna(1.0) >= 0.75)
+    def add_metric_null(metric_col: str, prefix: str) -> None:
+        metric = pd.to_numeric(out.get(metric_col, pd.Series(np.nan, index=out.index)), errors="coerce")
+        control_values = pd.to_numeric(
+            controls.get(metric_col, pd.Series(dtype=float)),
+            errors="coerce",
+        ).abs()
+        null_q95 = _q95(control_values) if not controls.empty else float("nan")
+        out[f"{prefix}_null_abs_q95"] = null_q95
+        if pd.isna(null_q95):
+            out[f"{prefix}_null_gap_pass"] = pd.NA
+        else:
+            out[f"{prefix}_null_gap_pass"] = metric.abs() > null_q95
+
+    if "weighted_mean_shift_l2_fact_vs_ref" not in out.columns and "geom_shift_fact_vs_ref" in out.columns:
+        out["weighted_mean_shift_l2_fact_vs_ref"] = out["geom_shift_fact_vs_ref"]
+    add_metric_null("delta_log_mass", "mass")
+    add_metric_null("weighted_mean_shift_l2_fact_vs_ref", "mean_shift")
+    add_metric_null("context_dependence_geom", "context_dependence")
+    add_metric_null("diffusion_action", "diffusion_action")
+    out["control_null_abs_delta_log_mass_q95"] = out["mass_null_abs_q95"]
+    out["negative_control_gap_pass"] = out["mass_null_gap_pass"]
 
     n_guides = pd.to_numeric(
         out.get("same_gene_n_guides", pd.Series(np.nan, index=out.index)),
@@ -372,13 +394,23 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
         out.get("same_gene_sgrna_concordance", pd.Series(np.nan, index=out.index)),
         errors="coerce",
     )
-    out["guide_concordance_pass"] = (n_guides < 2) | (guide_conc >= 0.75)
+    out["guide_concordance_status"] = np.select(
+        [n_guides.ge(2) & guide_conc.ge(0.75), n_guides.ge(2)],
+        ["pass", "fail"],
+        default="not_assessable",
+    )
+    out["guide_concordance_pass"] = out["guide_concordance_status"].eq("pass")
 
     cf_folds = pd.to_numeric(
         out.get("counterfactual_n_folds", pd.Series(np.nan, index=out.index)),
         errors="coerce",
     )
     out["counterfactual_replicate_pass"] = cf_folds.fillna(0) >= 2
+    cf_mass_sign = pd.to_numeric(
+        out.get("delta_log_mass_fact_vs_ref_sign_consistency", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["fold_stability_pass"] = out["counterfactual_replicate_pass"] & cf_mass_sign.ge(0.75)
 
     diffusion_sign = pd.to_numeric(
         out.get("diffusion_action_fact_sign_consistency", pd.Series(np.nan, index=out.index)),
@@ -386,7 +418,7 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     )
     out["plasticity_stability_pass"] = (
         out["counterfactual_replicate_pass"]
-        & diffusion_sign.fillna(1.0).ge(0.75)
+        & diffusion_sign.ge(0.75)
     )
 
     context_available = out.get(
@@ -397,9 +429,29 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
         out.get("context_dependence_geom_sign_consistency", pd.Series(np.nan, index=out.index)),
         errors="coerce",
     )
-    out["ecology_ablation_pass"] = context_available & (
-        (~out["counterfactual_replicate_pass"]) | context_sign.fillna(1.0).ge(0.75)
+    out["ecology_ablation_pass"] = (
+        out["counterfactual_replicate_pass"]
+        & context_available
+        & context_sign.ge(0.75)
     )
+    mass_mode_col = None
+    if "resolved_mass_mode" in out.columns:
+        mass_mode_col = "resolved_mass_mode"
+    elif "mass_mode" in out.columns:
+        mass_mode_col = "mass_mode"
+    if mass_mode_col is None:
+        out["explicit_mass_mode_pass"] = pd.NA
+    else:
+        mass_mode = out[mass_mode_col].astype("string").str.lower()
+        out["explicit_mass_mode_pass"] = mass_mode.notna() & ~mass_mode.eq("auto")
+
+    def null_gate(row: pd.Series, pass_col: str, name: str) -> str | None:
+        value = row.get(pass_col, pd.NA)
+        if pd.isna(value):
+            return f"missing-{name}-null"
+        if not bool(value):
+            return f"below-{name}-null-gap"
+        return None
 
     def gate(row: pd.Series) -> str:
         priority = str(row.get("priority_class", "watch"))
@@ -407,21 +459,74 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
             return "artifact-watch"
         if pd.isna(row.get("delta_log_mass_fact_vs_ref", np.nan)):
             return "counterfactual-pending"
+        if not bool(row.get("counterfactual_replicate_pass", False)):
+            return "needs-counterfactual-replicates"
         if not bool(row.get("fold_stability_pass", False)):
             return "needs-fold-stability"
         if not bool(row.get("guide_concordance_pass", True)):
             return "needs-guide-concordance"
-        null_pass = row.get("negative_control_gap_pass", pd.NA)
-        if not pd.isna(null_pass) and not bool(null_pass):
-            return "below-control-null-gap"
-        if priority == "ecology-dependent" and not bool(row.get("ecology_ablation_pass", False)):
-            return "needs-context-ablation"
-        if priority == "plasticity/state-shift" and not bool(row.get("plasticity_stability_pass", False)):
-            return "needs-diffusion-stability"
+        explicit_mass = row.get("explicit_mass_mode_pass", pd.NA)
+        if pd.notna(explicit_mass) and not bool(explicit_mass):
+            return "needs-explicit-mass-mode"
+        if priority == "ecology-dependent":
+            null_reason = null_gate(row, "context_dependence_null_gap_pass", "context")
+            if null_reason is not None:
+                return null_reason
+            if not bool(row.get("ecology_ablation_pass", False)):
+                return "needs-context-ablation"
+        elif priority == "plasticity/state-shift":
+            for pass_col, name in [
+                ("mean_shift_null_gap_pass", "mean-shift"),
+                ("diffusion_action_null_gap_pass", "diffusion"),
+            ]:
+                null_reason = null_gate(row, pass_col, name)
+                if null_reason is not None:
+                    return null_reason
+            if not bool(row.get("plasticity_stability_pass", False)):
+                return "needs-diffusion-stability"
+        else:
+            null_reason = null_gate(row, "mass_null_gap_pass", "mass")
+            if null_reason is not None:
+                return null_reason
         return "claim-ready"
 
     out["biological_interpretation_gate"] = out.apply(gate, axis=1)
     out["claim_ready"] = out["biological_interpretation_gate"].eq("claim-ready")
+
+    def pass_series(column: str) -> pd.Series:
+        values = out.get(column, pd.Series(False, index=out.index))
+        return values.map(lambda value: False if pd.isna(value) else bool(value))
+
+    stable = (
+        out["counterfactual_replicate_pass"]
+        & out["fold_stability_pass"]
+        & out["guide_concordance_pass"]
+    )
+    explicit_mass_ready = out["explicit_mass_mode_pass"].map(lambda value: True if pd.isna(value) else bool(value))
+    stable = stable & explicit_mass_ready
+    out["expansion_claim_ready"] = stable & pass_series("mass_null_gap_pass")
+    out["plasticity_claim_ready"] = (
+        stable
+        & out["plasticity_stability_pass"]
+        & pass_series("mean_shift_null_gap_pass")
+        & pass_series("diffusion_action_null_gap_pass")
+    )
+    out["ecology_claim_ready"] = (
+        stable
+        & out["ecology_ablation_pass"]
+        & pass_series("context_dependence_null_gap_pass")
+    )
+    tsk = pd.to_numeric(out.get("z_delta_autocrine_tnf_tsk_score", pd.Series(0.0, index=out.index)), errors="coerce")
+    pemt = pd.to_numeric(out.get("z_delta_pemt_score", pd.Series(0.0, index=out.index)), errors="coerce")
+    out["tsk_pemt_claim_ready"] = out["expansion_claim_ready"] & ((tsk >= 0.5) | (pemt >= 0.5))
+    out["transformation_claim_ready"] = (
+        out["tsk_pemt_claim_ready"]
+        & (out["plasticity_claim_ready"] | out["ecology_claim_ready"])
+    )
+    out["claim_blocking_reasons"] = out["biological_interpretation_gate"].where(
+        ~out["claim_ready"],
+        "",
+    )
     return out
 
 
@@ -561,9 +666,17 @@ def main() -> None:
             "priority_score",
             "biological_interpretation_gate",
             "claim_ready",
+            "claim_blocking_reasons",
             "fold_stability_pass",
             "guide_concordance_pass",
+            "guide_concordance_status",
+            "explicit_mass_mode_pass",
             "negative_control_gap_pass",
+            "expansion_claim_ready",
+            "plasticity_claim_ready",
+            "ecology_claim_ready",
+            "tsk_pemt_claim_ready",
+            "transformation_claim_ready",
             "delta_log_mass",
             "delta_log_mass_fact_vs_ref",
             "geom_shift_fact_vs_ref",

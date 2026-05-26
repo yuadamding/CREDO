@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.10
+
+- Marked the package release as `credo==2.0.10`.
+- Carries forward the 2.0.9 reporting-correctness state: checksum-backed
+  counterfactual provenance, VAE row-mask hashes, explicit mass-mode claim
+  gating, metric-specific biological null gates, and conservative
+  axis-specific claim-readiness outputs.
+
 ## 2.0.9
 
 - Marked the package release as `credo==2.0.9`.
@@ -22,9 +30,19 @@
   stability, same-gene guide concordance, negative-control null gap,
   counterfactual replicate support, plasticity/diffusion stability, and
   context-ablation evidence are now emitted alongside priority classes.
+- Tightened biological gates so missing fold/context/null evidence blocks
+  claim-ready status, single-guide genes are guide-concordance
+  `not_assessable`, and ecology/plasticity calls use matching metric-specific
+  negative-control nulls plus axis-specific readiness columns.
 - Added counterfactual provenance fields and a `counterfactual_manifest.json`
-  that records same-start/same-noise, reference-consistent control rollout,
-  context-clamping, and the weighted-mean geometry metric convention.
+  that records checksum-backed same-start/same-noise, reference-consistent
+  control rollout, context-clamping, and the weighted-mean geometry metric
+  convention.
+- Added checksum metadata for the VAE requested rows, fit rows, and gene
+  selection rows; counterfactual manifest booleans are now computed from
+  tensor-hash equality rather than declared by convention.
+- Claim-ready biological gates now block publication-style claims when
+  explicit run metadata says mass mode remained `auto`.
 
 ## 2.0.8
 
