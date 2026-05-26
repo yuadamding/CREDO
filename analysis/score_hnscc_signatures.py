@@ -13,7 +13,7 @@ from scipy import sparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "package" / "src"))
 
-from cape.data.hnscc import prepare_hnscc_obs
+from credo.data.hnscc import prepare_hnscc_obs
 from hnscc_biology_common import candidate_gene_keys, load_signature_sets, normalize_gene_name
 
 

@@ -17,7 +17,8 @@ SOLVER_BIN="$(resolve_solver_executable "$CONDA_BIN")" || {
   echo "A conda or mamba solver executable could not be resolved." >&2
   exit 1
 }
-ENV_NAME="${1:-cape-hnscc}"
+ENV_NAME="${1:-credo-hnscc}"
+ENV_FILE="${ENV_FILE:-env/credo-hnscc-minimal.yml}"
 TORCH_INDEX_URL="${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu124}"
 TORCH_SPEC="${TORCH_SPEC:-torch}"
 INSTALL_TORCH="${INSTALL_TORCH:-auto}"
@@ -26,7 +27,7 @@ export PIP_NO_CACHE_DIR="${PIP_NO_CACHE_DIR:-1}"
 SOLVER_NAME="$(basename "$SOLVER_BIN")"
 default_data_path() {
   local candidates=(
-    "../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad"
+    "../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad"
   )
   local candidate=""
   for candidate in "${candidates[@]}"; do
@@ -54,13 +55,13 @@ EOF
       --override-channels \
       -c conda-forge \
       -n "$ENV_NAME" \
-      -f env/cape-hnscc-minimal.yml
+      -f "$ENV_FILE"
   else
     CONDARC="$condarc_tmp" "$SOLVER_BIN" env create \
       --solver libmamba \
       --no-default-packages \
       -n "$ENV_NAME" \
-      -f env/cape-hnscc-minimal.yml
+      -f "$ENV_FILE"
   fi
 
   rm -f "$condarc_tmp"

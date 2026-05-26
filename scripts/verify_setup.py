@@ -9,14 +9,13 @@ import numpy as np
 import pandas as pd
 import torch
 
-import cape
 import credo
-from cape.models.full_model import FullDynamicsModel
-from cape.training.trainer import Trainer
+from credo.models.full_model import FullDynamicsModel
+from credo.training.trainer import Trainer
 
 
 DEFAULT_DATA_CANDIDATES = [
-    "../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad",
+    "../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad",
 ]
 
 
@@ -49,7 +48,6 @@ def main() -> None:
     print("torch", torch.__version__)
     print("numpy", np.__version__)
     print("pandas", pd.__version__)
-    print("cape", cape.__version__)
     print("credo", credo.__version__)
     print("model_import", FullDynamicsModel.__name__)
     print("trainer_import", Trainer.__name__)

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "credo"
 version = "1.1.3"
-description = "Compact CREDO HNSCC transfer package with H100 training launchers and biology extraction"
+description = "Compact CREDO package for endpoint and multi-time immune trajectory modeling"
 requires-python = ">=3.11"
 dependencies = [
     "torch>=2.1",
@@ -15,9 +15,6 @@ dependencies = [
     "pydantic>=2.0",
     "geomloss>=0.2.6",
     "anndata>=0.10",
-    "tqdm>=4.65",
-    "matplotlib>=3.7",
-    "PyYAML>=6.0",
 ]
 
 [tool.setuptools.packages.find]

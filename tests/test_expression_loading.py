@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import scipy.sparse as sp
 
-from cape.data.hnscc import load_hnscc_expression
+from credo.data.hnscc import load_hnscc_expression
 
 
 def _write_h5ad(path: Path, matrix: sp.spmatrix, var: pd.DataFrame | None = None) -> None:

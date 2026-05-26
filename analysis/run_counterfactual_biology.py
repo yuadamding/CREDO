@@ -13,16 +13,16 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "package" / "src"))
 
-from cape.data.hnscc import (  # noqa: E402
+from credo.data.hnscc import (  # noqa: E402
     build_study_from_split,
     compute_state_centroids,
     load_hnscc,
     load_hnscc_obs,
     prepare_hnscc_obs,
 )
-from cape.models.full_model import FullDynamicsModel  # noqa: E402
-from cape.models.simulator import _control_embedding_context, initialise_particles  # noqa: E402
-from cape.models.weighted_sde import ParticleRollout, WeightedParticleSimulator  # noqa: E402
+from credo.models.full_model import FullDynamicsModel  # noqa: E402
+from credo.models.simulator import _control_embedding_context, initialise_particles  # noqa: E402
+from credo.models.weighted_sde import ParticleRollout, WeightedParticleSimulator  # noqa: E402
 
 from hnscc_biology_common import infer_target_gene  # noqa: E402
 

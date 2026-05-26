@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--ranking-mode",
-        choices=["balanced", "dominant_state", "test_acc"],
+        choices=["balanced", "dominant_state", "test_acc", "test_uot"],
         default="balanced",
     )
     return parser.parse_args()

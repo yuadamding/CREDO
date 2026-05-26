@@ -8,7 +8,7 @@ This runner now favors a compact, biology-aligned setup:
   - endpoint UOT + state-composition evaluation
 
 Run with:
-  conda run -n cape-hnscc python runners/run_credo_hnscc_full.py
+  conda run -n credo-hnscc python runners/run_credo_hnscc_full.py
 """
 from __future__ import annotations
 
@@ -28,9 +28,9 @@ import torch
 ROOT = Path(__file__).parent.parent / "package"
 sys.path.insert(0, str(ROOT / "src"))
 
-import cape
-from cape.config.schema import LatentConfig, ModelConfig, RunConfig, SimulationConfig, TrainingConfig, VAEConfig
-from cape.data.hnscc import (
+import credo
+from credo.config.schema import LatentConfig, ModelConfig, RunConfig, SimulationConfig, TrainingConfig, VAEConfig
+from credo.data.hnscc import (
     DEFAULT_LATENT_KEY,
     DEFAULT_RANDOM_STRATIFY_COLS,
     DEFAULT_STATE_KEY,
@@ -51,7 +51,7 @@ from cape.data.hnscc import (
     prepare_hnscc_obs,
     supported_intersection,
 )
-from cape.eval.hnscc import (
+from credo.eval.hnscc import (
     build_true_terminal_state_table,
     cap_endpoint_problem_terminal,
     evaluate_endpoint_problem,
@@ -59,12 +59,12 @@ from cape.eval.hnscc import (
     summarize_eval,
     summarize_state_metrics,
 )
-from cape.models.full_model import FullDynamicsModel
-from cape.training.trainer import Trainer
+from credo.models.full_model import FullDynamicsModel
+from credo.training.trainer import Trainer
 
 
 DEFAULT_DATA_CANDIDATES = [
-    "../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad",
+    "../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad",
 ]
 DEFAULT_OUTPUT = "runs/hnscc_credo_full_random"
 BASELINE_SUPPORTED_PERTURBATIONS = 121
@@ -230,10 +230,14 @@ def configure_torch(cpu_threads: int = 0, cpu_interop_threads: int = 0) -> None:
         except RuntimeError:
             pass
     torch.set_float32_matmul_precision("high")
+    deterministic = os.environ.get("CREDO_DETERMINISTIC", "0").lower() in {"1", "true", "yes", "on"}
+    if deterministic:
+        torch.use_deterministic_algorithms(True, warn_only=True)
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = not deterministic
+        torch.backends.cudnn.deterministic = deterministic
 
 
 def save_text(path: Path, text: str) -> None:
@@ -308,7 +312,7 @@ def software_versions_manifest(args: argparse.Namespace, *, git_sha: str | None,
         ]
     return {
         "package_name": "credo",
-        "package_version": cape.__version__,
+        "package_version": credo.__version__,
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "command": [sys.executable, *sys.argv],
@@ -1147,7 +1151,8 @@ def main() -> None:
 
     results = {
         "method": "CREDO",
-        "package_version": cape.__version__,
+        "package_name": "credo",
+        "package_version": credo.__version__,
         "git_sha": git_sha,
         "git_dirty": git_dirty,
         "train_time_s": round(train_time_s, 1),

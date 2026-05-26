@@ -1,103 +1,98 @@
-# HNSCC CREDO Transfer Bundle
+# CREDO
 
-Compact, portable CREDO workflow for the HNSCC P4/P60 Perturb-seq transfer
-analysis. The bundle contains source code, launchers, tests, and biology
-post-processing utilities. It intentionally does not contain `.h5ad` data,
-trained checkpoints, or run outputs.
+Compact CREDO package for endpoint and multi-time immune trajectory modeling.
+The repository contains the installable `credo` Python package, one HNSCC
+training runner, post-training analysis utilities, setup scripts, and tests.
+It intentionally does not contain `.h5ad` data, checkpoints, or run outputs.
 
-## Bundle Layout
+## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `package/` | Installable Python package. Historical imports live under `cape`; `credo` is the compatibility alias. |
-| `runners/` | Python entry points for training and CV summaries. |
-| `analysis/` | Post-training HNSCC biology extraction, signature scoring, counterfactual merging, and bulk projection. |
-| `scripts/` | Shell launchers for installation, H100 training, guide-vs-shared comparisons, and biology extraction. |
-| `tests/` | Smoke and regression tests for package imports, weak-form math, expression loading, summaries, and biology tables. |
+| `package/` | Installable Python package. Public imports live under `credo`. |
+| `runners/` | Training and CV-summary Python entry points. |
+| `analysis/` | Post-training biology and signature utilities. |
+| `scripts/` | Install, setup verification, and randomized stress testing. |
+| `tests/` | Unit, regression, and randomized simulation tests. |
 | `env/` | Minimal conda environment definition. |
-| `docs/` | Detailed runbook, biology workflow, package structure, and archive policy. |
 
-Generated outputs belong in `runs/`, `outputs/`, `results/`, or `models/`;
-those paths are ignored by git and should be archived outside the portable
-bundle.
+Generated outputs belong in `runs/`, `outputs/`, `results/`, or `models/`.
+Those paths are ignored and should stay outside portable source snapshots.
 
-## Required Data
+## Inputs
 
-Place the Renz HNSCC AnnData file beside this directory:
+Use paths relative to this repository:
 
-```bash
-../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad
+```text
+../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad
+../inputs/LPS/credo_lps_90m_to_6h_celltype.h5ad
+../inputs/LPS/credo_lps_90m_to_10h_celltype.h5ad
+../inputs/LPS/credo_lps_0h_to_90m_celltype.h5ad
 ```
-
-Override with `DATA_PATH=/path/to/file.h5ad` when needed.
 
 ## Install
 
 ```bash
 CONDA_BIN=/rsrch8/home/bcb/$USER/miniforge3/bin/conda \
-bash scripts/install_bundle.sh cape-hnscc
+bash scripts/install_bundle.sh credo-hnscc
 ```
 
-The installer defaults to the PyTorch CUDA 12.4 wheel index because the common
-H100/Jupyter driver stack reports CUDA driver 12.4. On a newer-driver node, set
-`TORCH_INDEX_URL`; to replace an incompatible existing Torch build, set
-`INSTALL_TORCH=1`.
-
-If the environment already exists and setup verification passes, refresh only
-the editable package:
+For an existing environment:
 
 ```bash
 python -m pip install --no-cache-dir -e package
-python scripts/verify_setup.py --data-path ../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad
+python scripts/verify_setup.py
 ```
 
-## Main Commands
+## Run
 
-Run the current best with-guide versus shared-guide 4-fold comparison:
+Minimal HNSCC smoke run:
 
 ```bash
-CONDA_BIN=/rsrch8/home/bcb/$USER/miniforge3/bin/conda \
-GPU_LIST=0,1,2,3 \
-bash scripts/run_hnscc_h100_heavy_f_best_ur01_guide_vs_shared_4cv.sh
+python runners/run_credo_hnscc_full.py \
+  --data-path ../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad \
+  --output-dir runs/hnscc_smoke \
+  --latent-source pca \
+  --epochs 2 \
+  --split-strategy random \
+  --train-frac 0.8 \
+  --n-particles 32 \
+  --n-steps 4 \
+  --eval-particles 64 \
+  --eval-steps 6
 ```
 
-Extract mechanistic biology from an existing trained with-guide/shared-guide run:
+Summarize completed CV runs:
 
 ```bash
-COMPARE_ROOT=/rsrch8/home/bcb/yding4/perturbseq/hnscc_cape_transfer_bundle_20260328/runs/hnscc_random_h100_heavy_f_best_ur01_repro_4gpu_20260506_224704 \
-DATA_PATH=../GSE235325_P4P60_allgenes_allcells_latest_states.h5ad \
-RUN_COUNTERFACTUALS=1 CF_CONTEXT_CLAMPED=1 CF_PARTICLES=512 CF_STEPS=28 \
-CF_DEVICE=auto \
-bash scripts/run_hnscc_biological_findings.sh
+python runners/summarize_hnscc_cv.py \
+  --cv-root runs/<run_root> \
+  --output-dir runs/<run_root>/summary
 ```
 
-Use `CF_DEVICE=cpu` if the active Python/Torch install is not compatible with
-the local NVIDIA driver. Use `CF_DEVICE=cuda` only when this succeeds in the
-`cape-hnscc` environment:
+Run the focused test suite:
 
 ```bash
-python -c "import torch; print(torch.cuda.is_available())"
+pytest -q
 ```
 
-## Documentation
+Run randomized trajectory stress tests:
 
-- [Package Structure](docs/PACKAGE_STRUCTURE.md)
-- [H100 Runbook](docs/H100_RUNBOOK.md)
-- [Biology Extraction](docs/BIOLOGY_EXTRACTION.md)
-- [Archive and Storage Policy](docs/ARCHIVE_AND_STORAGE.md)
+```bash
+python scripts/stress_test_trajectory_core.py --cases 1000
+```
 
-## Implementation Notes
+## Public Imports
 
-- New user-facing scripts and reports use the CREDO name.
-- Legacy `cape` imports remain valid; `credo` aliases the same implementation.
-- Every new training run writes `software_versions.json` with package version,
-  command line, Python/PyTorch/CUDA versions, and data-file metadata. Set
-  `CREDO_DATA_SHA256` to record a precomputed full H5AD hash.
-- The endpoint metric named UOT in summaries is a normalized Sinkhorn geometry
-  proxy plus log-mass penalty, not a full KL-relaxed finite-measure UOT objective.
-- Ecological context is computed from rollout states, weights, and masses; guide
-  identity affects context indirectly through dynamics.
-- The built-in Lrp1 proxy signatures include the broad `lrp1_proxy_module` plus
-  epithelial TSK/pEMT, CAF/ECM, and inflammatory/myeloid split modules for
-  confounding checks. They are not decoded perturbation-specific CREDO residual
-  modules.
+```python
+from credo.data.problems import EndpointProblem, TrajectoryProblem
+from credo.losses.trajectory import MultiTimeEndpointLoss
+from credo.models import FullDynamicsModel
+from credo.models.particles import WeightedParticleSimulator
+from credo.training import Trainer
+```
+
+The two-endpoint API remains compatible with the HNSCC runner. The multi-time
+surface adds trajectory problems, observed-time rollout grids, checkpointed
+endpoint losses, and cumulative count fitness without changing default
+two-endpoint behavior.

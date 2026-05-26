@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import torch
 
-from cape.losses.weak_form import WeakFormLoss
+from credo.losses.weak_form import WeakFormLoss
 
 
 def test_constant_growth_does_not_move_normalized_law() -> None:
