@@ -123,7 +123,7 @@ python scripts/stress_test_trajectory_production.py \
 Biology summary tables include conservative interpretation gates. A ranked hit
 is marked `claim-ready` only when evidence clears counterfactual replicate
 support, fold-stability, same-gene guide-concordance, metric-specific
-negative-control null gaps, explicit mass-mode metadata when available, and
+negative-control null gaps, explicit requested mass-mode metadata, and
 claim-specific counterfactual checks. Counterfactual null calibration can
 include control guides with `--include-controls-for-null`, and replicate
 support is counted from unique fold/run identifiers rather than raw rows.
@@ -136,13 +136,15 @@ otherwise well-supported single-guide candidates without marking them as
 strictly claim-ready. Ecology-dependent calls require replicated
 context-ablation evidence; plasticity/state-shift calls require stable
 diffusion/action evidence, distribution-shift null support, and
-distribution-shift stability. TSK/pEMT readiness is reported separately from
-expansion readiness and requires its own program-null support. The table
+fold-level above-null distribution-shift support. TNF-expansion, CIS-like, and
+TSK/pEMT readiness are reported as separate signed program axes and require
+positive program movement plus matching program-null support. The table
 records the missing condition, such as
 `needs-counterfactual-replicates`, `needs-fold-stability`,
 `needs-guide-concordance`, `needs-explicit-mass-mode`, `missing-mass-null`,
 `below-context-null-gap`, or `needs-context-ablation`, and it also emits axis-specific columns such as
-`expansion_claim_ready`, `plasticity_claim_ready`, and `ecology_claim_ready`.
+`expansion_claim_ready`, `tnf_expansion_claim_ready`, `cis_like_claim_ready`,
+`plasticity_claim_ready`, and `ecology_claim_ready`.
 
 ## Public Imports
 
@@ -170,7 +172,7 @@ per-key/time prediction tables.
   reference branch removes the perturbation residual rather than swapping in a
   control initial population. The HNSCC counterfactual manifest computes
   same-start and same-noise flags from tensor checksums of the actual
-  simulator-consumed innovations.
+  simulator-consumed innovations, including context-clamped branches.
 - Trajectory runs write `input_manifest.json` and `final_manifest.json` with
   hashes for key input-derived tables and output artifacts.
 - Ecological context is computed from absolute particle weights, including
@@ -182,4 +184,6 @@ per-key/time prediction tables.
   `weighted_mean_shift_l2_fact_vs_ref`; the older `geom_shift_fact_vs_ref`
   column is retained as a compatibility alias.
 - Counterfactual biology output additionally emits `energy_distance_fact_vs_ref`
-  as a distributional state-shift metric for null-gated plasticity claims.
+  as a distributional state-shift metric for null-gated plasticity claims and
+  `program_occupancy_tv_fact_vs_ref` as an interpretable learned-program
+  occupancy shift.

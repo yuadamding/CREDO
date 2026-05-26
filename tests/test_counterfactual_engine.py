@@ -122,6 +122,33 @@ def test_rollout_with_clamped_context_preserves_nonuniform_tau_grid() -> None:
     assert rollout.context_steps.shape[0] == len(tau_grid) - 1
 
 
+def test_rollout_with_clamped_context_returns_consumed_noise() -> None:
+    model = _model()
+    tau_grid = torch.tensor([0.0, 0.2, 0.7, 1.0])
+    z0 = torch.zeros(1, 4, 2)
+    logw0 = torch.full((1, 4), -np.log(4.0))
+    log_m0 = torch.zeros(1)
+    context_steps = torch.zeros(3, 3)
+    noise_steps = torch.arange(3 * 1 * 4 * 2, dtype=torch.float32).reshape(3, 1, 4, 2) / 100.0
+
+    rollout = rollout_with_clamped_context(
+        model=model,
+        z0=z0,
+        logw0=logw0,
+        log_m0=log_m0,
+        perturbation_ids=["pert"],
+        context_steps=context_steps,
+        tau_start=0.0,
+        tau_end=1.0,
+        tau_grid=tau_grid,
+        noise_steps=noise_steps,
+        return_noise_used=True,
+    )
+
+    assert rollout.noise_steps is not None
+    assert torch.equal(rollout.noise_steps, noise_steps)
+
+
 def test_rollout_with_clamped_context_rejects_bad_context_width() -> None:
     model = _model()
     z0 = torch.zeros(1, 4, 2)

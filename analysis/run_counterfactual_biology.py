@@ -31,6 +31,8 @@ from credo.models.weighted_sde import ParticleRollout, WeightedParticleSimulator
 
 from hnscc_biology_common import infer_target_gene  # noqa: E402
 
+EXPLICIT_MASS_MODES = {"count", "group_total", "per_cell_contribution"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -58,6 +60,41 @@ def parse_args() -> argparse.Namespace:
 
 def _read_json(path: Path) -> dict:
     return json.loads(path.read_text()) if path.exists() else {}
+
+
+def _first_non_null(*values):
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, float) and np.isnan(value):
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
+def _requested_mass_mode_for_counterfactual(config: dict, results: dict, source_split: str) -> str:
+    data_cfg = config.get("data", {}) if isinstance(config.get("data", {}), dict) else {}
+    requested = _first_non_null(
+        results.get("requested_mass_mode"),
+        config.get("requested_mass_mode"),
+        data_cfg.get("requested_mass_mode"),
+    )
+    requested_s = str(requested).strip().lower() if requested is not None else ""
+    if requested_s not in EXPLICIT_MASS_MODES:
+        split_hint = _first_non_null(
+            results.get(f"{source_split}_mass_mode"),
+            config.get(f"{source_split}_mass_mode"),
+            results.get("resolved_mass_mode"),
+            config.get("resolved_mass_mode"),
+        )
+        raise ValueError(
+            "Counterfactual biology requires explicit requested_mass_mode "
+            f"({sorted(EXPLICIT_MASS_MODES)}); got {requested!r} "
+            f"with resolved split hint {split_hint!r}."
+        )
+    return requested_s
 
 
 def _resolve_device(raw: str) -> str:
@@ -273,10 +310,15 @@ def _action_summary(rollout: ParticleRollout) -> dict:
 
 
 @torch.no_grad()
-def _program_summary(model: FullDynamicsModel, rollout: ParticleRollout, labels: list[str] | None) -> dict:
+def _program_fractions(model: FullDynamicsModel, rollout: ParticleRollout) -> torch.Tensor:
     eta = model.context_agg.encoder.eta(rollout.terminal_z)[0]
     w = torch.softmax(rollout.terminal_logw[0], dim=-1)
-    q = (w.unsqueeze(-1) * eta).sum(dim=0).detach().cpu().numpy()
+    return (w.unsqueeze(-1) * eta).sum(dim=0)
+
+
+@torch.no_grad()
+def _program_summary(model: FullDynamicsModel, rollout: ParticleRollout, labels: list[str] | None) -> dict:
+    q = _program_fractions(model, rollout).detach().cpu().numpy()
     idx = int(q.argmax())
     out = {
         "dominant_program_index": idx,
@@ -308,7 +350,7 @@ def main() -> None:
         source_split = pd.Series("analysis", index=obs.index, dtype="object")
 
     program_centroids = _program_centroids(config, obs, latent, original_split)
-    data_cfg = config.get("data", {}) if isinstance(config.get("data", {}), dict) else {}
+    requested_mass_mode = _requested_mass_mode_for_counterfactual(config, results, split_name)
     data = build_study_from_split(
         obs,
         latent,
@@ -316,7 +358,7 @@ def main() -> None:
         split_name=split_name,
         mass_value_col=config.get("mass_value_col"),
         mass_scope=config.get("mass_scope", "subset_only"),
-        mass_mode=data_cfg.get("mass_mode") or config.get("mass_mode") or config.get("train_mass_mode", "auto"),
+        mass_mode=requested_mass_mode,
     )
     supported = [pid for pid in config["supported_perturbations"] if pid in data.catalog.perturbation_ids]
     requested = [pid.strip() for pid in args.perturbations.split(",") if pid.strip()]
@@ -382,6 +424,7 @@ def main() -> None:
         clamped = None
         reference_clamped = None
         if args.context_clamped and reference.context_steps is not None:
+            clamped_noise_steps = noise_steps.clone()
             clamped = rollout_with_clamped_context(
                 model=model,
                 z0=z0.clone(),
@@ -390,8 +433,10 @@ def main() -> None:
                 perturbation_ids=[pid],
                 context_steps=reference.context_steps,
                 n_steps=args.n_steps,
-                noise_steps=noise_steps,
+                noise_steps=clamped_noise_steps,
+                return_noise_used=True,
             )
+            reference_clamped_noise_steps = noise_steps.clone()
             with _control_embedding_context(model, pid, mode="reference_consistent"):
                 reference_clamped = rollout_with_clamped_context(
                     model=model,
@@ -401,7 +446,8 @@ def main() -> None:
                     perturbation_ids=[pid],
                     context_steps=reference.context_steps,
                     n_steps=args.n_steps,
-                    noise_steps=noise_steps,
+                    noise_steps=reference_clamped_noise_steps,
+                    return_noise_used=True,
                 )
 
         fact_z0_hash = _tensor_sha256(factual.z_steps[0])
@@ -428,6 +474,9 @@ def main() -> None:
         fact_program = _program_summary(model, factual, state_labels)
         ref_program = _program_summary(model, reference, state_labels)
         program_shift = abs(fact_program["dominant_program_fraction"] - ref_program["dominant_program_fraction"])
+        fact_program_fractions = _program_fractions(model, factual)
+        ref_program_fractions = _program_fractions(model, reference)
+        program_occupancy_tv = float(0.5 * torch.abs(fact_program_fractions - ref_program_fractions).sum().item())
         fact_actions = _action_summary(factual)
         ref_actions = _action_summary(reference)
         action_deltas = _action_deltas(fact_actions, ref_actions)
@@ -475,6 +524,7 @@ def main() -> None:
             "dominant_program_factual": fact_program.get("dominant_program_label", fact_program["dominant_program_index"]),
             "dominant_program_reference": ref_program.get("dominant_program_label", ref_program["dominant_program_index"]),
             "program_fraction_shift_abs": program_shift,
+            "program_occupancy_tv_fact_vs_ref": program_occupancy_tv,
         }
         for key, value in fact_actions.items():
             row[key] = value
@@ -492,6 +542,14 @@ def main() -> None:
             row["delta_log_mass_self_vs_clamped"] = row["log_mass_factual"] - row["log_mass_clamped_context"]
             row["context_dependence_mass"] = abs(context_mass)
             row["terminal_state_entropy_clamped"] = _entropy(clamped.terminal_logw[0])
+            if clamped.noise_steps is None:
+                raise RuntimeError("Clamped counterfactual rollout did not return noise_steps for provenance.")
+            clamped_noise_hash = _tensor_sha256(clamped.noise_steps)
+            row["noise_sha256_clamped_context"] = clamped_noise_hash
+            row["clamped_same_noise_as_factual"] = clamped_noise_hash == fact_noise_hash
+            row["clamped_same_initial_particles"] = _tensor_sha256(clamped.z_steps[0]) == fact_z0_hash
+            row["clamped_same_initial_logw"] = _tensor_sha256(clamped.logw_steps[0]) == fact_logw0_hash
+            row["clamped_same_initial_log_m0"] = _tensor_sha256(clamped.log_m0) == fact_log_m0_hash
             clamped_actions = _action_summary(clamped)
             for key, value in clamped_actions.items():
                 row[f"{key}_clamped_context"] = value
@@ -504,10 +562,22 @@ def main() -> None:
             row["geom_shift_ref_vs_ref_clamped"] = float(torch.linalg.norm(ref_mean - reference_clamped_mean).item())
             row["delta_log_mass_ref_vs_ref_clamped"] = row["log_mass_reference"] - row["log_mass_reference_clamped_context"]
             row["terminal_state_entropy_reference_clamped"] = _entropy(reference_clamped.terminal_logw[0])
+            if reference_clamped.noise_steps is None:
+                raise RuntimeError("Reference-clamped counterfactual rollout did not return noise_steps for provenance.")
+            row["noise_sha256_reference_clamped_context"] = _tensor_sha256(reference_clamped.noise_steps)
         if not torch.equal(noise_steps, noise_steps_original):
             raise RuntimeError("Counterfactual rollout mutated explicit noise_steps.")
         if not torch.equal(ref_noise_steps, noise_steps_original):
             raise RuntimeError("Reference counterfactual rollout mutated explicit noise_steps.")
+        if args.context_clamped and clamped is not None:
+            for flag in [
+                "clamped_same_noise_as_factual",
+                "clamped_same_initial_particles",
+                "clamped_same_initial_logw",
+                "clamped_same_initial_log_m0",
+            ]:
+                if not bool(row[flag]):
+                    raise RuntimeError(f"Clamped counterfactual invariant failed for {pid}: {flag}")
         for flag in ["same_initial_particles", "same_initial_logw", "same_initial_log_m0", "common_noise"]:
             if not bool(row[flag]):
                 raise RuntimeError(f"Counterfactual invariant failed for {pid}: {flag}")
@@ -523,6 +593,9 @@ def main() -> None:
         "seed": int(args.seed),
         "context_clamped": bool(args.context_clamped),
         "include_controls_for_null": bool(args.include_controls_for_null),
+        "requested_mass_mode": requested_mass_mode,
+        "resolved_mass_mode": data.mass_table.df.attrs.get("mass_mode"),
+        "mass_mode_resolution_reason": data.mass_table.df.attrs.get("mass_mode_resolution_reason"),
         "control_rollout_mode": "reference_consistent",
         "same_initial_particles": bool(
             (out["initial_particles_sha256_factual"] == out["initial_particles_sha256_reference"]).all()
@@ -534,6 +607,11 @@ def main() -> None:
             (out["initial_log_m0_sha256_factual"] == out["initial_log_m0_sha256_reference"]).all()
         ),
         "common_noise": bool((out["noise_sha256_factual"] == out["noise_sha256_reference"]).all()),
+        "clamped_same_noise_as_factual": (
+            bool(out["clamped_same_noise_as_factual"].all())
+            if "clamped_same_noise_as_factual" in out.columns
+            else None
+        ),
         "n_counterfactual_rows": int(len(out)),
         "reference_protocol": "delta_zero_soft_ref_reference_consistent",
         "geometry_metric": "weighted_mean_l2",

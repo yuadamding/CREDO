@@ -289,6 +289,7 @@ def test_biological_gate_missing_fold_stability_does_not_pass() -> None:
                 "counterfactual_n_folds": 2,
                 "same_gene_n_guides": 2,
                 "same_gene_sgrna_concordance": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -326,6 +327,7 @@ def test_ecology_gate_requires_counterfactual_replicates() -> None:
                 "same_gene_sgrna_concordance": 1.0,
                 "context_dependence_geom": 1.0,
                 "context_dependence_geom_sign_consistency": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -362,6 +364,7 @@ def test_context_sign_missing_does_not_pass_ecology() -> None:
                 "same_gene_n_guides": 2,
                 "same_gene_sgrna_concordance": 1.0,
                 "context_dependence_geom": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -388,6 +391,7 @@ def test_missing_negative_control_null_blocks_claim_ready() -> None:
                 "counterfactual_n_folds": 2,
                 "same_gene_n_guides": 2,
                 "same_gene_sgrna_concordance": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -421,6 +425,7 @@ def test_single_guide_is_not_claim_ready_strict() -> None:
                 "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
                 "counterfactual_n_folds": 2,
                 "same_gene_n_guides": 1,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -460,6 +465,7 @@ def test_metric_specific_context_null_blocks_ecology_claim() -> None:
                 "same_gene_sgrna_concordance": 1.0,
                 "context_dependence_geom": 1.0,
                 "context_dependence_geom_sign_consistency": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -536,6 +542,7 @@ def test_plasticity_claim_requires_distributional_metric_null() -> None:
                 "same_gene_n_guides": 2,
                 "same_gene_sgrna_concordance": 1.0,
                 "weighted_mean_shift_l2_fact_vs_ref": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -576,6 +583,7 @@ def test_plasticity_claim_requires_distributional_shift_stability() -> None:
                 "same_gene_sgrna_concordance": 1.0,
                 "energy_distance_fact_vs_ref": 1.0,
                 "energy_distance_fact_vs_ref_abs_cv": np.nan,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -587,6 +595,86 @@ def test_plasticity_claim_requires_distributional_shift_stability() -> None:
     assert row["distribution_shift_stability_pass"] == np.False_
     assert row["biological_interpretation_gate"] == "needs-distribution-shift-stability"
     assert row["plasticity_claim_ready"] == np.False_
+
+
+def test_distribution_shift_cv_alone_does_not_pass_tiny_effect() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.0,
+                "energy_distance_fact_vs_ref": 0.0,
+                "diffusion_action": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "plasticity/state-shift",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "diffusion_action": 1.0,
+                "diffusion_action_fact_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "energy_distance_fact_vs_ref": 0.01,
+                "energy_distance_fact_vs_ref_abs_cv": 0.1,
+                "requested_mass_mode": "count",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["distribution_shift_null_gap_pass"] == np.True_
+    assert row["distribution_shift_stability_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-distribution-shift-stability"
+
+
+def test_counterfactual_loader_computes_distribution_fold_support_from_controls(tmp_path: Path) -> None:
+    mod = _biology_module()
+    path = tmp_path / "cf.csv"
+    pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "fold_id": "fold_0",
+                "is_control": "True",
+                "energy_distance_fact_vs_ref": 0.0,
+            },
+            {
+                "perturbation_id": "ctrl",
+                "fold_id": "fold_1",
+                "is_control": "True",
+                "energy_distance_fact_vs_ref": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold_0",
+                "is_control": "False",
+                "energy_distance_fact_vs_ref": 0.5,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold_1",
+                "is_control": "False",
+                "energy_distance_fact_vs_ref": 0.6,
+            },
+        ]
+    ).to_csv(path, index=False)
+
+    out = mod._load_counterfactual_effects(path)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["counterfactual_n_folds"] == 2
+    assert row["energy_distance_fact_vs_ref_fold_support"] == 1.0
 
 
 def test_tsk_pemt_claim_does_not_require_expansion_ready() -> None:
@@ -616,6 +704,7 @@ def test_tsk_pemt_claim_does_not_require_expansion_ready() -> None:
                 "delta_autocrine_tnf_tsk_score": 2.0,
                 "delta_pemt_score": 0.0,
                 "z_delta_autocrine_tnf_tsk_score": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -625,6 +714,118 @@ def test_tsk_pemt_claim_does_not_require_expansion_ready() -> None:
 
     assert row["expansion_claim_ready"] == np.False_
     assert row["tsk_pemt_claim_ready"] == np.True_
+
+
+def test_negative_tsk_pemt_program_effect_does_not_pass_tsk_claim() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+                "delta_autocrine_tnf_tsk_score": 0.0,
+                "delta_pemt_score": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 0.01,
+                "delta_log_mass_fact_vs_ref": 0.01,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "delta_autocrine_tnf_tsk_score": -2.0,
+                "delta_pemt_score": 0.0,
+                "z_delta_autocrine_tnf_tsk_score": 1.0,
+                "requested_mass_mode": "count",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["tsk_pemt_program_effect_abs"] == 2.0
+    assert row["tsk_pemt_program_effect_pos"] == 0.0
+    assert row["tsk_pemt_claim_ready"] == np.False_
+
+
+def test_negative_tnf_program_effect_does_not_pass_tnf_claim() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.0,
+                "delta_tnf_expansion_score": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "delta_tnf_expansion_score": -2.0,
+                "requested_mass_mode": "count",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["tnf_expansion_program_effect_pos"] == 0.0
+    assert row["tnf_expansion_claim_ready"] == np.False_
+
+
+def test_cis_like_program_null_required_for_cis_claim() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.0,
+                "delta_cis_like_score": 3.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "delta_cis_like_score": 2.0,
+                "requested_mass_mode": "count",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["cis_like_program_null_gap_pass"] == np.False_
+    assert row["cis_like_claim_ready"] == np.False_
 
 
 def test_tsk_pemt_program_null_required_for_tsk_pemt_claim() -> None:
@@ -654,6 +855,7 @@ def test_tsk_pemt_program_null_required_for_tsk_pemt_claim() -> None:
                 "delta_autocrine_tnf_tsk_score": 2.0,
                 "delta_pemt_score": 0.0,
                 "z_delta_autocrine_tnf_tsk_score": 1.0,
+                "requested_mass_mode": "count",
             },
         ]
     )
@@ -778,7 +980,7 @@ def test_degenerate_control_null_uses_positive_practical_floor() -> None:
     assert row["biological_interpretation_gate"] == "below-mass-null-gap"
 
 
-def test_biology_collects_resolved_mass_mode_from_run_config(tmp_path: Path) -> None:
+def test_biology_ignores_ambiguous_generic_mass_mode_from_run_config(tmp_path: Path) -> None:
     mod = _biology_module()
     run_dir = tmp_path / "setting" / "fold_0"
     run_dir.mkdir(parents=True)
@@ -808,13 +1010,13 @@ def test_biology_collects_resolved_mass_mode_from_run_config(tmp_path: Path) -> 
     collected = mod._collect_single_root(tmp_path, split="test")
     aggregated = mod._aggregate(collected)
 
-    assert collected["requested_mass_mode"].iloc[0] == "auto"
-    assert collected["resolved_mass_mode"].iloc[0] == "auto"
-    assert aggregated["requested_mass_mode"].iloc[0] == "auto"
-    assert aggregated["resolved_mass_mode"].iloc[0] == "auto"
+    assert "requested_mass_mode" not in collected.columns
+    assert "resolved_mass_mode" not in collected.columns
+    assert "requested_mass_mode" not in aggregated.columns
+    assert "resolved_mass_mode" not in aggregated.columns
 
 
-def test_biology_collects_final_resolved_mass_mode_without_overwriting_by_requested_auto(tmp_path: Path) -> None:
+def test_biology_collects_split_resolved_mass_mode_without_generic_requested_auto(tmp_path: Path) -> None:
     mod = _biology_module()
     run_dir = tmp_path / "setting" / "fold_0"
     run_dir.mkdir(parents=True)
@@ -844,8 +1046,128 @@ def test_biology_collects_final_resolved_mass_mode_without_overwriting_by_reques
 
     collected = mod._collect_single_root(tmp_path, split="test")
 
-    assert collected["requested_mass_mode"].iloc[0] == "auto"
+    assert "requested_mass_mode" not in collected.columns
     assert collected["resolved_mass_mode"].iloc[0] == "subset_only:count:auto_no_mass_value_col"
+
+
+def test_results_requested_mass_mode_has_priority_over_generic_config_mass_mode(tmp_path: Path) -> None:
+    mod = _biology_module()
+    run_dir = tmp_path / "setting" / "fold_0"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "mass_mode": "auto",
+                "split": {"split_strategy": "random_kfold", "fold_index": 0},
+            }
+        )
+    )
+    (run_dir / "results_summary.json").write_text(json.dumps({"requested_mass_mode": "group_total"}))
+    pd.DataFrame(
+        [
+            {
+                "perturbation_id": "GeneA_sg1",
+                "mass_pred": 2.0,
+                "mass_true": 1.0,
+                "mass_rel_error": 0.1,
+                "is_control": False,
+                "n_init_atoms": 2,
+                "n_term_atoms": 3,
+            }
+        ]
+    ).to_csv(run_dir / "test_endpoint_metrics.csv", index=False)
+
+    collected = mod._collect_single_root(tmp_path, split="test")
+
+    assert collected["requested_mass_mode"].iloc[0] == "group_total"
+    assert collected["resolved_mass_mode"].iloc[0] == "group_total"
+
+
+def test_generic_mass_mode_column_does_not_make_claim_ready_explicit() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "mass_mode": "count",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["explicit_mass_mode_pass"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-explicit-mass-mode"
+
+
+def test_string_false_control_flag_is_not_control_for_nulls() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": "True",
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": "False",
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "requested_mass_mode": "count",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert out.loc[out["perturbation_id"].eq("GeneA_sg1"), "is_control"].iloc[0] == np.False_
+    assert row["mass_null_abs_q95"] == 0.05
+    assert row["mass_null_abs_q95"] < row["delta_log_mass"]
+
+
+def test_invalid_control_flag_string_raises() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": "maybe",
+                "priority_class": "watch",
+                "delta_log_mass": 0.0,
+            }
+        ]
+    )
+
+    with pytest.raises(ValueError, match="Cannot parse boolean"):
+        mod._add_biological_gates(df)
 
 
 def test_counterfactual_tensor_hashes_reflect_equality() -> None:
@@ -898,6 +1220,19 @@ def test_energy_distance_chunked_matches_full_pairwise() -> None:
     assert np.isclose(full, chunked)
 
 
+def test_program_occupancy_tv_detects_program_fraction_shift() -> None:
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    import torch
+
+    factual = torch.tensor([0.7, 0.2, 0.1])
+    reference = torch.tensor([0.2, 0.2, 0.6])
+    tv = 0.5 * torch.abs(factual - reference).sum().item()
+
+    assert np.isclose(tv, 0.5)
+
+
 def test_counterfactual_pid_selection_can_include_controls_for_nulls() -> None:
     analysis_dir = str(ROOT / "analysis")
     if analysis_dir not in sys.path:
@@ -913,6 +1248,49 @@ def test_counterfactual_pid_selection_can_include_controls_for_nulls() -> None:
     )
 
     assert selected == ["GeneA_sg1", "ctrl"]
+
+
+def test_counterfactual_mass_mode_requires_explicit_requested_mode() -> None:
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    from run_counterfactual_biology import _requested_mass_mode_for_counterfactual
+
+    with pytest.raises(ValueError, match="requires explicit requested_mass_mode"):
+        _requested_mass_mode_for_counterfactual(
+            {"mass_mode": "auto", "test_mass_mode": "subset_only:count:auto_no_mass_value_col"},
+            {},
+            "test",
+        )
+
+
+def test_counterfactual_mass_mode_uses_results_requested_mode() -> None:
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    from run_counterfactual_biology import _requested_mass_mode_for_counterfactual
+
+    mode = _requested_mass_mode_for_counterfactual(
+        {"mass_mode": "auto"},
+        {"requested_mass_mode": "group_total"},
+        "test",
+    )
+
+    assert mode == "group_total"
+
+
+def test_counterfactual_test_split_does_not_use_train_mass_mode_as_requested() -> None:
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    from run_counterfactual_biology import _requested_mass_mode_for_counterfactual
+
+    with pytest.raises(ValueError, match="requires explicit requested_mass_mode"):
+        _requested_mass_mode_for_counterfactual(
+            {"train_mass_mode": "subset_only:mass_value:group_total"},
+            {},
+            "test",
+        )
 
 
 def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:

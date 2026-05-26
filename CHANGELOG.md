@@ -8,6 +8,15 @@
   distribution-shift stability for plasticity calls, TSK/pEMT program-null
   gating, simulator-consumed noise provenance, and chunked energy-distance
   state-shift metrics.
+- Hardened the 2.0.12 claim layer so strict readiness keys only off explicit
+  `requested_mass_mode` metadata, string-valued `is_control` columns are parsed
+  conservatively, counterfactual biology requires an explicit requested mass
+  mode for the selected split, plasticity stability requires fold-level
+  above-null distribution-shift support, TNF-expansion/CIS-like/TSK-pEMT
+  program gates require positive program movement, and context-clamped
+  counterfactual branches record simulator-consumed noise provenance.
+- Added `program_occupancy_tv_fact_vs_ref` to counterfactual biology output as
+  an interpretable learned-program occupancy shift alongside energy distance.
 
 ## 2.0.11
 

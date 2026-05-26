@@ -140,6 +140,7 @@ def rollout_with_clamped_context(
     tau_grid: Optional[torch.Tensor] = None,
     generator: Optional[torch.Generator] = None,
     noise_steps: Optional[torch.Tensor] = None,
+    return_noise_used: bool = False,
 ) -> ParticleRollout:
     """Roll out dynamics while reusing a fixed context trajectory.
 
@@ -203,6 +204,7 @@ def rollout_with_clamped_context(
     sigma_list = []
     growth_list = []
     used_context = []
+    noise_used_list = []
 
     n_programs = model.context_agg.n_programs
     for k in range(K):
@@ -236,12 +238,14 @@ def rollout_with_clamped_context(
             noise = torch.randn(z.shape, dtype=dtype, device=device, generator=generator)
         else:
             noise = torch.randn_like(z)
+        if return_noise_used:
+            noise_used_list.append(noise.detach().clone())
         z = z + coeffs.drift * dtau + coeffs.sigma_diag * torch.sqrt(dtau) * noise
         logw = logw + coeffs.growth * dtau
         z_list.append(z)
         logw_list.append(logw)
 
-    return ParticleRollout(
+    rollout = ParticleRollout(
         z_steps=torch.stack(z_list, dim=0),
         logw_steps=torch.stack(logw_list, dim=0),
         tau_steps=tau_steps,
@@ -251,6 +255,9 @@ def rollout_with_clamped_context(
         growth_steps=torch.stack(growth_list, dim=0),
         context_steps=torch.stack(used_context, dim=0),
     )
+    if return_noise_used:
+        rollout.noise_steps = torch.stack(noise_used_list, dim=0)
+    return rollout
 
 
 @dataclass

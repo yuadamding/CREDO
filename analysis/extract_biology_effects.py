@@ -23,6 +23,8 @@ PRACTICAL_NULL_FLOORS = {
     "context_dependence": 1e-3,
     "diffusion_action": 1e-3,
     "tsk_pemt_program": 1e-3,
+    "tnf_expansion_program": 1e-3,
+    "cis_like_program": 1e-3,
 }
 
 
@@ -55,6 +57,30 @@ def _as_bool(value: object) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
+def _parse_bool_value(value: object) -> bool:
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if value is None or pd.isna(value):
+        return False
+    if isinstance(value, (int, np.integer)):
+        return bool(value)
+    if isinstance(value, (float, np.floating)):
+        if not np.isfinite(value):
+            return False
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "t", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "f", "no", "n", ""}:
+            return False
+    raise ValueError(f"Cannot parse boolean value {value!r}")
+
+
+def _parse_bool_series(series: pd.Series) -> pd.Series:
+    return series.map(_parse_bool_value).astype(bool)
+
+
 def _collect_single_root(cv_root: Path, *, split: str) -> pd.DataFrame:
     rows: list[pd.DataFrame] = []
     endpoint_name = f"{split}_endpoint_metrics.csv"
@@ -76,6 +102,8 @@ def _collect_single_root(cv_root: Path, *, split: str) -> pd.DataFrame:
             df = endpoint.merge(state, on="perturbation_id", how="left")
         else:
             df = endpoint.copy()
+        if "is_control" in df.columns:
+            df["is_control"] = _parse_bool_series(df["is_control"])
 
         dist_path = run_dir / dist_name
         if dist_path.exists():
@@ -108,8 +136,6 @@ def _collect_single_root(cv_root: Path, *, split: str) -> pd.DataFrame:
         requested_mass_mode = (
             data_cfg.get("requested_mass_mode")
             or config.get("requested_mass_mode")
-            or config.get("mass_mode")
-            or data_cfg.get("mass_mode")
             or results.get("requested_mass_mode")
         )
         split_resolved_key = f"{split}_mass_mode"
@@ -194,17 +220,13 @@ def _is_explicit_mass_mode(requested: object = None, resolved: object = None, re
         return True
     if requested_s == "auto":
         return False
+    if not requested_s:
+        return False
     if "auto" in resolved_s or "auto" in reason_s:
         return False
-    if resolved_s in EXPLICIT_MASS_MODES:
-        return True
-    if any(resolved_s.endswith(f":{mode}") for mode in EXPLICIT_MASS_MODES):
-        return True
-    if resolved_s:
-        # Unknown resolved strings should be conservative: do not silently
-        # convert them into claim-ready explicit mass semantics.
-        return False
-    return pd.NA
+    # Unknown or legacy requested strings should be conservative: do not infer
+    # claim-grade explicitness from resolved computational metadata.
+    return False
 
 
 def _aggregate(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
@@ -334,6 +356,8 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
     if "perturbation_id" not in df.columns:
         raise KeyError("Counterfactual effects file must contain perturbation_id.")
     raw = df.copy()
+    if "is_control" in raw.columns:
+        raw["is_control"] = _parse_bool_series(raw["is_control"])
     if "fold_id" in raw.columns:
         dup = raw.duplicated(["perturbation_id", "fold_id"], keep=False)
         if dup.any():
@@ -378,6 +402,28 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
                     .reset_index()
                 )
                 out = out.merge(stability, on="perturbation_id", how="left")
+        if "energy_distance_fact_vs_ref" in raw.columns and "is_control" in raw.columns:
+            control_energy = pd.to_numeric(
+                raw.loc[raw["is_control"], "energy_distance_fact_vs_ref"],
+                errors="coerce",
+            ).abs()
+            if control_energy.dropna().empty:
+                energy_threshold = float("nan")
+            else:
+                energy_threshold = max(_q95(control_energy), PRACTICAL_NULL_FLOORS["distribution_shift"])
+
+            def fold_support(series: pd.Series) -> float:
+                values = pd.to_numeric(series, errors="coerce").abs().dropna()
+                if values.empty or pd.isna(energy_threshold):
+                    return float("nan")
+                return float(values.gt(energy_threshold).mean())
+
+            support = (
+                raw.groupby("perturbation_id", dropna=False)["energy_distance_fact_vs_ref"]
+                .agg(energy_distance_fact_vs_ref_fold_support=fold_support)
+                .reset_index()
+            )
+            out = out.merge(support, on="perturbation_id", how="left")
     else:
         out = raw
         out["counterfactual_n_folds"] = 1
@@ -435,12 +481,13 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "delta_log_mass" not in out.columns:
         out["delta_log_mass"] = np.nan
-    is_control = out.get("is_control", pd.Series(False, index=out.index))
-    controls = out.loc[is_control.fillna(False).astype(bool)]
+    is_control = _parse_bool_series(out.get("is_control", pd.Series(False, index=out.index)))
+    out["is_control"] = is_control
+    controls = out.loc[is_control]
 
     def add_metric_null(metric_col: str, prefix: str) -> None:
         metric = pd.to_numeric(out.get(metric_col, pd.Series(np.nan, index=out.index)), errors="coerce")
-        current_controls = out.loc[is_control.fillna(False).astype(bool)]
+        current_controls = out.loc[is_control]
         control_values = pd.to_numeric(
             current_controls.get(metric_col, pd.Series(dtype=float)),
             errors="coerce",
@@ -463,18 +510,34 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     tsk_score = pd.to_numeric(
         out.get("delta_autocrine_tnf_tsk_score", pd.Series(np.nan, index=out.index)),
         errors="coerce",
-    ).abs()
+    )
     pemt_score = pd.to_numeric(
         out.get("delta_pemt_score", pd.Series(np.nan, index=out.index)),
         errors="coerce",
-    ).abs()
-    out["tsk_pemt_program_effect_abs"] = pd.concat([tsk_score, pemt_score], axis=1).max(axis=1)
+    )
+    tnf_score_raw = pd.to_numeric(
+        out.get("delta_tnf_expansion_score", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    cis_score_raw = pd.to_numeric(
+        out.get("delta_cis_like_score", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["tsk_pemt_program_effect_abs"] = pd.concat([tsk_score.abs(), pemt_score.abs()], axis=1).max(axis=1)
+    out["tsk_pemt_program_effect_pos"] = pd.concat(
+        [tsk_score.clip(lower=0.0), pemt_score.clip(lower=0.0)],
+        axis=1,
+    ).max(axis=1)
+    out["tnf_expansion_program_effect_pos"] = tnf_score_raw.clip(lower=0.0)
+    out["cis_like_program_effect_pos"] = cis_score_raw.clip(lower=0.0)
     add_metric_null("delta_log_mass", "mass")
     add_metric_null("weighted_mean_shift_l2_fact_vs_ref", "mean_shift")
     add_metric_null("energy_distance_fact_vs_ref", "distribution_shift")
     add_metric_null("context_dependence_geom", "context_dependence")
     add_metric_null("diffusion_action", "diffusion_action")
-    add_metric_null("tsk_pemt_program_effect_abs", "tsk_pemt_program")
+    add_metric_null("tsk_pemt_program_effect_pos", "tsk_pemt_program")
+    add_metric_null("tnf_expansion_program_effect_pos", "tnf_expansion_program")
+    add_metric_null("cis_like_program_effect_pos", "cis_like_program")
     out["control_null_abs_delta_log_mass_q95"] = out["mass_null_abs_q95"]
     out["negative_control_gap_pass"] = out["mass_null_gap_pass"]
 
@@ -512,14 +575,13 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
         out["counterfactual_replicate_pass"]
         & diffusion_sign.ge(0.75)
     )
-    distribution_cv = pd.to_numeric(
-        out.get("energy_distance_fact_vs_ref_abs_cv", pd.Series(np.nan, index=out.index)),
+    distribution_fold_support = pd.to_numeric(
+        out.get("energy_distance_fact_vs_ref_fold_support", pd.Series(np.nan, index=out.index)),
         errors="coerce",
     )
     out["distribution_shift_stability_pass"] = (
         out["counterfactual_replicate_pass"]
-        & distribution_cv.notna()
-        & distribution_cv.le(1.0)
+        & distribution_fold_support.ge(0.75)
     )
 
     context_available = out.get(
@@ -535,11 +597,11 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
         & context_available
         & context_sign.ge(0.75)
     )
-    requested_mode = out.get("requested_mass_mode", out.get("mass_mode"))
+    requested_mode = out.get("requested_mass_mode")
     resolved_mode = out.get("resolved_mass_mode")
     resolution_reason = out.get("mass_mode_resolution_reason")
     if requested_mode is None and resolved_mode is None and resolution_reason is None:
-        out["explicit_mass_mode_pass"] = pd.NA
+        out["explicit_mass_mode_pass"] = False
     else:
         if requested_mode is None:
             requested_mode = pd.Series(pd.NA, index=out.index)
@@ -628,9 +690,44 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     )
     tsk = pd.to_numeric(out.get("z_delta_autocrine_tnf_tsk_score", pd.Series(0.0, index=out.index)), errors="coerce")
     pemt = pd.to_numeric(out.get("z_delta_pemt_score", pd.Series(0.0, index=out.index)), errors="coerce")
+    tsk_pemt_pos = pd.to_numeric(
+        out.get("tsk_pemt_program_effect_pos", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    tsk_pemt_threshold = pd.to_numeric(
+        out.get("tsk_pemt_program_null_threshold", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    tnf_program_pos = pd.to_numeric(
+        out.get("tnf_expansion_program_effect_pos", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    tnf_program_threshold = pd.to_numeric(
+        out.get("tnf_expansion_program_null_threshold", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    cis_program_pos = pd.to_numeric(
+        out.get("cis_like_program_effect_pos", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    cis_program_threshold = pd.to_numeric(
+        out.get("cis_like_program_null_threshold", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["tnf_expansion_claim_ready"] = (
+        stable
+        & tnf_program_pos.gt(tnf_program_threshold)
+        & pass_series("tnf_expansion_program_null_gap_pass")
+    )
+    out["cis_like_claim_ready"] = (
+        stable
+        & cis_program_pos.gt(cis_program_threshold)
+        & pass_series("cis_like_program_null_gap_pass")
+    )
     out["tsk_pemt_claim_ready"] = (
         stable
         & ((tsk >= 0.5) | (pemt >= 0.5))
+        & tsk_pemt_pos.gt(tsk_pemt_threshold)
         & pass_series("tsk_pemt_program_null_gap_pass")
     )
     out["transformation_claim_ready"] = (
@@ -832,8 +929,12 @@ def main() -> None:
             "mass_null_threshold",
             "distribution_shift_null_gap_pass",
             "distribution_shift_stability_pass",
+            "tnf_expansion_program_null_gap_pass",
+            "cis_like_program_null_gap_pass",
             "tsk_pemt_program_null_gap_pass",
             "expansion_claim_ready",
+            "tnf_expansion_claim_ready",
+            "cis_like_claim_ready",
             "plasticity_claim_ready",
             "ecology_claim_ready",
             "tsk_pemt_claim_ready",
@@ -842,6 +943,7 @@ def main() -> None:
             "delta_log_mass_fact_vs_ref",
             "geom_shift_fact_vs_ref",
             "energy_distance_fact_vs_ref",
+            "program_occupancy_tv_fact_vs_ref",
             "delta_tnf_expansion_score",
             "delta_autocrine_tnf_tsk_score",
             "delta_pemt_score",
