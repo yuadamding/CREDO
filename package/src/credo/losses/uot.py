@@ -103,6 +103,23 @@ def sinkhorn_divergence(
     return geom + mass_pen
 
 
+def sinkhorn_divergence_components(
+    x: torch.Tensor, log_a: torch.Tensor,
+    y: torch.Tensor, log_b: torch.Tensor,
+    eps: float = 0.1,
+    tau: float = 1.0,
+    max_iter: int = 200,
+) -> Dict[str, torch.Tensor]:
+    """Return geometry, log-mass penalty, and total UOT-proxy components."""
+    a_norm = torch.softmax(log_a, dim=0)
+    b_norm = torch.softmax(log_b, dim=0)
+    geom = sinkhorn_divergence_normalized(x, a_norm, y, b_norm, eps=eps, max_iter=max_iter)
+    log_mass_pred = torch.logsumexp(log_a, dim=0)
+    log_mass_tgt = torch.logsumexp(log_b, dim=0)
+    mass = tau * (log_mass_pred - log_mass_tgt) ** 2
+    return {"geom": geom, "mass": mass, "total": geom + mass}
+
+
 # ---------------------------------------------------------------------------
 # UOTLoss module
 # ---------------------------------------------------------------------------
@@ -163,8 +180,29 @@ class UOTLoss(nn.Module):
         perturbation_ids: list,
         weights: Optional[Dict[Hashable, float]] = None,
     ) -> Tuple[torch.Tensor, Dict[Hashable, torch.Tensor]]:
+        total, components = self.component_dict(
+            pred_z=pred_z,
+            pred_logw_abs=pred_logw_abs,
+            target_support=target_support,
+            target_logw=target_logw,
+            perturbation_ids=perturbation_ids,
+            weights=weights,
+        )
+        per_pid = {pid: values["total"] for pid, values in components.items()}
+        return total, per_pid
+
+    def component_dict(
+        self,
+        pred_z: torch.Tensor,
+        pred_logw_abs: torch.Tensor,
+        target_support: Dict[Hashable, torch.Tensor],
+        target_logw: Dict[Hashable, torch.Tensor],
+        perturbation_ids: list,
+        weights: Optional[Dict[Hashable, float]] = None,
+    ) -> Tuple[torch.Tensor, Dict[Hashable, Dict[str, torch.Tensor]]]:
+        """Return total loss and per-key geometry/mass/total components."""
         total = torch.tensor(0.0, device=pred_z.device, dtype=pred_z.dtype)
-        per_pid: Dict[Hashable, torch.Tensor] = {}
+        per_pid: Dict[Hashable, Dict[str, torch.Tensor]] = {}
 
         for g, pid in enumerate(perturbation_ids):
             if pid not in target_support:
@@ -185,7 +223,7 @@ class UOTLoss(nn.Module):
 
             div = geom + mass_pen
             w = weights[pid] if weights else 1.0
-            per_pid[pid] = div
+            per_pid[pid] = {"geom": geom, "mass": mass_pen, "total": div}
             total = total + w * div
 
         return total, per_pid

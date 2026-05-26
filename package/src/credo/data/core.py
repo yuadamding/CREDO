@@ -47,6 +47,10 @@ class TimeAxis:
             raise ValueError("labels/times length mismatch")
         if len(self.labels) < 2:
             raise ValueError("Need at least two time points")
+        if len(set(self.labels)) != len(self.labels):
+            raise ValueError("TimeAxis labels must be unique")
+        if not np.isfinite(np.asarray(self.physical_times, dtype=float)).all():
+            raise ValueError("physical_times must be finite")
         for i in range(1, len(self.physical_times)):
             if not self.physical_times[i] > self.physical_times[i - 1]:
                 raise ValueError(f"Times must be strictly increasing: {self.physical_times}")
@@ -128,6 +132,13 @@ class CellStateTable:
             raise KeyError(f"CellStateTable missing columns: {missing}")
         if len(self.df) != len(self.latent):
             raise ValueError(f"df rows {len(self.df)} != latent rows {len(self.latent)}")
+        if self.latent.ndim != 2:
+            raise ValueError(f"latent must be 2D, got {self.latent.ndim}D")
+        if not np.isfinite(np.asarray(self.latent)).all():
+            raise ValueError("latent contains NaN or inf")
+        if self.df["cell_id"].duplicated().any():
+            dup = self.df.loc[self.df["cell_id"].duplicated(), "cell_id"].iloc[0]
+            raise ValueError(f"Duplicate cell_id in CellStateTable: {dup!r}")
 
     @property
     def n_cells(self) -> int:
@@ -164,8 +175,18 @@ class MassTable:
         missing = self.REQUIRED_COLS - set(self.df.columns)
         if missing:
             raise KeyError(f"MassTable missing columns: {missing}")
-        if not (self.df["mass"] > 0).all():
+        mass = self.df["mass"].astype(float)
+        if not np.isfinite(mass.to_numpy()).all():
+            raise ValueError("All masses must be finite")
+        if not (mass > 0).all():
             raise ValueError("All masses must be positive")
+        duplicated = self.df.duplicated(["perturbation_id", "time_label", "sample_id"])
+        if duplicated.any():
+            row = self.df.loc[duplicated].iloc[0]
+            raise ValueError(
+                "Duplicate MassTable row for "
+                f"({row['perturbation_id']}, {row['time_label']}, {row['sample_id']})"
+            )
 
     def get(self, perturbation_id: str, time_label: str, sample_id: str) -> float:
         row = self.df[
@@ -185,6 +206,8 @@ class MassTable:
             (self.df["perturbation_id"] == perturbation_id) &
             (self.df["time_label"] == time_label)
         ]
+        if len(row) == 0:
+            raise KeyError(f"No mass rows for pooled ({perturbation_id}, {time_label})")
         return float(row["mass"].sum())
 
 
@@ -299,9 +322,18 @@ class FiniteMeasure:
             raise ValueError(f"support must be 2D, got {self.support.ndim}D")
         if len(self.weights) != len(self.support):
             raise ValueError("support/weights length mismatch")
+        if not np.isfinite(np.asarray(self.support)).all():
+            raise ValueError("support contains NaN or inf")
+        weights = np.asarray(self.weights, dtype=float)
+        if not np.isfinite(weights).all():
+            raise ValueError("weights contains NaN or inf")
+        if np.any(weights < 0):
+            raise ValueError("weights must be nonnegative")
+        if not np.isfinite(float(self.total_mass)):
+            raise ValueError("total_mass must be finite")
         if not self.total_mass > 0:
             raise ValueError("total_mass must be positive")
-        weight_sum = float(np.asarray(self.weights, dtype=float).sum())
+        weight_sum = float(weights.sum())
         if not np.isclose(weight_sum, float(self.total_mass), rtol=1e-4, atol=1e-8):
             raise ValueError(
                 "weights.sum() must equal total_mass "
@@ -604,6 +636,77 @@ class PerturbSeqDynamicsData:
     replicate_counts: Optional[ReplicateCountTable] = None
     program_scores: Optional[ProgramScoreTable] = None
     truth: Optional[SimulationTruth] = None
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate cross-table consistency for measure construction."""
+        catalog_ids = set(self.catalog.perturbation_ids)
+        time_labels = set(self.time_axis.labels)
+
+        cell_pids = set(self.cell_state.df["perturbation_id"].astype(str))
+        unknown_cell_pids = cell_pids - catalog_ids
+        if unknown_cell_pids:
+            raise ValueError(f"CellStateTable has perturbations outside catalog: {sorted(unknown_cell_pids)}")
+
+        mass_pids = set(self.mass_table.df["perturbation_id"].astype(str))
+        unknown_mass_pids = mass_pids - catalog_ids
+        if unknown_mass_pids:
+            raise ValueError(f"MassTable has perturbations outside catalog: {sorted(unknown_mass_pids)}")
+
+        cell_times = set(self.cell_state.df["time_label"].astype(str))
+        unknown_cell_times = cell_times - time_labels
+        if unknown_cell_times:
+            raise ValueError(f"CellStateTable has time labels outside TimeAxis: {sorted(unknown_cell_times)}")
+
+        mass_times = set(self.mass_table.df["time_label"].astype(str))
+        unknown_mass_times = mass_times - time_labels
+        if unknown_mass_times:
+            raise ValueError(f"MassTable has time labels outside TimeAxis: {sorted(unknown_mass_times)}")
+
+        cell_keys = set(
+            zip(
+                self.cell_state.df["perturbation_id"].astype(str),
+                self.cell_state.df["time_label"].astype(str),
+                self.cell_state.df["sample_id"].astype(str),
+            )
+        )
+        mass_keys = set(
+            zip(
+                self.mass_table.df["perturbation_id"].astype(str),
+                self.mass_table.df["time_label"].astype(str),
+                self.mass_table.df["sample_id"].astype(str),
+            )
+        )
+        missing_mass = {
+            (pid, time_label, sample_id)
+            for pid, time_label, sample_id in cell_keys
+            if (pid, time_label, sample_id) not in mass_keys
+            and (pid, time_label, "pooled") not in mass_keys
+        }
+        if missing_mass:
+            preview = sorted(str(key) for key in missing_mass)[:5]
+            raise ValueError(f"Missing MassTable rows for observed cell groups: {preview}")
+
+        if self.exposure_table is not None:
+            exposure_pids = set(self.exposure_table.df["perturbation_id"].astype(str))
+            unknown_exposure_pids = exposure_pids - catalog_ids
+            if unknown_exposure_pids:
+                raise ValueError(f"ExposureTable has perturbations outside catalog: {sorted(unknown_exposure_pids)}")
+            exposure = self.exposure_table.df["exposure"].astype(float).to_numpy()
+            if not np.isfinite(exposure).all() or np.any(exposure <= 0):
+                raise ValueError("ExposureTable exposures must be positive and finite")
+
+        if self.replicate_counts is not None:
+            count_pids = set(self.replicate_counts.df["perturbation_id"].astype(str))
+            unknown_count_pids = count_pids - catalog_ids
+            if unknown_count_pids:
+                raise ValueError(f"ReplicateCountTable has perturbations outside catalog: {sorted(unknown_count_pids)}")
+            count_times = set(self.replicate_counts.df["time_label"].astype(str))
+            unknown_count_times = count_times - time_labels
+            if unknown_count_times:
+                raise ValueError(f"ReplicateCountTable has time labels outside TimeAxis: {sorted(unknown_count_times)}")
 
     @property
     def latent_dim(self) -> int:

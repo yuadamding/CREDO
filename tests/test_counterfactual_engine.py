@@ -6,7 +6,7 @@ import torch
 
 from credo.data.core import EndpointProblem, FiniteMeasure, TimeAxis
 from credo.models.full_model import FullDynamicsModel
-from credo.models.simulator import CounterfactualEngine
+from credo.models.simulator import CounterfactualEngine, rollout_with_clamped_context
 from credo.models.weighted_sde import WeightedParticleSimulator
 
 
@@ -76,3 +76,31 @@ def test_counterfactual_engine_clamp_context_returns_same_start_branches() -> No
         assert torch.equal(rollout.z_steps[0], start_z)
         assert torch.equal(rollout.logw_steps[0], start_logw)
         assert torch.equal(rollout.log_m0, start_log_m0)
+
+    assert torch.allclose(result.rollout_control.z_steps, result.rollout_control_clamped.z_steps)
+    assert torch.allclose(result.rollout_control.logw_steps, result.rollout_control_clamped.logw_steps)
+    assert torch.equal(result.rollout_control.tau_steps, result.rollout_control_clamped.tau_steps)
+
+
+def test_rollout_with_clamped_context_preserves_nonuniform_tau_grid() -> None:
+    model = _model()
+    tau_grid = torch.tensor([0.0, 0.2, 0.7, 1.0])
+    z0 = torch.zeros(1, 4, 2)
+    logw0 = torch.full((1, 4), -np.log(4.0))
+    log_m0 = torch.zeros(1)
+    context_steps = torch.zeros(3, 3)
+
+    rollout = rollout_with_clamped_context(
+        model=model,
+        z0=z0,
+        logw0=logw0,
+        log_m0=log_m0,
+        perturbation_ids=["pert"],
+        context_steps=context_steps,
+        tau_start=0.0,
+        tau_end=1.0,
+        tau_grid=tau_grid,
+    )
+
+    assert torch.equal(rollout.tau_steps, tau_grid)
+    assert rollout.context_steps.shape[0] == len(tau_grid) - 1

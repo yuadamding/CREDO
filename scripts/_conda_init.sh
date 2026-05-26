@@ -28,7 +28,6 @@ ensure_conda_available() {
   fi
 
   local candidates=(
-    "/rsrch8/home/bcb/${USER:-}/miniforge3/etc/profile.d/conda.sh"
     "$HOME/miniforge3/etc/profile.d/conda.sh"
     "$HOME/mambaforge/etc/profile.d/conda.sh"
     "$HOME/miniconda3/etc/profile.d/conda.sh"

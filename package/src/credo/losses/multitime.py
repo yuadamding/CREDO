@@ -1,7 +1,7 @@
 """Multi-time endpoint utilities for trajectory CREDO experiments."""
 from __future__ import annotations
 
-from typing import Dict, Iterable, Sequence, Tuple
+from typing import Dict, Iterable, Literal, Sequence, Tuple
 
 import torch
 import torch.nn as nn
@@ -131,10 +131,16 @@ class MultiTimeEndpointLoss(nn.Module):
         self,
         uot_loss: UOTLoss,
         time_weights: Dict[str, float] | None = None,
+        reduction: Literal["sum", "mean"] = "sum",
+        fail_on_empty: bool = True,
     ) -> None:
         super().__init__()
+        if reduction not in {"sum", "mean"}:
+            raise ValueError("reduction must be 'sum' or 'mean'")
         self.uot_loss = uot_loss
         self.time_weights = time_weights or {}
+        self.reduction = reduction
+        self.fail_on_empty = fail_on_empty
 
     def forward(
         self,
@@ -152,19 +158,45 @@ class MultiTimeEndpointLoss(nn.Module):
 
         for time_label, idx in checkpoint_indices.items():
             if time_label not in target_support_by_time:
+                raise KeyError(f"Missing target support for checkpoint {time_label!r}")
+            if time_label not in target_logw_by_time:
+                raise KeyError(f"Missing target log-weights for checkpoint {time_label!r}")
+
+            target_support = target_support_by_time[time_label]
+            target_logw = target_logw_by_time[time_label]
+            active_ids = [pid for pid in perturbation_ids if pid in target_support]
+            n_active = len(active_ids)
+            n_missing = len(perturbation_ids) - n_active
+            logs[f"endpoint/{time_label}/n_active_keys"] = torch.tensor(
+                n_active, device=rollout.z_steps.device
+            )
+            logs[f"endpoint/{time_label}/n_missing_keys"] = torch.tensor(
+                n_missing, device=rollout.z_steps.device
+            )
+            if n_active == 0:
+                if self.fail_on_empty:
+                    raise ValueError(f"No active target keys for checkpoint {time_label!r}")
                 continue
 
             pred_z = rollout.z_steps[idx]
             pred_logw_abs = rollout.log_m0[:, None] + rollout.logw_steps[idx]
-            loss_t, _ = self.uot_loss(
+            loss_t, components = self.uot_loss.component_dict(
                 pred_z=pred_z,
                 pred_logw_abs=pred_logw_abs,
-                target_support=target_support_by_time[time_label],
-                target_logw=target_logw_by_time[time_label],
+                target_support=target_support,
+                target_logw=target_logw,
                 perturbation_ids=perturbation_ids,
             )
+            loss_scaled = loss_t / float(n_active) if self.reduction == "mean" else loss_t
             weight = float(self.time_weights.get(time_label, 1.0))
-            total = total + weight * loss_t
-            logs[f"endpoint/{time_label}"] = loss_t.detach()
+            total = total + weight * loss_scaled
+            logs[f"endpoint/{time_label}"] = loss_scaled.detach()
+            logs[f"endpoint/{time_label}/loss_sum"] = loss_t.detach()
+            logs[f"endpoint/{time_label}/loss_mean_per_key"] = (loss_t / float(n_active)).detach()
+            geom_values = [components[pid]["geom"] for pid in active_ids if pid in components]
+            mass_values = [components[pid]["mass"] for pid in active_ids if pid in components]
+            if geom_values:
+                logs[f"endpoint/{time_label}/geom_mean"] = torch.stack(geom_values).mean().detach()
+                logs[f"endpoint/{time_label}/mass_mean"] = torch.stack(mass_values).mean().detach()
 
         return total, logs

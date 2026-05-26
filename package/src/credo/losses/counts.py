@@ -64,6 +64,12 @@ def count_fractions_from_zeta(
     count_matrix: torch.Tensor,
 ) -> torch.Tensor:
     """Predict replicate perturbation fractions from exposure and fitness."""
+    if not torch.is_floating_point(zeta):
+        zeta = zeta.float()
+    count_matrix = count_matrix.to(device=zeta.device, dtype=zeta.dtype)
+    exposures = exposures.to(device=zeta.device, dtype=zeta.dtype)
+    if not torch.isfinite(exposures).all() or torch.any(exposures <= 0):
+        raise ValueError("exposures must be positive and finite")
     G = zeta.shape[0]
     n_samples = count_matrix.shape[0]
     if exposures.ndim == 1:
@@ -103,8 +109,12 @@ class DirichletMultinomialLikelihood(nn.Module):
         n_total: torch.Tensor,    # [S]     total counts per replicate
     ) -> torch.Tensor:
         """Return negative log-likelihood (to minimise)."""
+        if not torch.is_floating_point(counts):
+            counts = counts.float()
+        pi = pi.to(device=counts.device, dtype=counts.dtype)
+        n_total = n_total.to(device=counts.device, dtype=counts.dtype)
         observed_totals = counts.sum(dim=1)
-        if not torch.allclose(observed_totals, n_total.to(dtype=counts.dtype), rtol=1e-5, atol=1e-5):
+        if not torch.allclose(observed_totals, n_total, rtol=1e-5, atol=1e-5):
             raise ValueError("n_total must equal counts.sum(dim=1) for Dirichlet-multinomial likelihood.")
         phi = self.log_phi.exp()
         alpha = phi * pi + 1e-8   # [S, G]  concentration parameters
@@ -181,7 +191,7 @@ class MultiTimeCountLikelihood(nn.Module):
 
         for time_label, count_matrix in count_matrices.items():
             if time_label not in checkpoint_indices:
-                continue
+                raise KeyError(f"Missing checkpoint index for count time label {time_label!r}")
             if time_label not in n_totals:
                 raise KeyError(f"Missing n_totals for time label {time_label!r}")
             idx = checkpoint_indices[time_label]

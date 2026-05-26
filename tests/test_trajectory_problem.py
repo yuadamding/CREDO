@@ -62,6 +62,81 @@ def test_trajectory_problem_three_times() -> None:
     assert trajectory.get("6h", "LPS__mono").n_atoms == 4
 
 
+def test_time_axis_rejects_duplicate_labels() -> None:
+    with pytest.raises(ValueError, match="labels must be unique"):
+        TimeAxis(labels=["90m", "90m"], physical_times=[1.5, 6.0])
+
+
+def test_finite_measure_rejects_nonfinite_and_negative_values() -> None:
+    with pytest.raises(ValueError, match="support contains"):
+        FiniteMeasure(
+            support=np.asarray([[0.0], [np.nan]], dtype=np.float32),
+            weights=np.ones(2, dtype=np.float32),
+            total_mass=2.0,
+        )
+    with pytest.raises(ValueError, match="weights must be nonnegative"):
+        FiniteMeasure(
+            support=np.zeros((2, 1), dtype=np.float32),
+            weights=np.asarray([3.0, -1.0], dtype=np.float32),
+            total_mass=2.0,
+        )
+
+
+def test_mass_table_get_pooled_requires_rows() -> None:
+    table = MassTable(
+        pd.DataFrame(
+            [{"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1", "mass": 1.0}]
+        )
+    )
+
+    with pytest.raises(KeyError, match="No mass rows"):
+        table.get_pooled("missing", "t0")
+
+
+def test_perturbseq_data_validation_rejects_missing_mass_rows() -> None:
+    cell_df = pd.DataFrame(
+        [
+            {"cell_id": "c1", "perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1"},
+            {"cell_id": "c2", "perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D1"},
+        ]
+    )
+    mass_df = pd.DataFrame(
+        [{"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1", "mass": 1.0}]
+    )
+
+    with pytest.raises(ValueError, match="Missing MassTable rows"):
+        PerturbSeqDynamicsData(
+            time_axis=TimeAxis(labels=["t0", "t1"], physical_times=[0.0, 1.0]),
+            catalog=PerturbationCatalog(["ctrl"], ["ctrl"]),
+            cell_state=CellStateTable(cell_df, np.zeros((2, 1), dtype=np.float32)),
+            mass_table=MassTable(mass_df),
+        )
+
+
+def test_perturbseq_data_validation_allows_pooled_mass_rows() -> None:
+    cell_df = pd.DataFrame(
+        [
+            {"cell_id": "c1", "perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1"},
+            {"cell_id": "c2", "perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D1"},
+        ]
+    )
+    mass_df = pd.DataFrame(
+        [
+            {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "pooled", "mass": 1.0},
+            {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": "pooled", "mass": 1.0},
+        ]
+    )
+
+    data = PerturbSeqDynamicsData(
+        time_axis=TimeAxis(labels=["t0", "t1"], physical_times=[0.0, 1.0]),
+        catalog=PerturbationCatalog(["ctrl"], ["ctrl"]),
+        cell_state=CellStateTable(cell_df, np.zeros((2, 1), dtype=np.float32)),
+        mass_table=MassTable(mass_df),
+    )
+
+    assert data.build_measure("ctrl", "t0").total_mass == 1.0
+
+
 def test_trajectory_to_endpoint_backward_compatibility() -> None:
     data = _three_time_data()
     trajectory = data.to_trajectory_problem()

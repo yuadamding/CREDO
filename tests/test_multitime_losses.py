@@ -15,6 +15,7 @@ from credo.data.core import (
 )
 from credo.losses.counts import (
     DirichletMultinomialLikelihood,
+    MultiTimeCountLikelihood,
     count_fractions_from_zeta,
     integrated_fitness,
     integrated_fitness_curve,
@@ -107,7 +108,67 @@ def test_multitime_endpoint_loss_zero_when_targets_equal_predictions() -> None:
     )
 
     assert float(loss) < 1e-5
-    assert set(logs) == {"endpoint/6h", "endpoint/10h"}
+    assert "endpoint/6h" in logs
+    assert "endpoint/10h" in logs
+    assert int(logs["endpoint/6h/n_active_keys"]) == 1
+    assert int(logs["endpoint/10h/n_missing_keys"]) == 0
+    assert float(logs["endpoint/6h/geom_mean"]) < 1e-5
+    assert float(logs["endpoint/10h/mass_mean"]) < 1e-5
+
+
+def test_multitime_endpoint_loss_reports_sparse_active_and_missing_keys() -> None:
+    support = torch.tensor(
+        [
+            [[0.0, 0.0], [1.0, 0.0]],
+            [[2.0, 0.0], [3.0, 0.0]],
+        ]
+    )
+    logw = torch.full((2, 2), -np.log(2.0))
+    rollout = ParticleRollout(
+        z_steps=torch.stack([support, support.clone()], dim=0),
+        logw_steps=torch.stack([logw, logw.clone()], dim=0),
+        tau_steps=torch.tensor([0.0, 1.0]),
+        log_m0=torch.tensor([np.log(2.0), np.log(2.0)], dtype=torch.float32),
+    )
+    target_support = {"10h": {"a": support[0].clone()}}
+    target_logw = {"10h": {"a": torch.zeros(2)}}
+    loss_fn = MultiTimeEndpointLoss(
+        UOTLoss(eps=0.1, max_iter=80, use_geomloss=False),
+        reduction="mean",
+    )
+
+    loss, logs = loss_fn(
+        rollout,
+        checkpoint_indices={"10h": 1},
+        target_support_by_time=target_support,
+        target_logw_by_time=target_logw,
+        perturbation_ids=["a", "b"],
+    )
+
+    assert float(loss) < 1e-5
+    assert int(logs["endpoint/10h/n_active_keys"]) == 1
+    assert int(logs["endpoint/10h/n_missing_keys"]) == 1
+
+
+def test_multitime_endpoint_loss_raises_when_checkpoint_has_no_active_keys() -> None:
+    support = torch.zeros(1, 2, 2)
+    logw = torch.full((1, 2), -np.log(2.0))
+    rollout = ParticleRollout(
+        z_steps=torch.stack([support, support.clone()], dim=0),
+        logw_steps=torch.stack([logw, logw.clone()], dim=0),
+        tau_steps=torch.tensor([0.0, 1.0]),
+        log_m0=torch.tensor([np.log(2.0)], dtype=torch.float32),
+    )
+    loss_fn = MultiTimeEndpointLoss(UOTLoss(eps=0.1, max_iter=80, use_geomloss=False))
+
+    with pytest.raises(ValueError, match="No active target keys"):
+        loss_fn(
+            rollout,
+            checkpoint_indices={"10h": 1},
+            target_support_by_time={"10h": {}},
+            target_logw_by_time={"10h": {}},
+            perturbation_ids=["a"],
+        )
 
 
 def test_build_target_tensors_by_time_accepts_trajectory_problem() -> None:
@@ -205,6 +266,15 @@ def test_count_fractions_match_legacy_formula() -> None:
     assert torch.equal(pi, expected)
 
 
+def test_count_fractions_reject_bad_exposures() -> None:
+    with pytest.raises(ValueError, match="exposures must be positive and finite"):
+        count_fractions_from_zeta(
+            torch.tensor([0.0, 0.0]),
+            torch.tensor([1.0, 0.0]),
+            torch.ones(1, 2),
+        )
+
+
 def test_integrated_fitness_curve_uses_variable_dtau() -> None:
     growth_steps = torch.full((3, 1, 2), 2.0)
     logw_steps = torch.zeros(4, 1, 2)
@@ -242,4 +312,32 @@ def test_dirichlet_multinomial_validates_totals() -> None:
             counts=torch.tensor([[2.0, 1.0]]),
             pi=torch.tensor([[0.5, 0.5]]),
             n_total=torch.tensor([4.0]),
+        )
+
+
+def test_dirichlet_multinomial_accepts_integer_counts_and_totals() -> None:
+    lik = DirichletMultinomialLikelihood()
+    loss = lik(
+        counts=torch.tensor([[2, 1]], dtype=torch.int64),
+        pi=torch.tensor([[0.5, 0.5]], dtype=torch.float64),
+        n_total=torch.tensor([3], dtype=torch.int64),
+    )
+    assert torch.isfinite(loss)
+
+
+def test_multitime_count_likelihood_raises_on_missing_checkpoint() -> None:
+    likelihood = MultiTimeCountLikelihood()
+    growth_steps = torch.zeros(1, 2, 3)
+    logw_steps = torch.zeros(2, 2, 3)
+    tau_steps = torch.tensor([0.0, 1.0])
+
+    with pytest.raises(KeyError, match="Missing checkpoint index"):
+        likelihood(
+            growth_steps=growth_steps,
+            logw_steps=logw_steps,
+            tau_steps=tau_steps,
+            exposures=torch.ones(2),
+            count_matrices={"6h": torch.ones(1, 2)},
+            n_totals={"6h": torch.tensor([2.0])},
+            checkpoint_indices={"10h": 1},
         )

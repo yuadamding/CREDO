@@ -279,6 +279,7 @@ class CounterfactualEngine:
         clamp_context: bool = False,
         seed: int = 0,
         control_rollout_mode: str = "reference_consistent",
+        common_noise: bool = True,
     ) -> List[CounterfactualResult]:
         """Run counterfactual simulations.
 
@@ -294,6 +295,8 @@ class CounterfactualEngine:
               reference embedding and set only the perturbation residual to zero
             - ``zero_centered``: force the full effective embedding to zero as a
               diagnostic rollout
+        common_noise: if True, factual and reference branches reuse the same
+            Brownian stream after sharing the same initial particles.
         """
         results = []
 
@@ -311,6 +314,9 @@ class CounterfactualEngine:
             # --- Perturbation rollout ---
             z0p, lw0p, lm0p = initialise_particles(
                 endpoint, [pid], self.n_particles, self.device, seed=seed)
+            branch_seed = int(seed) + 10_000
+            if common_noise:
+                torch.manual_seed(branch_seed)
             rollout_p = self.simulator.rollout(
                 z0=z0p,
                 logw0=lw0p,
@@ -324,6 +330,8 @@ class CounterfactualEngine:
 
             # Reference-consistent soft-ref semantics keep a_ref and zero only
             # the perturbation residual; full zeroing is left as a diagnostic.
+            if common_noise:
+                torch.manual_seed(branch_seed)
             with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
                 rollout_c = self.simulator.rollout(
                     z0=z0c,
@@ -338,6 +346,11 @@ class CounterfactualEngine:
             if clamp_context:
                 if rollout_c.context_steps is None:
                     raise ValueError("Control rollout did not store context_steps for clamped context.")
+                tau_grid = rollout_c.tau_steps.detach()
+                tau_start = float(tau_grid[0].item())
+                tau_end = float(tau_grid[-1].item())
+                if common_noise:
+                    torch.manual_seed(branch_seed)
                 rollout_clamped = rollout_with_clamped_context(
                     model=self.model,
                     z0=z0p,
@@ -345,8 +358,12 @@ class CounterfactualEngine:
                     log_m0=lm0p,
                     perturbation_ids=[pid],
                     context_steps=rollout_c.context_steps,
-                    n_steps=rollout_c.n_steps,
+                    tau_start=tau_start,
+                    tau_end=tau_end,
+                    tau_grid=tau_grid,
                 )
+                if common_noise:
+                    torch.manual_seed(branch_seed)
                 with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
                     rollout_control_clamped = rollout_with_clamped_context(
                         model=self.model,
@@ -355,7 +372,9 @@ class CounterfactualEngine:
                         log_m0=lm0c,
                         perturbation_ids=[pid],
                         context_steps=rollout_c.context_steps,
-                        n_steps=rollout_c.n_steps,
+                        tau_start=tau_start,
+                        tau_end=tau_end,
+                        tau_grid=tau_grid,
                     )
 
             result = CounterfactualResult(

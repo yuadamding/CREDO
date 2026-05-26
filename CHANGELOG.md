@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.0.3
+
+- Hardened core data validation for time axes, finite measures, cell-state
+  tables, mass tables, and cross-table consistency.
+- Added explicit sparse multi-time endpoint diagnostics for active/missing
+  target keys, mean reduction, and geometry/mass loss components.
+- Strengthened count-likelihood input validation and missing-checkpoint errors.
+- Made counterfactual branches use shared Brownian noise by default and made
+  clamped-context rollouts preserve the reference tau grid.
+- Removed site-specific absolute setup paths from the portable package.
+
 ## 2.0.2
 
 - Renamed and consolidated the public package under the `credo` namespace.

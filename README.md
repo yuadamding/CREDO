@@ -33,7 +33,6 @@ Use paths relative to this repository:
 ## Install
 
 ```bash
-CONDA_BIN=/rsrch8/home/bcb/$USER/miniforge3/bin/conda \
 bash scripts/install_bundle.sh credo-hnscc
 ```
 
