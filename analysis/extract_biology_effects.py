@@ -15,6 +15,16 @@ from hnscc_biology_common import (
     zscore,
 )
 
+EXPLICIT_MASS_MODES = {"count", "group_total", "per_cell_contribution"}
+PRACTICAL_NULL_FLOORS = {
+    "mass": 1e-3,
+    "mean_shift": 1e-3,
+    "distribution_shift": 1e-3,
+    "context_dependence": 1e-3,
+    "diffusion_action": 1e-3,
+    "tsk_pemt_program": 1e-3,
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -95,15 +105,39 @@ def _collect_single_root(cv_root: Path, *, split: str) -> pd.DataFrame:
         )
         df["program_basis"] = "state_centroids" if _as_bool(config.get("use_state_centroids")) else "learned"
         data_cfg = config.get("data", {}) if isinstance(config.get("data", {}), dict) else {}
-        mass_mode = (
-            data_cfg.get("mass_mode")
-            or config.get("resolved_mass_mode")
+        requested_mass_mode = (
+            data_cfg.get("requested_mass_mode")
+            or config.get("requested_mass_mode")
             or config.get("mass_mode")
-            or results.get("resolved_mass_mode")
-            or results.get("train_mass_mode")
+            or data_cfg.get("mass_mode")
+            or results.get("requested_mass_mode")
         )
-        if mass_mode is not None:
-            df["resolved_mass_mode"] = mass_mode
+        split_resolved_key = f"{split}_mass_mode"
+        resolved_mass_mode = (
+            results.get(split_resolved_key)
+            or config.get(split_resolved_key)
+            or results.get("resolved_mass_mode")
+            or config.get("resolved_mass_mode")
+            or (results.get("train_mass_mode") if split == "train" else results.get("test_mass_mode"))
+            or (config.get("train_mass_mode") if split == "train" else config.get("test_mass_mode"))
+            or results.get("train_mass_mode")
+            or config.get("train_mass_mode")
+            or requested_mass_mode
+        )
+        split_reason_key = f"{split}_mass_mode_resolution_reason"
+        mass_mode_reason = (
+            results.get(split_reason_key)
+            or config.get(split_reason_key)
+            or results.get("mass_mode_resolution_reason")
+            or config.get("mass_mode_resolution_reason")
+            or data_cfg.get("mass_mode_resolution_reason")
+        )
+        if requested_mass_mode is not None:
+            df["requested_mass_mode"] = requested_mass_mode
+        if resolved_mass_mode is not None:
+            df["resolved_mass_mode"] = resolved_mass_mode
+        if mass_mode_reason is not None:
+            df["mass_mode_resolution_reason"] = mass_mode_reason
         rows.append(df)
 
     if not rows:
@@ -150,6 +184,29 @@ def _abs_cv(series: pd.Series) -> float:
     return float(values.std(ddof=1) / denom)
 
 
+def _is_explicit_mass_mode(requested: object = None, resolved: object = None, reason: object = None) -> object:
+    """Return whether mass semantics came from an explicit user choice."""
+    requested_s = "" if pd.isna(requested) else str(requested).strip().lower()
+    resolved_s = "" if pd.isna(resolved) else str(resolved).strip().lower()
+    reason_s = "" if pd.isna(reason) else str(reason).strip().lower()
+
+    if requested_s in EXPLICIT_MASS_MODES:
+        return True
+    if requested_s == "auto":
+        return False
+    if "auto" in resolved_s or "auto" in reason_s:
+        return False
+    if resolved_s in EXPLICIT_MASS_MODES:
+        return True
+    if any(resolved_s.endswith(f":{mode}") for mode in EXPLICIT_MASS_MODES):
+        return True
+    if resolved_s:
+        # Unknown resolved strings should be conservative: do not silently
+        # convert them into claim-ready explicit mass semantics.
+        return False
+    return pd.NA
+
+
 def _aggregate(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
     work = df.copy()
     if "pred_expansion_ratio" in work.columns:
@@ -171,6 +228,8 @@ def _aggregate(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
     }
     optional = {
         "resolved_mass_mode": ("resolved_mass_mode", _mode_or_first),
+        "requested_mass_mode": ("requested_mass_mode", _mode_or_first),
+        "mass_mode_resolution_reason": ("mass_mode_resolution_reason", _mode_or_first),
         "state_tv_mean": ("state_tv", "mean"),
         "state_tv_std": ("state_tv", "std"),
         "dominant_state_match_rate": ("dominant_state_match", "mean"),
@@ -381,26 +440,41 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
 
     def add_metric_null(metric_col: str, prefix: str) -> None:
         metric = pd.to_numeric(out.get(metric_col, pd.Series(np.nan, index=out.index)), errors="coerce")
+        current_controls = out.loc[is_control.fillna(False).astype(bool)]
         control_values = pd.to_numeric(
-            controls.get(metric_col, pd.Series(dtype=float)),
+            current_controls.get(metric_col, pd.Series(dtype=float)),
             errors="coerce",
         ).abs()
-        null_q95 = _q95(control_values) if not controls.empty else float("nan")
+        null_q95 = _q95(control_values) if not current_controls.empty else float("nan")
+        floor = PRACTICAL_NULL_FLOORS.get(prefix, 0.0)
+        null_threshold = max(null_q95, floor) if not pd.isna(null_q95) else float("nan")
         out[f"{prefix}_null_abs_q95"] = null_q95
+        out[f"{prefix}_null_practical_floor"] = floor
+        out[f"{prefix}_null_threshold"] = null_threshold
         if pd.isna(null_q95):
             out[f"{prefix}_null_gap_pass"] = pd.NA
         else:
-            out[f"{prefix}_null_gap_pass"] = metric.abs() > null_q95
+            out[f"{prefix}_null_gap_pass"] = metric.abs() > null_threshold
 
     if "weighted_mean_shift_l2_fact_vs_ref" not in out.columns and "geom_shift_fact_vs_ref" in out.columns:
         out["weighted_mean_shift_l2_fact_vs_ref"] = out["geom_shift_fact_vs_ref"]
     if "energy_distance_fact_vs_ref" not in out.columns:
         out["energy_distance_fact_vs_ref"] = np.nan
+    tsk_score = pd.to_numeric(
+        out.get("delta_autocrine_tnf_tsk_score", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    ).abs()
+    pemt_score = pd.to_numeric(
+        out.get("delta_pemt_score", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    ).abs()
+    out["tsk_pemt_program_effect_abs"] = pd.concat([tsk_score, pemt_score], axis=1).max(axis=1)
     add_metric_null("delta_log_mass", "mass")
     add_metric_null("weighted_mean_shift_l2_fact_vs_ref", "mean_shift")
     add_metric_null("energy_distance_fact_vs_ref", "distribution_shift")
     add_metric_null("context_dependence_geom", "context_dependence")
     add_metric_null("diffusion_action", "diffusion_action")
+    add_metric_null("tsk_pemt_program_effect_abs", "tsk_pemt_program")
     out["control_null_abs_delta_log_mass_q95"] = out["mass_null_abs_q95"]
     out["negative_control_gap_pass"] = out["mass_null_gap_pass"]
 
@@ -438,6 +512,15 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
         out["counterfactual_replicate_pass"]
         & diffusion_sign.ge(0.75)
     )
+    distribution_cv = pd.to_numeric(
+        out.get("energy_distance_fact_vs_ref_abs_cv", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["distribution_shift_stability_pass"] = (
+        out["counterfactual_replicate_pass"]
+        & distribution_cv.notna()
+        & distribution_cv.le(1.0)
+    )
 
     context_available = out.get(
         "context_dependence_geom",
@@ -452,16 +535,22 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
         & context_available
         & context_sign.ge(0.75)
     )
-    mass_mode_col = None
-    if "resolved_mass_mode" in out.columns:
-        mass_mode_col = "resolved_mass_mode"
-    elif "mass_mode" in out.columns:
-        mass_mode_col = "mass_mode"
-    if mass_mode_col is None:
+    requested_mode = out.get("requested_mass_mode", out.get("mass_mode"))
+    resolved_mode = out.get("resolved_mass_mode")
+    resolution_reason = out.get("mass_mode_resolution_reason")
+    if requested_mode is None and resolved_mode is None and resolution_reason is None:
         out["explicit_mass_mode_pass"] = pd.NA
     else:
-        mass_mode = out[mass_mode_col].astype("string").str.lower()
-        out["explicit_mass_mode_pass"] = mass_mode.notna() & ~mass_mode.eq("auto")
+        if requested_mode is None:
+            requested_mode = pd.Series(pd.NA, index=out.index)
+        if resolved_mode is None:
+            resolved_mode = pd.Series(pd.NA, index=out.index)
+        if resolution_reason is None:
+            resolution_reason = pd.Series(pd.NA, index=out.index)
+        out["explicit_mass_mode_pass"] = [
+            _is_explicit_mass_mode(req, res, reason)
+            for req, res, reason in zip(requested_mode, resolved_mode, resolution_reason)
+        ]
 
     def null_gate(row: pd.Series, pass_col: str, name: str) -> str | None:
         value = row.get(pass_col, pd.NA)
@@ -500,6 +589,8 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
                 null_reason = null_gate(row, pass_col, name)
                 if null_reason is not None:
                     return null_reason
+            if not bool(row.get("distribution_shift_stability_pass", False)):
+                return "needs-distribution-shift-stability"
             if not bool(row.get("plasticity_stability_pass", False)):
                 return "needs-diffusion-stability"
         else:
@@ -526,6 +617,7 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     out["plasticity_claim_ready"] = (
         stable
         & out["plasticity_stability_pass"]
+        & out["distribution_shift_stability_pass"]
         & pass_series("distribution_shift_null_gap_pass")
         & pass_series("diffusion_action_null_gap_pass")
     )
@@ -536,7 +628,11 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     )
     tsk = pd.to_numeric(out.get("z_delta_autocrine_tnf_tsk_score", pd.Series(0.0, index=out.index)), errors="coerce")
     pemt = pd.to_numeric(out.get("z_delta_pemt_score", pd.Series(0.0, index=out.index)), errors="coerce")
-    out["tsk_pemt_claim_ready"] = stable & ((tsk >= 0.5) | (pemt >= 0.5))
+    out["tsk_pemt_claim_ready"] = (
+        stable
+        & ((tsk >= 0.5) | (pemt >= 0.5))
+        & pass_series("tsk_pemt_program_null_gap_pass")
+    )
     out["transformation_claim_ready"] = (
         out["tsk_pemt_claim_ready"]
         & (out["plasticity_claim_ready"] | out["ecology_claim_ready"])
@@ -565,12 +661,16 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
                 "context",
             ) is None
         if priority == "plasticity/state-shift":
-            return bool(row.get("plasticity_stability_pass", False)) and all(
-                null_gate(row, pass_col, name) is None
-                for pass_col, name in [
-                    ("distribution_shift_null_gap_pass", "distribution-shift"),
-                    ("diffusion_action_null_gap_pass", "diffusion"),
-                ]
+            return (
+                bool(row.get("plasticity_stability_pass", False))
+                and bool(row.get("distribution_shift_stability_pass", False))
+                and all(
+                    null_gate(row, pass_col, name) is None
+                    for pass_col, name in [
+                        ("distribution_shift_null_gap_pass", "distribution-shift"),
+                        ("diffusion_action_null_gap_pass", "diffusion"),
+                    ]
+                )
             )
         return null_gate(row, "mass_null_gap_pass", "mass") is None
 
@@ -724,9 +824,15 @@ def main() -> None:
             "fold_stability_pass",
             "guide_concordance_pass",
             "guide_concordance_status",
+            "requested_mass_mode",
+            "resolved_mass_mode",
+            "mass_mode_resolution_reason",
             "explicit_mass_mode_pass",
             "negative_control_gap_pass",
+            "mass_null_threshold",
             "distribution_shift_null_gap_pass",
+            "distribution_shift_stability_pass",
+            "tsk_pemt_program_null_gap_pass",
             "expansion_claim_ready",
             "plasticity_claim_ready",
             "ecology_claim_ready",

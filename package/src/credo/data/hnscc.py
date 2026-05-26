@@ -971,6 +971,11 @@ def build_study_from_split(
             raise ValueError(f"Unsupported mass mode with mass_value_col: {resolved!r}")
     mass_df = mass_df.loc[pd.to_numeric(mass_df["mass"], errors="coerce").fillna(0.0) > 0].reset_index(drop=True)
     mass_df.attrs["mass_mode"] = resolved_mass_mode
+    mass_df.attrs["requested_mass_mode"] = mass_mode
+    if mass_mode == "auto":
+        mass_df.attrs["mass_mode_resolution_reason"] = resolved_mass_mode.split(":auto_", 1)[-1] if ":auto_" in resolved_mass_mode else "auto"
+    else:
+        mass_df.attrs["mass_mode_resolution_reason"] = f"explicit_{mass_mode}"
 
     perturbation_ids = sorted(cell_df["perturbation_id"].unique().tolist())
     control_ids = sorted(sub_obs.loc[sub_obs["is_control"].astype(bool), "perturbation_id"].unique().tolist())

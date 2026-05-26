@@ -16,7 +16,7 @@ from credo.data.core import (
 )
 from credo.data.trajectory_view import TrajectoryView, embedding_id_for_measure_key
 from credo.models.full_model import FullDynamicsModel
-from credo.models.trajectory_counterfactual import TrajectoryCounterfactualEngine
+from credo.models.trajectory_counterfactual import TrajectoryCounterfactualEngine, _weighted_energy_distance
 from credo.models.weighted_sde import WeightedParticleSimulator
 from credo.training.trajectory_batch import initialise_particles_from_trajectory
 from credo.training.trajectory_trainer import TrajectoryTrainer
@@ -304,3 +304,26 @@ def test_trajectory_counterfactual_same_start_same_noise() -> None:
     assert set(result.metrics_by_time["target_label"]) == {"6h", "10h"}
     assert "weighted_mean_shift_l2_fact_vs_ref" in result.metrics_by_time.columns
     assert "energy_distance_fact_vs_ref" in result.metrics_by_time.columns
+
+
+def test_trajectory_energy_distance_detects_same_mean_distribution_shift() -> None:
+    factual = torch.tensor([[-1.0], [1.0]])
+    reference = torch.tensor([[0.0], [0.0]])
+    logw = torch.zeros(2)
+    mean_f = (torch.softmax(logw, dim=0)[:, None] * factual).sum(dim=0)
+    mean_r = (torch.softmax(logw, dim=0)[:, None] * reference).sum(dim=0)
+
+    assert torch.linalg.norm(mean_f - mean_r).item() == 0.0
+    assert _weighted_energy_distance(factual, logw, reference, logw) > 0.1
+
+
+def test_trajectory_energy_distance_chunked_matches_full_pairwise() -> None:
+    z_a = torch.linspace(-1.0, 1.0, 9).reshape(9, 1)
+    z_b = torch.linspace(-0.5, 1.5, 7).reshape(7, 1)
+    logw_a = torch.linspace(-0.2, 0.2, 9)
+    logw_b = torch.linspace(0.3, -0.1, 7)
+
+    full = _weighted_energy_distance(z_a, logw_a, z_b, logw_b, chunk_size=100)
+    chunked = _weighted_energy_distance(z_a, logw_a, z_b, logw_b, chunk_size=3)
+
+    assert np.isclose(full, chunked)

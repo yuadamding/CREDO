@@ -28,15 +28,29 @@ def _weighted_mean(z: torch.Tensor, logw: torch.Tensor) -> torch.Tensor:
     return (weights[:, None] * z).sum(dim=0)
 
 
-def _weighted_energy_distance(z_a: torch.Tensor, logw_a: torch.Tensor, z_b: torch.Tensor, logw_b: torch.Tensor) -> float:
+def _weighted_energy_distance(
+    z_a: torch.Tensor,
+    logw_a: torch.Tensor,
+    z_b: torch.Tensor,
+    logw_b: torch.Tensor,
+    *,
+    chunk_size: int = 1024,
+) -> float:
     w_a = torch.softmax(logw_a, dim=0)
     w_b = torch.softmax(logw_b, dim=0)
-    d_ab = torch.cdist(z_a, z_b)
-    d_aa = torch.cdist(z_a, z_a)
-    d_bb = torch.cdist(z_b, z_b)
-    cross = (w_a[:, None] * w_b[None, :] * d_ab).sum()
-    self_a = (w_a[:, None] * w_a[None, :] * d_aa).sum()
-    self_b = (w_b[:, None] * w_b[None, :] * d_bb).sum()
+
+    def weighted_distance_sum(x: torch.Tensor, wx: torch.Tensor, y: torch.Tensor, wy: torch.Tensor) -> torch.Tensor:
+        total = torch.zeros((), dtype=x.dtype, device=x.device)
+        step = max(int(chunk_size), 1)
+        for start in range(0, x.shape[0], step):
+            stop = min(start + step, x.shape[0])
+            dist = torch.cdist(x[start:stop], y)
+            total = total + (wx[start:stop, None] * wy[None, :] * dist).sum()
+        return total
+
+    cross = weighted_distance_sum(z_a, w_a, z_b, w_b)
+    self_a = weighted_distance_sum(z_a, w_a, z_a, w_a)
+    self_b = weighted_distance_sum(z_b, w_b, z_b, w_b)
     return float(torch.clamp(2.0 * cross - self_a - self_b, min=0.0).detach().cpu())
 
 

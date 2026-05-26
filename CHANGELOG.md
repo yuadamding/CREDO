@@ -1,5 +1,14 @@
 # Changelog
 
+## 2.0.12
+
+- Marked the package release as `credo==2.0.12`.
+- Promotes the 2.0.11 claim-calibration hardening state: explicit requested
+  versus resolved mass-mode provenance, positive practical null floors,
+  distribution-shift stability for plasticity calls, TSK/pEMT program-null
+  gating, simulator-consumed noise provenance, and chunked energy-distance
+  state-shift metrics.
+
 ## 2.0.11
 
 - Marked the package release as `credo==2.0.11`.
@@ -7,6 +16,13 @@
   HNSCC mass-mode semantics, control-guide counterfactual nulls, unique-fold
   replicate counting, distributional state-shift metrics, strict/screening
   claim-readiness, and hashed input/final manifests.
+- Hardened claim gates so auto-derived mass-mode resolution strings cannot
+  pass as explicit mass semantics, metric-specific nulls use a positive
+  practical floor, plasticity claims require distribution-shift stability, and
+  TSK/pEMT readiness requires a matching program null gap.
+- Counterfactual provenance now hashes the actual simulator-consumed
+  `noise_steps`, and the energy-distance state-shift metric is computed in
+  chunks to avoid quadratic memory spikes at larger particle counts.
 
 ## 2.0.10
 

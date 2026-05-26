@@ -46,6 +46,8 @@ def test_hnscc_group_total_mass_not_summed_over_cells() -> None:
 
     assert study.mass_table.get("ctrl", "P4", "D1") == 10.0
     assert study.mass_table.df.attrs["mass_mode"] == "subset_only:mass_value:group_total"
+    assert study.mass_table.df.attrs["requested_mass_mode"] == "group_total"
+    assert study.mass_table.df.attrs["mass_mode_resolution_reason"] == "explicit_group_total"
 
 
 def test_hnscc_per_cell_contribution_mass_sums() -> None:
@@ -62,6 +64,7 @@ def test_hnscc_per_cell_contribution_mass_sums() -> None:
 
     assert study.mass_table.get("ctrl", "P4", "D1") == 1.0
     assert study.mass_table.df.attrs["mass_mode"] == "subset_only:mass_value:per_cell_contribution"
+    assert study.mass_table.df.attrs["requested_mass_mode"] == "per_cell_contribution"
 
 
 def test_hnscc_explicit_mass_mode_missing_column_raises() -> None:
@@ -106,3 +109,4 @@ def test_hnscc_count_mass_mode_ignores_mass_column() -> None:
 
     assert study.mass_table.get("ctrl", "P4", "D1") == 2.0
     assert study.mass_table.df.attrs["mass_mode"] == "subset_only:count"
+    assert study.mass_table.df.attrs["requested_mass_mode"] == "count"

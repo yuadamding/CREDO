@@ -499,6 +499,9 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
             raise ValueError(f"Unsupported mass mode for --mass-col: {resolved_mass_mode!r}")
     args.resolved_mass_mode = resolved_mass_mode
     args.mass_mode_resolution_reason = mass_mode_reason
+    mass_df.attrs["requested_mass_mode"] = args.mass_mode
+    mass_df.attrs["mass_mode"] = resolved_mass_mode
+    mass_df.attrs["mass_mode_resolution_reason"] = mass_mode_reason
 
     pids = sorted(obs["perturbation_id"].unique().tolist())
     control_mask = _as_bool(obs[args.control_col])
@@ -602,6 +605,7 @@ def write_run_manifest(args: argparse.Namespace, output_dir: str | Path) -> None
         "cuda_available": bool(torch.cuda.is_available()),
         "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "dependency_versions": _dependency_versions(),
+        "requested_mass_mode": getattr(args, "mass_mode", None),
         "resolved_mass_mode": getattr(args, "resolved_mass_mode", None),
         "mass_mode_resolution_reason": getattr(args, "mass_mode_resolution_reason", None),
         "adata_n_obs": getattr(args, "adata_n_obs", None),
@@ -641,6 +645,9 @@ def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path)
     )
     mass_summary.to_csv(mass_summary_path, index=False)
     input_manifest = {
+        "requested_mass_mode": getattr(study.mass_table.df, "attrs", {}).get("requested_mass_mode"),
+        "resolved_mass_mode": getattr(study.mass_table.df, "attrs", {}).get("mass_mode"),
+        "mass_mode_resolution_reason": getattr(study.mass_table.df, "attrs", {}).get("mass_mode_resolution_reason"),
         "mass_table_sha256": _sha256_file(mass_table_path),
         "cell_count_table_sha256": _sha256_file(cell_count_path),
         "mass_summary_by_time_sample_sha256": _sha256_file(mass_summary_path),
@@ -678,10 +685,14 @@ def write_final_manifest(output_dir: str | Path) -> None:
         for rel in paths
         if (out / rel).exists()
     }
+    run_manifest = json.loads((out / "run_manifest.json").read_text()) if (out / "run_manifest.json").exists() else {}
     manifest = {
         "package_version": credo_version,
         "git_sha": _git_sha(),
         "git_dirty": _git_dirty(),
+        "requested_mass_mode": run_manifest.get("requested_mass_mode"),
+        "resolved_mass_mode": run_manifest.get("resolved_mass_mode"),
+        "mass_mode_resolution_reason": run_manifest.get("mass_mode_resolution_reason"),
         "outputs": outputs,
     }
     (out / "final_manifest.json").write_text(

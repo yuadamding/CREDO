@@ -124,6 +124,26 @@ def test_rollout_accepts_explicit_noise_without_consuming_global_rng() -> None:
     assert torch.allclose(rollout.terminal_z, torch.ones_like(rollout.terminal_z))
 
 
+def test_rollout_can_return_exact_noise_used() -> None:
+    simulator = WeightedParticleSimulator(n_steps=3, store_history=False)
+    z0 = torch.zeros(1, 4, 2)
+    logw0 = torch.zeros(1, 4)
+    log_m0 = torch.zeros(1)
+    noise_steps = torch.arange(24, dtype=torch.float32).reshape(3, 1, 4, 2) / 100.0
+
+    rollout = simulator.rollout(
+        z0=z0,
+        logw0=logw0,
+        model=_ConstantDynamics(),
+        log_m0=log_m0,
+        noise_steps=noise_steps,
+        return_noise_used=True,
+    )
+
+    assert rollout.noise_steps is not None
+    assert torch.equal(rollout.noise_steps, noise_steps)
+
+
 def test_rollout_rejects_bad_noise_shape() -> None:
     simulator = WeightedParticleSimulator(n_steps=3, store_history=False)
     z0 = torch.zeros(1, 4, 2)

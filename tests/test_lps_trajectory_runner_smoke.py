@@ -110,12 +110,17 @@ def test_lps_trajectory_runner_smoke(tmp_path) -> None:
     pred = pd.read_csv(output_dir / "predicted_metrics_by_key_time.csv")
     assert {"physical_time", "normalized_tau", "interval_physical_duration"}.issubset(pred.columns)
     manifest = json.loads((output_dir / "run_manifest.json").read_text())
-    assert manifest["package_version"] == "2.0.11"
+    assert manifest["package_version"] == "2.0.12"
+    assert manifest["requested_mass_mode"] == "group_total"
     assert manifest["resolved_mass_mode"] == "group_total"
     input_manifest = json.loads((output_dir / "input_manifest.json").read_text())
     final_manifest = json.loads((output_dir / "final_manifest.json").read_text())
+    assert input_manifest["requested_mass_mode"] == "group_total"
+    assert input_manifest["resolved_mass_mode"] == "group_total"
     assert len(input_manifest["mass_table_sha256"]) == 64
-    assert final_manifest["package_version"] == "2.0.11"
+    assert final_manifest["package_version"] == "2.0.12"
+    assert final_manifest["requested_mass_mode"] == "group_total"
+    assert final_manifest["resolved_mass_mode"] == "group_total"
     assert "mass_table.csv" in final_manifest["outputs"]
 
 

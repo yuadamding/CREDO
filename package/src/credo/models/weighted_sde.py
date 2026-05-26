@@ -30,6 +30,7 @@ class ParticleRollout:
     sigma_steps: Optional[torch.Tensor] = None      # [K, G, N, d]
     growth_steps: Optional[torch.Tensor] = None     # [K, G, N]
     context_steps: Optional[torch.Tensor] = None    # [K, C], context for tau_k -> tau_{k+1}
+    noise_steps: Optional[torch.Tensor] = None      # [K, G, N, d] innovations used by rollout
 
     @property
     def n_steps(self) -> int:
@@ -82,6 +83,7 @@ class WeightedParticleSimulator(nn.Module):
         tau_grid: Optional[torch.Tensor] = None,
         generator: Optional[torch.Generator] = None,
         noise_steps: Optional[torch.Tensor] = None,
+        return_noise_used: bool = False,
     ) -> ParticleRollout:
         """Run the full Euler-Maruyama rollout.
 
@@ -99,6 +101,8 @@ class WeightedParticleSimulator(nn.Module):
             ``[K, G, N, d]``.  They are multiplied by ``sqrt(dtau)`` inside
             the Euler-Maruyama update and are useful for same-noise
             counterfactuals.
+        return_noise_used: if true, attach the exact standard normal
+            innovations consumed by the rollout to the returned object.
         """
         device = z0.device
         dtype = z0.dtype
@@ -140,6 +144,7 @@ class WeightedParticleSimulator(nn.Module):
         z_list = [z0]
         logw_list = [logw0]
         drift_list, sigma_list, growth_list, ctx_list = [], [], [], []
+        noise_used_list = []
 
         z = z0.clone()
         logw = logw0.clone()
@@ -177,6 +182,8 @@ class WeightedParticleSimulator(nn.Module):
                 noise = torch.randn(z.shape, dtype=dtype, device=device, generator=generator)
             else:
                 noise = torch.randn_like(z)  # [G, N, d]
+            if return_noise_used:
+                noise_used_list.append(noise.detach().clone())
             z = z + v * dtau + sigma * sqrt_dtau * noise
 
             # Log-weight update (Euler for log-weight ODE)
@@ -199,6 +206,8 @@ class WeightedParticleSimulator(nn.Module):
             result.sigma_steps = torch.stack(sigma_list, dim=0)
             result.growth_steps = torch.stack(growth_list, dim=0)
             result.context_steps = torch.stack(ctx_list, dim=0)
+        if return_noise_used:
+            result.noise_steps = torch.stack(noise_used_list, dim=0)
 
         return result
 

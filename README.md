@@ -127,14 +127,17 @@ negative-control null gaps, explicit mass-mode metadata when available, and
 claim-specific counterfactual checks. Counterfactual null calibration can
 include control guides with `--include-controls-for-null`, and replicate
 support is counted from unique fold/run identifiers rather than raw rows.
+Metric-specific null gates use a small positive practical floor so an exactly
+zero same-noise control counterfactual does not make tiny effects claim-ready.
 Single guide genes are reported as
 `not_assessable` for guide concordance, not as a pass. The table separates
 `claim_ready_strict` from `claim_ready_screening`; screening can retain
 otherwise well-supported single-guide candidates without marking them as
 strictly claim-ready. Ecology-dependent calls require replicated
 context-ablation evidence; plasticity/state-shift calls require stable
-diffusion/action evidence and distribution-shift null support. TSK/pEMT
-readiness is reported separately from expansion readiness. The table
+diffusion/action evidence, distribution-shift null support, and
+distribution-shift stability. TSK/pEMT readiness is reported separately from
+expansion readiness and requires its own program-null support. The table
 records the missing condition, such as
 `needs-counterfactual-replicates`, `needs-fold-stability`,
 `needs-guide-concordance`, `needs-explicit-mass-mode`, `missing-mass-null`,
@@ -166,7 +169,8 @@ per-key/time prediction tables.
 - Counterfactuals use the same source finite measure and particle seed; the
   reference branch removes the perturbation residual rather than swapping in a
   control initial population. The HNSCC counterfactual manifest computes
-  same-start and same-noise flags from tensor checksums.
+  same-start and same-noise flags from tensor checksums of the actual
+  simulator-consumed innovations.
 - Trajectory runs write `input_manifest.json` and `final_manifest.json` with
   hashes for key input-derived tables and output artifacts.
 - Ecological context is computed from absolute particle weights, including
