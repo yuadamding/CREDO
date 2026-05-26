@@ -1,8 +1,8 @@
 # Changelog
 
-## 2.0.5
+## 2.0.6
 
-- Marked the package release as `credo==2.0.5`.
+- Marked the package release as `credo==2.0.6`.
 - Added the first production trajectory training stack: `TrajectoryView`,
   sample-aware trajectory particle initialization, `TrajectoryTrainer`,
   per-key/time trajectory evaluation tables, and generic/LPS trajectory
@@ -30,6 +30,12 @@
   donor-aware trajectory views, measure-key/embedding-id separation,
   checkpoint endpoint diagnostics, trajectory counterfactuals, and one-epoch
   trainer smoke cases.
+
+## 2.0.5
+
+- Hardened mass-key canonicalization, pooled/sample mass semantics, count
+  validation, multi-time endpoint time-weight normalization, and same-noise
+  SDE utilities.
 
 ## 2.0.4
 
@@ -69,4 +75,4 @@
 
 In 2.0.2, this provided the compact CREDO package and multi-time building
 blocks. The dedicated production `TrajectoryTrainer` and LPS three-time runner
-were added later in 2.0.5.
+were added later in 2.0.6.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 
 from credo.config.schema import RunConfig
@@ -10,6 +11,7 @@ from credo.data.core import (
     MassTable,
     PerturbSeqDynamicsData,
     PerturbationCatalog,
+    SparseTrajectoryProblem,
     TimeAxis,
 )
 from credo.data.trajectory_view import TrajectoryView, embedding_id_for_measure_key
@@ -178,6 +180,94 @@ def test_trajectory_trainer_one_epoch_full_start(tmp_path) -> None:
     ]
     assert not d2_mono_6h.empty
     assert bool(d2_mono_6h["active"].iloc[0]) is False
+
+
+def test_trajectory_trainer_rejects_validation_tau_mismatch(tmp_path) -> None:
+    study = _toy_study()
+    trajectory = study.to_sparse_trajectory_problem(
+        by_sample=True,
+        time_labels=["90m", "6h", "10h"],
+    )
+    validation = SparseTrajectoryProblem(
+        measures=trajectory.measures,
+        catalog=trajectory.catalog,
+        time_axis=TimeAxis(labels=["90m", "6h", "10h"], physical_times=[1.5, 6.5, 10.0]),
+        time_labels=trajectory.time_labels,
+    )
+    cfg = _tiny_config(tmp_path)
+
+    with pytest.raises(ValueError, match="tau mismatch"):
+        TrajectoryTrainer(
+            model=_model(),
+            config=cfg,
+            trajectory=trajectory,
+            validation_trajectory=validation,
+            source_label="90m",
+            target_labels=["6h", "10h"],
+            output_dir=str(tmp_path),
+            ema_decay=0.0,
+        )
+
+
+def test_trajectory_trainer_evaluate_uses_eval_particles(tmp_path) -> None:
+    study = _toy_study()
+    trajectory = study.to_sparse_trajectory_problem(
+        by_sample=True,
+        time_labels=["90m", "6h", "10h"],
+    )
+    cfg = _tiny_config(tmp_path)
+    cfg.simulation.n_particles = 3
+    cfg.eval.n_eval_particles = 7
+    trainer = TrajectoryTrainer(
+        model=_model(),
+        config=cfg,
+        trajectory=trajectory,
+        source_label="90m",
+        target_labels=["6h", "10h"],
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+    )
+
+    seen: list[tuple[int, bool]] = []
+    original_rollout = trainer._rollout
+
+    def wrapped_rollout(view, *, n_particles: int, seed: int, training: bool):
+        seen.append((n_particles, training))
+        return original_rollout(view, n_particles=n_particles, seed=seed, training=training)
+
+    trainer._rollout = wrapped_rollout  # type: ignore[method-assign]
+    trainer.evaluate(epoch=0)
+
+    assert seen[-1] == (7, False)
+
+
+def test_trajectory_trainer_count_data_key_order_must_match(tmp_path) -> None:
+    study = _toy_study()
+    trajectory = study.to_sparse_trajectory_problem(
+        by_sample=True,
+        time_labels=["90m", "6h", "10h"],
+    )
+    cfg = _tiny_config(tmp_path)
+    cfg.training.lambda_count = 0.1
+    count_data = {
+        "key_level": "measure_key",
+        "key_order": [("wrong", "ctrl")],
+        "exposures": {},
+        "count_matrices": {},
+        "n_totals": {},
+    }
+
+    with pytest.raises(ValueError, match="key_order"):
+        TrajectoryTrainer(
+            model=_model(),
+            config=cfg,
+            trajectory=trajectory,
+            source_label="90m",
+            target_labels=["6h", "10h"],
+            count_data=count_data,
+            output_dir=str(tmp_path),
+            ema_decay=0.0,
+        )
 
 
 def test_trajectory_counterfactual_same_start_same_noise() -> None:

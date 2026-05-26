@@ -261,24 +261,24 @@ def _physical_times(obs: pd.DataFrame, labels: list[str], args: argparse.Namespa
 
 def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData:
     adata = ad.read_h5ad(args.data_path)
-    obs = adata.obs.copy()
+    obs_all = adata.obs.copy()
     target_labels = _parse_csv(args.target_labels)
     labels = [args.source_label] + target_labels
 
     for col in [args.time_col, args.perturbation_col, args.control_col]:
-        if col not in obs.columns:
+        if col not in obs_all.columns:
             raise KeyError(f"AnnData obs is missing required column {col!r}.")
-    if args.key_mode == "sample_aware" and args.sample_col not in obs.columns:
+    if args.key_mode == "sample_aware" and args.sample_col not in obs_all.columns:
         raise KeyError("--key-mode sample_aware requires a sample column.")
 
-    mask = obs[args.time_col].astype(str).isin(labels).to_numpy()
-    if not mask.any():
+    row_mask = obs_all[args.time_col].astype(str).isin(labels).to_numpy()
+    if not row_mask.any():
         raise ValueError("No cells match the requested source/target labels.")
-    obs = obs.loc[mask].copy()
-    fit_mask = mask
+    fit_mask = row_mask
     if args.latent_source == "vae" and args.vae_fit_source_only:
-        fit_mask = mask & obs[args.time_col].astype(str).eq(str(args.source_label)).to_numpy()
-    latent = _load_latent(adata, mask, args, fit_mask=fit_mask)
+        fit_mask = row_mask & obs_all[args.time_col].astype(str).eq(str(args.source_label)).to_numpy()
+    obs = obs_all.loc[row_mask].copy()
+    latent = _load_latent(adata, row_mask, args, fit_mask=fit_mask)
 
     time_values = obs[args.time_col].astype(str)
     obs["time_label"] = time_values
@@ -294,8 +294,11 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
 
     cell_df = obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].reset_index(drop=True)
     if args.mass_col and args.mass_col in obs.columns:
+        mass_values = obs[args.mass_col].astype(float)
+        if not np.isfinite(mass_values.to_numpy()).all() or np.any(mass_values.to_numpy() <= 0):
+            raise ValueError("--mass-col must contain positive finite per-cell mass contributions.")
         mass_df = (
-            obs.assign(_mass=obs[args.mass_col].astype(float))
+            obs.assign(_mass=mass_values)
             .groupby(["perturbation_id", "time_label", "sample_id"], observed=True)["_mass"]
             .sum()
             .rename("mass")
@@ -346,6 +349,7 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.model.ecological_growth = args.ecological_growth
     cfg.model.use_growth_intercept = args.use_growth_intercept
     cfg.simulation.n_particles = args.n_particles
+    cfg.eval.n_eval_particles = args.eval_particles
     cfg.training.epochs = args.epochs
     cfg.training.seed = args.seed
     cfg.training.precision = args.precision

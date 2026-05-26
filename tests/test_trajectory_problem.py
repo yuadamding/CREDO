@@ -65,6 +65,26 @@ def test_trajectory_problem_three_times() -> None:
     assert trajectory.get("6h", "LPS__mono").n_atoms == 4
 
 
+def test_catalog_and_cell_state_keys_are_string_canonicalized() -> None:
+    catalog = PerturbationCatalog([1, "ctrl"], ["ctrl"])
+    assert catalog.perturbation_ids == ["1", "ctrl"]
+    assert catalog.index_of("1") == 0
+
+    cell_state = CellStateTable(
+        pd.DataFrame(
+            [
+                {"cell_id": 1, "perturbation_id": 1, "time_label": 0, "sample_id": 7},
+            ]
+        ),
+        np.zeros((1, 2), dtype=np.float32),
+    )
+    row = cell_state.df.iloc[0]
+    assert row["cell_id"] == "1"
+    assert row["perturbation_id"] == "1"
+    assert row["time_label"] == "0"
+    assert row["sample_id"] == "7"
+
+
 def test_time_axis_rejects_duplicate_labels() -> None:
     with pytest.raises(ValueError, match="labels must be unique"):
         TimeAxis(labels=["90m", "90m"], physical_times=[1.5, 6.0])

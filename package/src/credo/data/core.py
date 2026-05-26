@@ -97,6 +97,8 @@ class PerturbationCatalog:
     control_ids: List[str]
 
     def __post_init__(self) -> None:
+        self.perturbation_ids = [str(pid) for pid in self.perturbation_ids]
+        self.control_ids = [str(pid) for pid in self.control_ids]
         ids = set(self.perturbation_ids)
         if len(ids) != len(self.perturbation_ids):
             raise ValueError("Duplicate perturbation_ids")
@@ -138,6 +140,10 @@ class CellStateTable:
         missing = self.REQUIRED_COLS - set(self.df.columns)
         if missing:
             raise KeyError(f"CellStateTable missing columns: {missing}")
+        self.df = self.df.copy()
+        for col in sorted(self.REQUIRED_COLS):
+            self.df[col] = self.df[col].astype(str)
+        self.latent = np.asarray(self.latent)
         if len(self.df) != len(self.latent):
             raise ValueError(f"df rows {len(self.df)} != latent rows {len(self.latent)}")
         if self.latent.ndim != 2:

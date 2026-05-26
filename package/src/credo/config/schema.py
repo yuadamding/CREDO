@@ -192,6 +192,7 @@ class TrajectoryTrainingConfig(BaseModel):
 
 class EvalConfig(BaseModel):
     n_seeds: int = 3
+    n_eval_particles: int = 384
     n_counterfactual_particles: int = 512
 
 

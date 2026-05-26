@@ -125,11 +125,14 @@ class TrajectoryTrainer:
             if validation_trajectory is not None
             else None
         )
+        if self.val_view is not None:
+            self._validate_view_time_axis(self.val_view)
         self.measure_keys = self.view.source_keys
         self.embedding_ids = [embedding_id_for_measure_key(key) for key in self.measure_keys]
         missing_embeddings = sorted(set(self.embedding_ids) - set(model.perturbation_ids))
         if missing_embeddings:
             raise KeyError(f"Model is missing embedding ids: {missing_embeddings[:10]}")
+        self._validate_count_data()
 
         self.tau_grid = make_observed_tau_grid(
             self.view.observed_taus,
@@ -196,8 +199,43 @@ class TrajectoryTrainer:
 
         self._write_manifests()
 
+    def _validate_view_time_axis(self, view: TrajectoryView) -> None:
+        if view.time_labels != self.view.time_labels:
+            raise ValueError(
+                "Validation trajectory time labels must match training time labels "
+                f"({view.time_labels!r} != {self.view.time_labels!r})."
+            )
+        for label in self.view.time_labels:
+            train_tau = float(self.view.trajectory.tau(label))
+            val_tau = float(view.trajectory.tau(label))
+            if not math.isclose(train_tau, val_tau, rel_tol=0.0, abs_tol=1e-8):
+                raise ValueError(
+                    f"Validation trajectory tau mismatch for {label!r}: "
+                    f"{val_tau:.10g} != {train_tau:.10g}."
+                )
+
+    def _validate_count_data(self) -> None:
+        if self.count_data is None or self.config.training.lambda_count <= 0:
+            return
+        if "key_order" not in self.count_data:
+            raise ValueError("count_data must include key_order when lambda_count > 0.")
+        key_level = self.count_data.get("key_level", "measure_key")
+        if key_level != "measure_key":
+            raise NotImplementedError(
+                "TrajectoryTrainer count loss currently requires measure_key-level "
+                "count_data. Aggregate embedding-level counts before passing them "
+                "once duplicate embedding IDs are present."
+            )
+        key_order = list(self.count_data["key_order"])
+        if key_order != list(self.view.source_keys):
+            raise ValueError("count_data key_order must exactly match TrajectoryView source_keys.")
+
     def _write_manifests(self) -> None:
+        from credo import __version__ as credo_version
+
         trajectory_config = {
+            "credo_version": credo_version,
+            "git_sha": self.config.git_sha,
             "source_label": self.source_label,
             "target_labels": self.target_labels,
             "physical_times": {
@@ -317,10 +355,15 @@ class TrajectoryTrainer:
         tc = self.config.training
         target_support, target_logw = view.target_tensors(
             device=self.device,
-            dtype=rollout.z_steps.dtype,
+            dtype=torch.float32,
         )
         loss_end, endpoint_logs = self.endpoint_loss(
-            rollout=rollout,
+            rollout=ParticleRollout(
+                z_steps=rollout.z_steps.float(),
+                logw_steps=rollout.logw_steps.float(),
+                tau_steps=rollout.tau_steps.float(),
+                log_m0=rollout.log_m0.float() if rollout.log_m0 is not None else None,
+            ),
             checkpoint_indices=self.target_checkpoint_indices,
             target_support_by_time=target_support,
             target_logw_by_time=target_logw,
@@ -453,7 +496,7 @@ class TrajectoryTrainer:
             self.model.eval()
             rollout, _, _, _ = self._rollout(
                 view,
-                n_particles=max(1, self.config.simulation.n_particles),
+                n_particles=max(1, self.config.eval.n_eval_particles),
                 seed=self.config.training.seed + 100_000 + epoch,
                 training=False,
             )
