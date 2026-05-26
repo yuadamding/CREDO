@@ -1,4 +1,4 @@
-"""Production multi-time trajectory trainer for CREDO v1."""
+"""Production multi-time trajectory trainer for CREDO."""
 from __future__ import annotations
 
 import json
@@ -101,11 +101,11 @@ class TrajectoryTrainer:
         tc = config.training
         trc = config.trajectory_training
         if trc.trajectory_mode != "full_start":
-            raise NotImplementedError("TrajectoryTrainer v1 supports trajectory_mode='full_start' only.")
+            raise NotImplementedError("TrajectoryTrainer supports trajectory_mode='full_start' only.")
         if trc.context_batch_mode != "all_keys":
-            raise NotImplementedError("TrajectoryTrainer v1 supports context_batch_mode='all_keys' only.")
+            raise NotImplementedError("TrajectoryTrainer supports context_batch_mode='all_keys' only.")
         if trc.max_active_measure_keys:
-            raise NotImplementedError("TrajectoryTrainer v1 rolls out all active measure keys together.")
+            raise NotImplementedError("TrajectoryTrainer rolls out all active measure keys together.")
 
         self.view = TrajectoryView(
             trajectory=trajectory,

@@ -722,6 +722,58 @@ def test_distribution_fold_support_uses_unique_run_dir_not_rows(tmp_path: Path) 
     assert row["energy_distance_fact_vs_ref_fold_support"] == 0.5
 
 
+def test_counterfactual_loader_computes_sample_support_when_sample_ids_present(tmp_path: Path) -> None:
+    mod = _biology_module()
+    path = tmp_path / "cf_sample.csv"
+    pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "run_dir": "run_0",
+                "sample_id": "D1",
+                "is_control": True,
+                "energy_distance_fact_vs_ref": 0.0,
+            },
+            {
+                "perturbation_id": "ctrl",
+                "run_dir": "run_1",
+                "sample_id": "D2",
+                "is_control": True,
+                "energy_distance_fact_vs_ref": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "run_dir": "run_0",
+                "sample_id": "D1",
+                "is_control": False,
+                "energy_distance_fact_vs_ref": 0.5,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "run_dir": "run_1",
+                "sample_id": "D1",
+                "is_control": False,
+                "energy_distance_fact_vs_ref": 0.7,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "run_dir": "run_2",
+                "sample_id": "D2",
+                "is_control": False,
+                "energy_distance_fact_vs_ref": 0.0,
+            },
+        ]
+    ).to_csv(path, index=False)
+
+    out = mod._load_counterfactual_effects(path)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["energy_distance_fact_vs_ref_sample_key"] == "sample_id"
+    assert row["energy_distance_fact_vs_ref_sample_n"] == 2
+    assert row["energy_distance_fact_vs_ref_sample_positive_fraction"] == 0.5
+    assert np.isclose(row["energy_distance_fact_vs_ref_sample_effect_median"], 0.3)
+
+
 def test_program_occupancy_tv_can_supply_plasticity_state_shift_support() -> None:
     mod = _biology_module()
     df = pd.DataFrame(
@@ -760,6 +812,43 @@ def test_program_occupancy_tv_can_supply_plasticity_state_shift_support() -> Non
     assert row["program_occupancy_tv_null_gap_pass"] == np.True_
     assert row["program_occupancy_stability_pass"] == np.True_
     assert row["plasticity_claim_ready"] == np.True_
+
+
+def test_sample_support_blocks_strict_mass_claim_when_single_sample_drives_effect() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "growth-high",
+                "delta_log_mass": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "requested_mass_mode": "count",
+                "mass_counterfactual_effect_sample_n": 1,
+                "mass_counterfactual_effect_sample_positive_fraction": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["mass_sample_support_pass"] == np.False_
+    assert row["expansion_claim_ready"] == np.False_
+    assert row["biological_interpretation_gate"] == "needs-sample-support"
 
 
 def test_tsk_pemt_claim_does_not_require_expansion_ready() -> None:
@@ -1192,6 +1281,192 @@ def test_practical_null_floor_override_validation(tmp_path: Path) -> None:
         mod._load_practical_null_floor_overrides('{"unknown": 0.1}')
     with pytest.raises(ValueError, match="finite and nonnegative"):
         mod._load_practical_null_floor_overrides('{"mass": -1.0}')
+
+
+def test_claim_grade_requires_explicit_floor_profile_or_overrides() -> None:
+    mod = _biology_module()
+    original = mod.PRACTICAL_NULL_FLOORS.copy()
+    try:
+        with pytest.raises(ValueError, match="--claim-grade requires"):
+            mod._configure_practical_null_floors(claim_grade=True)
+
+        metadata = mod._configure_practical_null_floors(
+            profile="hnscc_claim_grade",
+            claim_grade=True,
+        )
+        assert metadata["claim_grade"] is True
+        assert metadata["practical_null_floor_profile"] == "hnscc_claim_grade"
+        assert mod.PRACTICAL_NULL_FLOORS["mass"] == 0.05
+        assert mod.PRACTICAL_NULL_FLOORS["program_occupancy_tv"] == 0.03
+    finally:
+        mod.PRACTICAL_NULL_FLOORS.clear()
+        mod.PRACTICAL_NULL_FLOORS.update(original)
+
+
+def test_practical_null_floor_cli_json_object_is_applied(tmp_path: Path) -> None:
+    run_dir = tmp_path / "cv" / "setting" / "fold_0"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.json").write_text(
+        json.dumps({"split": {"split_strategy": "random_kfold", "fold_index": 0}})
+    )
+    (run_dir / "results_summary.json").write_text(json.dumps({"requested_mass_mode": "count"}))
+    pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "mass_pred": 1.0,
+                "mass_true": 1.0,
+                "mass_rel_error": 0.0,
+                "is_control": True,
+                "n_init_atoms": 2,
+                "n_term_atoms": 2,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "mass_pred": 1.0,
+                "mass_true": 1.0,
+                "mass_rel_error": 0.0,
+                "is_control": False,
+                "n_init_atoms": 2,
+                "n_term_atoms": 2,
+            },
+        ]
+    ).to_csv(run_dir / "test_endpoint_metrics.csv", index=False)
+    cf_path = tmp_path / "cf.csv"
+    pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "fold_id": "fold_0",
+                "is_control": True,
+                "delta_log_mass_fact_vs_ref": 0.0,
+            },
+            {
+                "perturbation_id": "ctrl",
+                "fold_id": "fold_1",
+                "is_control": True,
+                "delta_log_mass_fact_vs_ref": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold_0",
+                "is_control": False,
+                "delta_log_mass_fact_vs_ref": 0.25,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold_1",
+                "is_control": False,
+                "delta_log_mass_fact_vs_ref": 0.25,
+            },
+        ]
+    ).to_csv(cf_path, index=False)
+    out_dir = tmp_path / "out"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "analysis" / "extract_biology_effects.py"),
+            "--cv-root",
+            str(tmp_path / "cv"),
+            "--counterfactual-effects",
+            str(cf_path),
+            "--practical-null-floors-json",
+            '{"mass": 0.5}',
+            "--output-dir",
+            str(out_dir),
+        ],
+        check=True,
+    )
+    out = pd.read_csv(out_dir / "biological_effects_per_perturbation.csv")
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+    floor_metadata = json.loads((out_dir / "practical_null_floors_used.json").read_text())
+
+    assert row["mass_null_practical_floor"] == 0.5
+    assert row["mass_null_gap_pass"] == np.False_
+    assert row["mass_counterfactual_effect"] == 0.25
+    assert floor_metadata["claim_grade"] is False
+    assert floor_metadata["effective_practical_null_floors"]["mass"] == 0.5
+    assert floor_metadata["practical_null_floor_overrides"] == {"mass": 0.5}
+
+
+def test_mass_null_uses_counterfactual_mass_effect_when_available() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "growth-high",
+                "delta_log_mass": 10.0,
+                "delta_log_mass_fact_vs_ref": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 10.0,
+                "delta_log_mass_fact_vs_ref": 0.25,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "requested_mass_mode": "count",
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["mass_counterfactual_effect"] == 0.25
+    assert row["mass_null_abs_q95"] == 0.0
+    assert row["mass_null_gap_pass"] == np.True_
+    assert row["expansion_claim_ready"] == np.True_
+
+
+def test_any_axis_claim_ready_is_separate_from_priority_class_gate() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "growth-high",
+                "delta_log_mass": 0.05,
+                "delta_autocrine_tnf_tsk_score": 0.0,
+                "delta_pemt_score": 0.0,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 0.01,
+                "delta_log_mass_fact_vs_ref": 0.01,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "delta_autocrine_tnf_tsk_score": 2.0,
+                "delta_pemt_score": 0.0,
+                "z_delta_autocrine_tnf_tsk_score": 1.0,
+                "requested_mass_mode": "count",
+                "tsk_pemt_program_effect_pos_fold_support": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["priority_class_claim_ready_strict"] == row["claim_ready"]
+    assert row["claim_ready_strict"] == row["priority_class_claim_ready_strict"]
+    assert row["tsk_pemt_claim_ready"] == np.True_
+    assert row["any_axis_claim_ready_strict"] == np.True_
 
 
 def test_biology_ignores_ambiguous_generic_mass_mode_from_run_config(tmp_path: Path) -> None:
