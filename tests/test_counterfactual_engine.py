@@ -82,6 +82,21 @@ def test_counterfactual_engine_clamp_context_returns_same_start_branches() -> No
     assert torch.equal(result.rollout_control.tau_steps, result.rollout_control_clamped.tau_steps)
 
 
+def test_counterfactual_common_noise_does_not_mutate_global_rng() -> None:
+    engine = CounterfactualEngine(
+        model=_model(),
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=5,
+    )
+
+    torch.manual_seed(123)
+    rng_before = torch.random.get_rng_state()
+    engine.run(_endpoint(), ["pert"], clamp_context=True, seed=7, common_noise=True)
+    rng_after = torch.random.get_rng_state()
+
+    assert torch.equal(rng_before, rng_after)
+
+
 def test_rollout_with_clamped_context_preserves_nonuniform_tau_grid() -> None:
     model = _model()
     tau_grid = torch.tensor([0.0, 0.2, 0.7, 1.0])
@@ -104,3 +119,21 @@ def test_rollout_with_clamped_context_preserves_nonuniform_tau_grid() -> None:
 
     assert torch.equal(rollout.tau_steps, tau_grid)
     assert rollout.context_steps.shape[0] == len(tau_grid) - 1
+
+
+def test_rollout_with_clamped_context_rejects_bad_context_width() -> None:
+    model = _model()
+    z0 = torch.zeros(1, 4, 2)
+    logw0 = torch.full((1, 4), -np.log(4.0))
+    log_m0 = torch.zeros(1)
+
+    with pytest.raises(ValueError, match="context_steps must have shape"):
+        rollout_with_clamped_context(
+            model=model,
+            z0=z0,
+            logw0=logw0,
+            log_m0=log_m0,
+            perturbation_ids=["pert"],
+            context_steps=torch.zeros(2, 2),
+            n_steps=2,
+        )

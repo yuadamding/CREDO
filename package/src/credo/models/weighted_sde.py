@@ -80,6 +80,8 @@ class WeightedParticleSimulator(nn.Module):
         tau_end: float = 1.0,
         perturbation_ids: Optional[List[str]] = None,
         tau_grid: Optional[torch.Tensor] = None,
+        generator: Optional[torch.Generator] = None,
+        noise_steps: Optional[torch.Tensor] = None,
     ) -> ParticleRollout:
         """Run the full Euler-Maruyama rollout.
 
@@ -92,10 +94,15 @@ class WeightedParticleSimulator(nn.Module):
         tau_start, tau_end: time interval in normalized coordinates
         tau_grid: optional explicit grid.  When provided, it must begin at
             ``tau_start`` and end at ``tau_end`` and may use non-uniform steps.
+        generator: optional random generator for Brownian increments.
+        noise_steps: optional explicit Brownian increments with shape
+            ``[K, G, N, d]``.  This is useful for same-noise counterfactuals.
         """
         device = z0.device
         dtype = z0.dtype
         G, N, d = z0.shape
+        if generator is not None and noise_steps is not None:
+            raise ValueError("Pass either generator or noise_steps, not both")
 
         if tau_grid is None:
             K = self.n_steps
@@ -117,6 +124,15 @@ class WeightedParticleSimulator(nn.Module):
                 raise ValueError("tau_grid must be strictly increasing")
             K = len(tau_steps) - 1
             dtau_uniform = None
+
+        if noise_steps is not None:
+            expected_noise_shape = (K, G, N, d)
+            noise_steps = noise_steps.to(device=device, dtype=dtype)
+            if tuple(noise_steps.shape) != expected_noise_shape:
+                raise ValueError(
+                    f"noise_steps must have shape {expected_noise_shape}, "
+                    f"got {tuple(noise_steps.shape)}"
+                )
 
         # Storage
         z_list = [z0]
@@ -153,7 +169,12 @@ class WeightedParticleSimulator(nn.Module):
                 ctx_list.append(ctx.context.detach())
 
             # Euler-Maruyama update
-            noise = torch.randn_like(z)  # [G, N, d]
+            if noise_steps is not None:
+                noise = noise_steps[k]
+            elif generator is not None:
+                noise = torch.randn(z.shape, dtype=dtype, device=device, generator=generator)
+            else:
+                noise = torch.randn_like(z)  # [G, N, d]
             z = z + v * dtau + sigma * sqrt_dtau * noise
 
             # Log-weight update (Euler for log-weight ODE)
@@ -178,6 +199,27 @@ class WeightedParticleSimulator(nn.Module):
             result.context_steps = torch.stack(ctx_list, dim=0)
 
         return result
+
+    @staticmethod
+    def sample_noise_like(
+        z0: torch.Tensor,
+        n_steps: int,
+        *,
+        seed: Optional[int] = None,
+        generator: Optional[torch.Generator] = None,
+    ) -> torch.Tensor:
+        """Sample Brownian increments with shape ``[n_steps, *z0.shape]``."""
+        if seed is not None and generator is not None:
+            raise ValueError("Pass either seed or generator, not both")
+        if generator is None and seed is not None:
+            generator = torch.Generator(device=z0.device)
+            generator.manual_seed(int(seed))
+        return torch.randn(
+            (int(n_steps),) + tuple(z0.shape),
+            dtype=z0.dtype,
+            device=z0.device,
+            generator=generator,
+        )
 
     @staticmethod
     def effective_sample_size(logw: torch.Tensor) -> torch.Tensor:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 2.0.4
+
+- Added explicit SDE noise tensors/generators for same-noise counterfactuals
+  without mutating global RNG state.
+- Rejected mixed pooled/sample-specific mass rows and malformed
+  clamped-context tensors before they can produce misleading mass or context
+  calculations.
+- Strengthened count-matrix and probability validation and added per-time count
+  likelihood logs.
+
 ## 2.0.3
 
 - Hardened core data validation for time axes, finite measures, cell-state

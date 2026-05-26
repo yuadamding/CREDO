@@ -14,11 +14,21 @@ where r_bar_g = E_{p_g}[r_g] = sum_i w_norm_i r_i.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+
+def _as_float_tensor(x: torch.Tensor, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+    return x.to(device=device, dtype=dtype)
+
+
+def _validate_count_matrix(count_matrix: torch.Tensor) -> None:
+    if count_matrix.ndim != 2:
+        raise ValueError(f"count_matrix must be 2D [samples, perturbations], got {count_matrix.ndim}D")
+    if not torch.isfinite(count_matrix).all() or torch.any(count_matrix < 0):
+        raise ValueError("count_matrix must be nonnegative and finite")
 
 
 def integrated_fitness(
@@ -66,8 +76,9 @@ def count_fractions_from_zeta(
     """Predict replicate perturbation fractions from exposure and fitness."""
     if not torch.is_floating_point(zeta):
         zeta = zeta.float()
-    count_matrix = count_matrix.to(device=zeta.device, dtype=zeta.dtype)
-    exposures = exposures.to(device=zeta.device, dtype=zeta.dtype)
+    count_matrix = _as_float_tensor(count_matrix, device=zeta.device, dtype=zeta.dtype)
+    exposures = _as_float_tensor(exposures, device=zeta.device, dtype=zeta.dtype)
+    _validate_count_matrix(count_matrix)
     if not torch.isfinite(exposures).all() or torch.any(exposures <= 0):
         raise ValueError("exposures must be positive and finite")
     G = zeta.shape[0]
@@ -92,6 +103,16 @@ def count_fractions_from_zeta(
     raise ValueError(f"exposures must be 1D or 2D, got {exposures.ndim}D tensor.")
 
 
+def _validate_pi(pi: torch.Tensor, counts: torch.Tensor) -> None:
+    if pi.shape != counts.shape:
+        raise ValueError(f"pi shape must match counts shape {tuple(counts.shape)}, got {tuple(pi.shape)}")
+    if not torch.isfinite(pi).all() or torch.any(pi < 0):
+        raise ValueError("pi must be nonnegative and finite")
+    row_sums = pi.sum(dim=1)
+    if not torch.allclose(row_sums, torch.ones_like(row_sums), rtol=1e-4, atol=1e-5):
+        raise ValueError("pi rows must sum to 1")
+
+
 class DirichletMultinomialLikelihood(nn.Module):
     """Dirichlet-multinomial log-likelihood for count data.
 
@@ -113,6 +134,8 @@ class DirichletMultinomialLikelihood(nn.Module):
             counts = counts.float()
         pi = pi.to(device=counts.device, dtype=counts.dtype)
         n_total = n_total.to(device=counts.device, dtype=counts.dtype)
+        _validate_count_matrix(counts)
+        _validate_pi(pi, counts)
         observed_totals = counts.sum(dim=1)
         if not torch.allclose(observed_totals, n_total, rtol=1e-5, atol=1e-5):
             raise ValueError("n_total must equal counts.sum(dim=1) for Dirichlet-multinomial likelihood.")
@@ -158,6 +181,8 @@ class CountLikelihood(nn.Module):
             return self.dm_lik(count_matrix, pi_rep, n_totals)
         else:
             # Standard multinomial
+            count_matrix = count_matrix.to(device=pi_rep.device, dtype=pi_rep.dtype)
+            _validate_count_matrix(count_matrix)
             log_lik = (count_matrix * torch.log(pi_rep + 1e-30)).sum(-1)
             return -log_lik.sum()
 
@@ -176,7 +201,7 @@ class MultiTimeCountLikelihood(nn.Module):
         if use_dirichlet_multinomial:
             self.dm_lik = DirichletMultinomialLikelihood()
 
-    def forward(
+    def forward_with_logs(
         self,
         growth_steps: torch.Tensor,
         logw_steps: torch.Tensor,
@@ -185,9 +210,10 @@ class MultiTimeCountLikelihood(nn.Module):
         count_matrices: Dict[str, torch.Tensor],
         n_totals: Dict[str, torch.Tensor],
         checkpoint_indices: Dict[str, int],
-    ) -> torch.Tensor:
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         zeta_curve = integrated_fitness_curve(growth_steps, logw_steps, tau_steps)
         total = torch.tensor(0.0, dtype=growth_steps.dtype, device=growth_steps.device)
+        logs: Dict[str, torch.Tensor] = {}
 
         for time_label, count_matrix in count_matrices.items():
             if time_label not in checkpoint_indices:
@@ -200,8 +226,42 @@ class MultiTimeCountLikelihood(nn.Module):
             if self.use_dm:
                 loss_t = self.dm_lik(count_matrix, pi_rep, n_totals[time_label])
             else:
+                count_matrix = count_matrix.to(device=pi_rep.device, dtype=pi_rep.dtype)
+                _validate_count_matrix(count_matrix)
                 log_lik = (count_matrix * torch.log(pi_rep + 1e-30)).sum(-1)
                 loss_t = -log_lik.sum()
-            total = total + float(self.time_weights.get(time_label, 1.0)) * loss_t
+            weight = float(self.time_weights.get(time_label, 1.0))
+            total = total + weight * loss_t
+            logs[f"counts/{time_label}"] = loss_t.detach()
+            logs[f"counts/{time_label}/weight"] = torch.tensor(
+                weight, dtype=growth_steps.dtype, device=growth_steps.device
+            )
+            logs[f"counts/{time_label}/n_samples"] = torch.tensor(
+                count_matrix.shape[0], device=growth_steps.device
+            )
+            logs[f"counts/{time_label}/n_perturbations"] = torch.tensor(
+                count_matrix.shape[1], device=growth_steps.device
+            )
 
+        return total, logs
+
+    def forward(
+        self,
+        growth_steps: torch.Tensor,
+        logw_steps: torch.Tensor,
+        tau_steps: torch.Tensor,
+        exposures: torch.Tensor | Dict[str, torch.Tensor],
+        count_matrices: Dict[str, torch.Tensor],
+        n_totals: Dict[str, torch.Tensor],
+        checkpoint_indices: Dict[str, int],
+    ) -> torch.Tensor:
+        total, _ = self.forward_with_logs(
+            growth_steps=growth_steps,
+            logw_steps=logw_steps,
+            tau_steps=tau_steps,
+            exposures=exposures,
+            count_matrices=count_matrices,
+            n_totals=n_totals,
+            checkpoint_indices=checkpoint_indices,
+        )
         return total

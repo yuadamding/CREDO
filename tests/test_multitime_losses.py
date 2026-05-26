@@ -275,6 +275,13 @@ def test_count_fractions_reject_bad_exposures() -> None:
         )
 
 
+def test_count_fractions_reject_bad_count_matrix() -> None:
+    with pytest.raises(ValueError, match="count_matrix must be 2D"):
+        count_fractions_from_zeta(torch.zeros(2), torch.ones(2), torch.ones(2))
+    with pytest.raises(ValueError, match="count_matrix must be nonnegative and finite"):
+        count_fractions_from_zeta(torch.zeros(2), torch.ones(2), torch.tensor([[1.0, -1.0]]))
+
+
 def test_integrated_fitness_curve_uses_variable_dtau() -> None:
     growth_steps = torch.full((3, 1, 2), 2.0)
     logw_steps = torch.zeros(4, 1, 2)
@@ -315,6 +322,16 @@ def test_dirichlet_multinomial_validates_totals() -> None:
         )
 
 
+def test_dirichlet_multinomial_validates_pi_rows() -> None:
+    lik = DirichletMultinomialLikelihood()
+    with pytest.raises(ValueError, match="pi rows must sum to 1"):
+        lik(
+            counts=torch.tensor([[2.0, 1.0]]),
+            pi=torch.tensor([[0.4, 0.4]]),
+            n_total=torch.tensor([3.0]),
+        )
+
+
 def test_dirichlet_multinomial_accepts_integer_counts_and_totals() -> None:
     lik = DirichletMultinomialLikelihood()
     loss = lik(
@@ -341,3 +358,34 @@ def test_multitime_count_likelihood_raises_on_missing_checkpoint() -> None:
             n_totals={"6h": torch.tensor([2.0])},
             checkpoint_indices={"10h": 1},
         )
+
+
+def test_multitime_count_likelihood_returns_per_time_logs() -> None:
+    likelihood = MultiTimeCountLikelihood()
+    growth_steps = torch.zeros(2, 2, 3)
+    logw_steps = torch.zeros(3, 2, 3)
+    tau_steps = torch.tensor([0.0, 0.5, 1.0])
+
+    loss, logs = likelihood.forward_with_logs(
+        growth_steps=growth_steps,
+        logw_steps=logw_steps,
+        tau_steps=tau_steps,
+        exposures=torch.ones(2),
+        count_matrices={
+            "6h": torch.tensor([[1.0, 1.0]]),
+            "10h": torch.tensor([[2.0, 2.0]]),
+        },
+        n_totals={
+            "6h": torch.tensor([2.0]),
+            "10h": torch.tensor([4.0]),
+        },
+        checkpoint_indices={"6h": 1, "10h": 2},
+    )
+
+    assert torch.isfinite(loss)
+    assert set(logs) >= {
+        "counts/6h",
+        "counts/10h",
+        "counts/6h/n_samples",
+        "counts/10h/n_perturbations",
+    }

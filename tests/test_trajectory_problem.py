@@ -93,6 +93,33 @@ def test_mass_table_get_pooled_requires_rows() -> None:
         table.get_pooled("missing", "t0")
 
 
+def test_mass_table_rejects_mixed_pooled_and_sample_specific_rows() -> None:
+    with pytest.raises(ValueError, match="mixes pooled and sample-specific rows"):
+        MassTable(
+            pd.DataFrame(
+                [
+                    {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "pooled", "mass": 1.0},
+                    {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1", "mass": 1.0},
+                ]
+            )
+        )
+
+
+def test_mass_table_get_pooled_prefers_explicit_pooled_row() -> None:
+    table = MassTable(
+        pd.DataFrame(
+            [
+                {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "pooled", "mass": 3.0},
+                {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D1", "mass": 1.0},
+                {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D2", "mass": 2.0},
+            ]
+        )
+    )
+
+    assert table.get_pooled("ctrl", "t0") == 3.0
+    assert table.get_pooled("ctrl", "t1") == 3.0
+
+
 def test_perturbseq_data_validation_rejects_missing_mass_rows() -> None:
     cell_df = pd.DataFrame(
         [

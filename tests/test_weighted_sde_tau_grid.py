@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from credo.models.weighted_sde import WeightedParticleSimulator
@@ -99,3 +100,41 @@ def test_rollout_accepts_nonuniform_tau_grid() -> None:
     assert rollout.context_steps.shape[0] == len(tau_grid) - 1
     assert torch.allclose(rollout.terminal_z, torch.ones_like(rollout.terminal_z))
     assert torch.allclose(rollout.terminal_logw, torch.full_like(rollout.terminal_logw, 2.0))
+
+
+def test_rollout_accepts_explicit_noise_without_consuming_global_rng() -> None:
+    simulator = WeightedParticleSimulator(n_steps=3, store_history=False)
+    z0 = torch.zeros(1, 4, 2)
+    logw0 = torch.zeros(1, 4)
+    log_m0 = torch.zeros(1)
+    noise_steps = torch.zeros(3, 1, 4, 2)
+
+    torch.manual_seed(123)
+    rng_before = torch.random.get_rng_state()
+    rollout = simulator.rollout(
+        z0=z0,
+        logw0=logw0,
+        model=_ConstantDynamics(),
+        log_m0=log_m0,
+        noise_steps=noise_steps,
+    )
+    rng_after = torch.random.get_rng_state()
+
+    assert torch.equal(rng_before, rng_after)
+    assert torch.allclose(rollout.terminal_z, torch.ones_like(rollout.terminal_z))
+
+
+def test_rollout_rejects_bad_noise_shape() -> None:
+    simulator = WeightedParticleSimulator(n_steps=3, store_history=False)
+    z0 = torch.zeros(1, 4, 2)
+    logw0 = torch.zeros(1, 4)
+    log_m0 = torch.zeros(1)
+
+    with pytest.raises(ValueError, match="noise_steps must have shape"):
+        simulator.rollout(
+            z0=z0,
+            logw0=logw0,
+            model=_ConstantDynamics(),
+            log_m0=log_m0,
+            noise_steps=torch.zeros(2, 1, 4, 2),
+        )

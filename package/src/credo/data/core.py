@@ -187,6 +187,15 @@ class MassTable:
                 "Duplicate MassTable row for "
                 f"({row['perturbation_id']}, {row['time_label']}, {row['sample_id']})"
             )
+        for (pid, time_label), sub in self.df.groupby(["perturbation_id", "time_label"], observed=True):
+            sample_ids = sub["sample_id"].astype(str)
+            has_pooled = sample_ids.eq("pooled").any()
+            has_sample_specific = sample_ids.ne("pooled").any()
+            if has_pooled and has_sample_specific:
+                raise ValueError(
+                    "MassTable mixes pooled and sample-specific rows for "
+                    f"({pid}, {time_label}); this can double-count pooled mass"
+                )
 
     def get(self, perturbation_id: str, time_label: str, sample_id: str) -> float:
         row = self.df[
@@ -208,6 +217,9 @@ class MassTable:
         ]
         if len(row) == 0:
             raise KeyError(f"No mass rows for pooled ({perturbation_id}, {time_label})")
+        pooled = row[row["sample_id"].astype(str) == "pooled"]
+        if len(pooled) == 1:
+            return float(pooled["mass"].iloc[0])
         return float(row["mass"].sum())
 
 

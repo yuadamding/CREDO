@@ -5,6 +5,7 @@ Also exports helper to initialise particles from an EndpointProblem.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -13,6 +14,19 @@ import torch
 from ..data.core import EndpointProblem, FiniteMeasure, TrajectoryProblem
 from .full_model import FullDynamicsModel
 from .weighted_sde import WeightedParticleSimulator, ParticleRollout
+
+
+def _make_generator(seed: Optional[int], device: torch.device | str) -> Optional[torch.Generator]:
+    if seed is None:
+        return None
+    generator = torch.Generator(device=device)
+    generator.manual_seed(int(seed))
+    return generator
+
+
+def _stable_seed_offset(text: str, modulus: int = 1_000_000) -> int:
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return int(digest[:12], 16) % modulus
 
 
 def initialise_particles_from_measures(
@@ -31,8 +45,7 @@ def initialise_particles_from_measures(
     logw0: [G, N]  relative log-weights, normalised to total 1
     log_m0: [G]
     """
-    if seed is not None:
-        torch.manual_seed(seed)
+    generator = _make_generator(seed, torch.device(device))
 
     G = len(perturbation_ids)
     d = next(iter(measures.values())).latent_dim
@@ -44,7 +57,7 @@ def initialise_particles_from_measures(
         mu: FiniteMeasure = measures[pid]
         support = torch.tensor(mu.support, dtype=dtype, device=device)  # [n_atoms, d]
         probs = torch.tensor(mu.normalized_weights, dtype=dtype, device=device)
-        idx = torch.multinomial(probs, n_particles, replacement=True)
+        idx = torch.multinomial(probs, n_particles, replacement=True, generator=generator)
         z0[g] = support[idx]
         total_mass = mu.total_mass
         logw0[g] = torch.full((n_particles,), -np.log(n_particles), dtype=dtype, device=device)
@@ -68,8 +81,7 @@ def initialise_particles(
     helpers may use finite-measure weights, but legacy P4/P60 training keeps
     identical seeded starts.
     """
-    if seed is not None:
-        torch.manual_seed(seed)
+    generator = _make_generator(seed, torch.device(device))
 
     G = len(perturbation_ids)
     d = next(iter(endpoint.initial.values())).latent_dim
@@ -81,7 +93,7 @@ def initialise_particles(
         mu: FiniteMeasure = endpoint.initial[pid]
         support = torch.tensor(mu.support, dtype=dtype, device=device)  # [n_atoms, d]
         n_atoms = len(support)
-        idx = torch.randint(0, n_atoms, (n_particles,), device=device)
+        idx = torch.randint(0, n_atoms, (n_particles,), device=device, generator=generator)
         z0[g] = support[idx]
         total_mass = mu.total_mass
         logw0[g] = torch.full((n_particles,), -np.log(n_particles), dtype=dtype, device=device)
@@ -126,6 +138,8 @@ def rollout_with_clamped_context(
     tau_start: float = 0.0,
     tau_end: float = 1.0,
     tau_grid: Optional[torch.Tensor] = None,
+    generator: Optional[torch.Generator] = None,
+    noise_steps: Optional[torch.Tensor] = None,
 ) -> ParticleRollout:
     """Roll out dynamics while reusing a fixed context trajectory.
 
@@ -137,6 +151,8 @@ def rollout_with_clamped_context(
         raise ValueError("z0 and logw0 shapes are inconsistent")
     if z0.shape[0] != len(perturbation_ids):
         raise ValueError("perturbation_ids length must match z0.shape[0]")
+    if generator is not None and noise_steps is not None:
+        raise ValueError("Pass either generator or noise_steps, not both")
 
     device = z0.device
     dtype = z0.dtype
@@ -165,6 +181,19 @@ def rollout_with_clamped_context(
         raise ValueError(
             f"Clamped context has {context_steps.shape[0]} steps, but rollout requested {K} steps."
         )
+    expected_context_width = model.context_agg.context_dim
+    if context_steps.ndim != 2 or context_steps.shape[1] != expected_context_width:
+        raise ValueError(
+            "context_steps must have shape [K, context_dim] with "
+            f"context_dim={expected_context_width}; got {tuple(context_steps.shape)}"
+        )
+    if noise_steps is not None:
+        expected_noise_shape = (K,) + tuple(z0.shape)
+        noise_steps = noise_steps.to(device=device, dtype=dtype)
+        if tuple(noise_steps.shape) != expected_noise_shape:
+            raise ValueError(
+                f"noise_steps must have shape {expected_noise_shape}, got {tuple(noise_steps.shape)}"
+            )
 
     z = z0.clone()
     logw = logw0.clone()
@@ -201,7 +230,12 @@ def rollout_with_clamped_context(
         growth_list.append(coeffs.growth)
         used_context.append(context.detach())
 
-        noise = torch.randn_like(z)
+        if noise_steps is not None:
+            noise = noise_steps[k]
+        elif generator is not None:
+            noise = torch.randn(z.shape, dtype=dtype, device=device, generator=generator)
+        else:
+            noise = torch.randn_like(z)
         z = z + coeffs.drift * dtau + coeffs.sigma_diag * torch.sqrt(dtau) * noise
         logw = logw + coeffs.growth * dtau
         z_list.append(z)
@@ -314,15 +348,19 @@ class CounterfactualEngine:
             # --- Perturbation rollout ---
             z0p, lw0p, lm0p = initialise_particles(
                 endpoint, [pid], self.n_particles, self.device, seed=seed)
-            branch_seed = int(seed) + 10_000
+            branch_seed = int(seed) + 10_000 + _stable_seed_offset(pid)
+            noise_steps = None
             if common_noise:
-                torch.manual_seed(branch_seed)
+                noise_steps = self.simulator.sample_noise_like(
+                    z0p, self.simulator.n_steps, seed=branch_seed
+                )
             rollout_p = self.simulator.rollout(
                 z0=z0p,
                 logw0=lw0p,
                 model=self.model,
                 log_m0=lm0p,
                 perturbation_ids=[pid],
+                noise_steps=noise_steps,
             )
 
             # --- Control rollout with the same perturbation-specific initial measure ---
@@ -330,8 +368,6 @@ class CounterfactualEngine:
 
             # Reference-consistent soft-ref semantics keep a_ref and zero only
             # the perturbation residual; full zeroing is left as a diagnostic.
-            if common_noise:
-                torch.manual_seed(branch_seed)
             with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
                 rollout_c = self.simulator.rollout(
                     z0=z0c,
@@ -339,6 +375,7 @@ class CounterfactualEngine:
                     model=self.model,
                     log_m0=lm0c,
                     perturbation_ids=[pid],
+                    noise_steps=noise_steps,
                 )
 
             rollout_clamped = None
@@ -349,8 +386,6 @@ class CounterfactualEngine:
                 tau_grid = rollout_c.tau_steps.detach()
                 tau_start = float(tau_grid[0].item())
                 tau_end = float(tau_grid[-1].item())
-                if common_noise:
-                    torch.manual_seed(branch_seed)
                 rollout_clamped = rollout_with_clamped_context(
                     model=self.model,
                     z0=z0p,
@@ -361,9 +396,8 @@ class CounterfactualEngine:
                     tau_start=tau_start,
                     tau_end=tau_end,
                     tau_grid=tau_grid,
+                    noise_steps=noise_steps,
                 )
-                if common_noise:
-                    torch.manual_seed(branch_seed)
                 with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
                     rollout_control_clamped = rollout_with_clamped_context(
                         model=self.model,
@@ -375,6 +409,7 @@ class CounterfactualEngine:
                         tau_start=tau_start,
                         tau_end=tau_end,
                         tau_grid=tau_grid,
+                        noise_steps=noise_steps,
                     )
 
             result = CounterfactualResult(
