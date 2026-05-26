@@ -15,10 +15,23 @@ from .simulator import (
 )
 from .weighted_sde import ParticleRollout, WeightedParticleSimulator
 
+
+def __getattr__(name: str):
+    if name in {"TrajectoryCounterfactualEngine", "TrajectoryCounterfactualResult"}:
+        from .trajectory_counterfactual import TrajectoryCounterfactualEngine, TrajectoryCounterfactualResult
+
+        return {
+            "TrajectoryCounterfactualEngine": TrajectoryCounterfactualEngine,
+            "TrajectoryCounterfactualResult": TrajectoryCounterfactualResult,
+        }[name]
+    raise AttributeError(name)
+
 __all__ = [
     "CounterfactualEngine",
     "CounterfactualResult",
     "ParticleRollout",
+    "TrajectoryCounterfactualEngine",
+    "TrajectoryCounterfactualResult",
     "WeightedParticleSimulator",
     "initialise_particles",
     "initialise_particles_from_measures",

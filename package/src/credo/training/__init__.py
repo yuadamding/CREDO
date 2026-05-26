@@ -2,10 +2,24 @@
 from __future__ import annotations
 
 from .trainer import EMA, Trainer, TrainingHistory, WarmupCosineScheduler
+from .trajectory_batch import (
+    TrajectoryBatch,
+    embedding_ids_for_measure_keys,
+    initialise_particles_from_trajectory,
+)
+from .trajectory_eval import TrajectoryEvaluation, rollout_metrics_by_key_time
+from .trajectory_trainer import TrajectoryTrainer, TrajectoryTrainingHistory
 
 __all__ = [
     "EMA",
     "Trainer",
     "TrainingHistory",
+    "TrajectoryBatch",
+    "TrajectoryEvaluation",
+    "TrajectoryTrainer",
+    "TrajectoryTrainingHistory",
     "WarmupCosineScheduler",
+    "embedding_ids_for_measure_keys",
+    "initialise_particles_from_trajectory",
+    "rollout_metrics_by_key_time",
 ]

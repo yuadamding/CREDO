@@ -7,11 +7,13 @@ import torch
 
 from credo.data.core import (
     CellStateTable,
+    ExposureTable,
     FiniteMeasure,
     MassTable,
     POOLED_SAMPLE_ID,
     PerturbSeqDynamicsData,
     PerturbationCatalog,
+    ReplicateCountTable,
     SparseTrajectoryProblem,
     TimeAxis,
     TrajectoryProblem,
@@ -158,6 +160,54 @@ def test_mass_table_rejects_string_equivalent_mixed_mass_modes() -> None:
         )
 
 
+def test_exposure_and_count_tables_string_canonicalize_keys() -> None:
+    exposure = ExposureTable(
+        pd.DataFrame(
+            [
+                {"perturbation_id": 1, "library_batch": 7, "exposure": 0.25},
+            ]
+        )
+    )
+    counts = ReplicateCountTable(
+        pd.DataFrame(
+            [
+                {
+                    "sample_id": 3,
+                    "time_label": 0,
+                    "library_batch": 7,
+                    "perturbation_id": 1,
+                    "count": 5,
+                    "n_total_sample": 5,
+                }
+            ]
+        )
+    )
+
+    assert exposure.get("1", "7") == 0.25
+    matrix, sample_ids, totals = counts.get_count_matrix("0", ["1"])
+    assert sample_ids == ["3"]
+    assert matrix.tolist() == [[5.0]]
+    assert totals.tolist() == [5.0]
+
+
+def test_replicate_count_table_rejects_fractional_counts() -> None:
+    with pytest.raises(ValueError, match="integer-like"):
+        ReplicateCountTable(
+            pd.DataFrame(
+                [
+                    {
+                        "sample_id": "D1",
+                        "time_label": "t0",
+                        "library_batch": "b1",
+                        "perturbation_id": "ctrl",
+                        "count": 1.5,
+                        "n_total_sample": 2,
+                    }
+                ]
+            )
+        )
+
+
 def test_mass_table_rejects_multiple_pooled_sentinels() -> None:
     with pytest.raises(ValueError, match="multiple pooled sentinel"):
         MassTable(
@@ -168,6 +218,38 @@ def test_mass_table_rejects_multiple_pooled_sentinels() -> None:
                 ]
             )
         )
+
+
+def test_pooled_measure_uses_sample_specific_mass_weights() -> None:
+    cell_df = pd.DataFrame(
+        [
+            {"cell_id": "d1_a", "perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1"},
+            {"cell_id": "d1_b", "perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1"},
+            {"cell_id": "d2_a", "perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D2"},
+            {"cell_id": "d1_c", "perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D1"},
+            {"cell_id": "d2_b", "perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D2"},
+        ]
+    )
+    latent = np.arange(len(cell_df), dtype=np.float32).reshape(-1, 1)
+    mass_df = pd.DataFrame(
+        [
+            {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D1", "mass": 10.0},
+            {"perturbation_id": "ctrl", "time_label": "t0", "sample_id": "D2", "mass": 1.0},
+            {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D1", "mass": 2.0},
+            {"perturbation_id": "ctrl", "time_label": "t1", "sample_id": "D2", "mass": 3.0},
+        ]
+    )
+    data = PerturbSeqDynamicsData(
+        time_axis=TimeAxis(labels=["t0", "t1"], physical_times=[0.0, 1.0]),
+        catalog=PerturbationCatalog(["ctrl"], ["ctrl"]),
+        cell_state=CellStateTable(cell_df, latent),
+        mass_table=MassTable(mass_df),
+    )
+
+    measure = data.build_measure("ctrl", "t0")
+
+    assert np.allclose(measure.weights, np.asarray([5.0, 5.0, 1.0]))
+    assert measure.total_mass == 11.0
 
 
 def test_perturbseq_data_validation_rejects_missing_mass_rows() -> None:

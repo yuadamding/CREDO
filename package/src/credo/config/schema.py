@@ -156,6 +156,40 @@ class TrainingConfig(BaseModel):
         return self
 
 
+class TrajectoryTrainingConfig(BaseModel):
+    source_label: str = "90m"
+    target_labels: list[str] = Field(default_factory=lambda: ["6h", "10h"])
+    trajectory_mode: Literal["full_start", "full_plus_teacher", "pairwise"] = "full_start"
+    steps_per_interval: int = 12
+    endpoint_time_weights: dict[str, float] = Field(default_factory=dict)
+    normalize_time_weights: bool = True
+    teacher_forced_weight: float = 0.0
+    max_active_measure_keys: int = 0
+    context_batch_mode: Literal["all_keys", "batch_only"] = "all_keys"
+    sparse_missing: Literal["mask", "error"] = "mask"
+    key_mode: Literal["pooled", "sample_aware"] = "sample_aware"
+    validation_source: Literal["train", "heldout", "all"] = "heldout"
+    save_rollouts: bool = False
+    save_particles_every: int = 0
+
+    @model_validator(mode="after")
+    def _validate_trajectory_training(self) -> "TrajectoryTrainingConfig":
+        if not self.source_label:
+            raise ValueError("source_label must not be empty.")
+        if not self.target_labels:
+            raise ValueError("target_labels must not be empty.")
+        if self.steps_per_interval < 1:
+            raise ValueError("steps_per_interval must be >= 1.")
+        if self.teacher_forced_weight < 0:
+            raise ValueError("teacher_forced_weight must be >= 0.")
+        if self.trajectory_mode != "full_start" and self.teacher_forced_weight == 0:
+            # Keep this permissive for CLI experimentation but explicit in config.
+            pass
+        if self.max_active_measure_keys < 0:
+            raise ValueError("max_active_measure_keys must be >= 0.")
+        return self
+
+
 class EvalConfig(BaseModel):
     n_seeds: int = 3
     n_counterfactual_particles: int = 512
@@ -176,6 +210,7 @@ class RunConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     simulation: SimulationConfig = Field(default_factory=SimulationConfig)
     training: TrainingConfig = Field(default_factory=TrainingConfig)
+    trajectory_training: TrajectoryTrainingConfig = Field(default_factory=TrajectoryTrainingConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
 
     @model_validator(mode="after")

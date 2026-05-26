@@ -16,6 +16,7 @@ from .core import (
     TimeAxis,
     TrajectoryProblem,
 )
+from .trajectory_view import TrajectoryLike, TrajectoryView, embedding_id_for_measure_key
 from .hnscc import (
     DEFAULT_RANDOM_STRATIFY_COLS,
     DEFAULT_STATE_KEY,
@@ -61,6 +62,8 @@ __all__ = [
     "SparseTrajectoryProblem",
     "TimeAxis",
     "TrajectoryProblem",
+    "TrajectoryLike",
+    "TrajectoryView",
     "VAELatentResult",
     "DEFAULT_RANDOM_STRATIFY_COLS",
     "DEFAULT_STATE_KEY",
@@ -84,4 +87,5 @@ __all__ = [
     "supported_intersection",
     "time_labels",
     "validate_wta_split",
+    "embedding_id_for_measure_key",
 ]

@@ -270,11 +270,24 @@ class ExposureTable:
         missing = self.REQUIRED_COLS - set(self.df.columns)
         if missing:
             raise KeyError(f"ExposureTable missing columns: {missing}")
+        self.df = self.df.copy()
+        self.df["perturbation_id"] = self.df["perturbation_id"].astype(str)
+        self.df["library_batch"] = self.df["library_batch"].astype(str)
+        exposure = self.df["exposure"].astype(float)
+        if not np.isfinite(exposure.to_numpy()).all() or np.any(exposure.to_numpy() <= 0):
+            raise ValueError("ExposureTable exposures must be positive and finite")
+        duplicated = self.df.duplicated(["perturbation_id", "library_batch"])
+        if duplicated.any():
+            row = self.df.loc[duplicated].iloc[0]
+            raise ValueError(
+                "Duplicate ExposureTable row for "
+                f"({row['perturbation_id']}, {row['library_batch']})"
+            )
 
     def get(self, perturbation_id: str, library_batch: str) -> float:
         row = self.df[
-            (self.df["perturbation_id"] == perturbation_id) &
-            (self.df["library_batch"] == library_batch)
+            self.df["perturbation_id"].eq(str(perturbation_id)) &
+            self.df["library_batch"].eq(str(library_batch))
         ]
         if len(row) != 1:
             raise KeyError(
@@ -304,18 +317,40 @@ class ReplicateCountTable:
         missing = self.REQUIRED_COLS - set(self.df.columns)
         if missing:
             raise KeyError(f"ReplicateCountTable missing columns: {missing}")
+        self.df = self.df.copy()
+        for col in ["sample_id", "time_label", "library_batch", "perturbation_id"]:
+            self.df[col] = self.df[col].astype(str)
+        counts = self.df["count"].astype(float)
+        totals = self.df["n_total_sample"].astype(float)
+        if not np.isfinite(counts.to_numpy()).all() or np.any(counts.to_numpy() < 0):
+            raise ValueError("ReplicateCountTable counts must be nonnegative and finite")
+        if not np.allclose(counts.to_numpy(), np.round(counts.to_numpy()), rtol=0.0, atol=1e-6):
+            raise ValueError("ReplicateCountTable counts must be integer-like")
+        if not np.isfinite(totals.to_numpy()).all() or np.any(totals.to_numpy() <= 0):
+            raise ValueError("ReplicateCountTable n_total_sample must be positive and finite")
+        if not np.allclose(totals.to_numpy(), np.round(totals.to_numpy()), rtol=0.0, atol=1e-6):
+            raise ValueError("ReplicateCountTable n_total_sample must be integer-like")
+        duplicated = self.df.duplicated(["sample_id", "time_label", "library_batch", "perturbation_id"])
+        if duplicated.any():
+            row = self.df.loc[duplicated].iloc[0]
+            raise ValueError(
+                "Duplicate ReplicateCountTable row for "
+                f"({row['sample_id']}, {row['time_label']}, "
+                f"{row['library_batch']}, {row['perturbation_id']})"
+            )
 
     def get_count_matrix(
         self, time_label: str, perturbation_ids: List[str]
     ) -> Tuple[np.ndarray, List[str], np.ndarray]:
         """Return count matrix [n_samples, n_perturbations], sample_ids, n_totals."""
-        sub = self.df[self.df["time_label"] == time_label]
+        perturbation_ids = [str(pid) for pid in perturbation_ids]
+        sub = self.df[self.df["time_label"].eq(str(time_label))]
         sample_ids = sorted(sub["sample_id"].unique().tolist())
         counts = np.zeros((len(sample_ids), len(perturbation_ids)))
         n_totals = np.zeros(len(sample_ids))
         for i, sid in enumerate(sample_ids):
             for j, pid in enumerate(perturbation_ids):
-                row = sub[(sub["sample_id"] == sid) & (sub["perturbation_id"] == pid)]
+                row = sub[sub["sample_id"].eq(str(sid)) & sub["perturbation_id"].eq(str(pid))]
                 if len(row) > 0:
                     counts[i, j] = float(row["count"].iloc[0])
                     n_totals[i] = float(row["n_total_sample"].iloc[0])
@@ -806,7 +841,31 @@ class PerturbSeqDynamicsData:
             raise ValueError(f"No cells for ({perturbation_id}, {time_label}, {sample_id})")
 
         if is_pooled_sample_id(sample_id):
-            total_mass = self.mass_table.get_pooled(perturbation_id, time_label)
+            mass_rows = self.mass_table.df[
+                self.mass_table.df["perturbation_id"].astype(str).eq(str(perturbation_id)) &
+                self.mass_table.df["time_label"].astype(str).eq(str(time_label))
+            ].copy()
+            if len(mass_rows) == 0:
+                raise KeyError(f"No mass rows for pooled ({perturbation_id}, {time_label})")
+            has_explicit_pooled = mass_rows["sample_id"].astype(str).map(is_pooled_sample_id).any()
+            support = cells.latent.copy()
+            if has_explicit_pooled:
+                total_mass = self.mass_table.get_pooled(perturbation_id, time_label)
+                weights = np.full(n, total_mass / n)
+                return FiniteMeasure(support=support, weights=weights, total_mass=total_mass)
+
+            # If pooled geometry is built from sample-specific mass rows, keep
+            # each sample's contribution proportional to its finite-measure
+            # mass instead of raw captured-cell recovery.
+            sample_ids = cells.df["sample_id"].astype(str).to_numpy()
+            weights = np.zeros(n, dtype=float)
+            total_mass = 0.0
+            for sid in sorted(set(sample_ids)):
+                mask = sample_ids == sid
+                mass_s = self.mass_table.get(perturbation_id, time_label, sid)
+                weights[mask] = mass_s / float(mask.sum())
+                total_mass += mass_s
+            return FiniteMeasure(support=support, weights=weights, total_mass=total_mass)
         else:
             try:
                 total_mass = self.mass_table.get(perturbation_id, time_label, sample_id)

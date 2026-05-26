@@ -28,6 +28,17 @@ from .particles import (
     rollout_with_clamped_context,
 )
 
+
+def __getattr__(name: str):
+    if name in {"TrajectoryCounterfactualEngine", "TrajectoryCounterfactualResult"}:
+        from .trajectory_counterfactual import TrajectoryCounterfactualEngine, TrajectoryCounterfactualResult
+
+        return {
+            "TrajectoryCounterfactualEngine": TrajectoryCounterfactualEngine,
+            "TrajectoryCounterfactualResult": TrajectoryCounterfactualResult,
+        }[name]
+    raise AttributeError(name)
+
 __all__ = [
     "CoefficientNetworks",
     "Coefficients",
@@ -45,6 +56,8 @@ __all__ = [
     "PerturbationEmbedding",
     "ProgramEncoder",
     "TimeEmbedding",
+    "TrajectoryCounterfactualEngine",
+    "TrajectoryCounterfactualResult",
     "VAEArtifactBundle",
     "WeightedParticleSimulator",
     "encode_expression_vae",

@@ -80,6 +80,7 @@ def test_counterfactual_engine_clamp_context_returns_same_start_branches() -> No
     assert torch.allclose(result.rollout_control.z_steps, result.rollout_control_clamped.z_steps)
     assert torch.allclose(result.rollout_control.logw_steps, result.rollout_control_clamped.logw_steps)
     assert torch.equal(result.rollout_control.tau_steps, result.rollout_control_clamped.tau_steps)
+    assert isinstance(result.terminal_log_mass_diff(), float)
 
 
 def test_counterfactual_common_noise_does_not_mutate_global_rng() -> None:

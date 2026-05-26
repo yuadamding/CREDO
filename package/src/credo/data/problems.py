@@ -19,6 +19,7 @@ from .core import (
     TimeAxis,
     TrajectoryProblem,
 )
+from .trajectory_view import TrajectoryLike, TrajectoryView, embedding_id_for_measure_key
 
 __all__ = [
     "CellStateTable",
@@ -37,4 +38,7 @@ __all__ = [
     "SparseTrajectoryProblem",
     "TimeAxis",
     "TrajectoryProblem",
+    "TrajectoryLike",
+    "TrajectoryView",
+    "embedding_id_for_measure_key",
 ]

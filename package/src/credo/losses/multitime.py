@@ -150,10 +150,23 @@ class MultiTimeEndpointLoss(nn.Module):
         checkpoint_indices: Dict[str, int],
         target_support_by_time: Dict[str, Dict[MeasureKey, torch.Tensor]],
         target_logw_by_time: Dict[str, Dict[MeasureKey, torch.Tensor]],
-        perturbation_ids: list[MeasureKey],
+        perturbation_ids: list[MeasureKey] | None = None,
+        *,
+        prediction_keys: list[MeasureKey] | None = None,
+        embedding_ids: list[str] | None = None,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         if rollout.log_m0 is None:
             raise ValueError("MultiTimeEndpointLoss requires rollout.log_m0 for absolute masses")
+        keys = list(prediction_keys if prediction_keys is not None else perturbation_ids or [])
+        if not keys:
+            raise ValueError("MultiTimeEndpointLoss requires prediction_keys or perturbation_ids")
+        if embedding_ids is not None and len(embedding_ids) != len(keys):
+            raise ValueError("embedding_ids length must match prediction key count")
+        if rollout.z_steps.shape[1] != len(keys):
+            raise ValueError(
+                "rollout group dimension must match prediction key count: "
+                f"{rollout.z_steps.shape[1]} != {len(keys)}"
+            )
 
         total = torch.tensor(0.0, device=rollout.z_steps.device, dtype=rollout.z_steps.dtype)
         logs: Dict[str, torch.Tensor] = {}
@@ -167,14 +180,19 @@ class MultiTimeEndpointLoss(nn.Module):
 
             target_support = target_support_by_time[time_label]
             target_logw = target_logw_by_time[time_label]
-            active_ids = [pid for pid in perturbation_ids if pid in target_support]
+            active_ids = [pid for pid in keys if pid in target_support]
             n_active = len(active_ids)
-            n_missing = len(perturbation_ids) - n_active
+            n_missing = len(keys) - n_active
             logs[f"endpoint/{time_label}/n_active_keys"] = torch.tensor(
                 n_active, device=rollout.z_steps.device
             )
             logs[f"endpoint/{time_label}/n_missing_keys"] = torch.tensor(
                 n_missing, device=rollout.z_steps.device
+            )
+            logs[f"endpoint/{time_label}/time_weight"] = torch.tensor(
+                float(self.time_weights.get(time_label, 1.0)),
+                device=rollout.z_steps.device,
+                dtype=rollout.z_steps.dtype,
             )
             if n_active == 0:
                 if self.fail_on_empty:
@@ -188,7 +206,7 @@ class MultiTimeEndpointLoss(nn.Module):
                 pred_logw_abs=pred_logw_abs,
                 target_support=target_support,
                 target_logw=target_logw,
-                perturbation_ids=perturbation_ids,
+                perturbation_ids=keys,
             )
             loss_scaled = loss_t / float(n_active) if self.reduction == "mean" else loss_t
             weight = float(self.time_weights.get(time_label, 1.0))

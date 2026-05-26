@@ -8,6 +8,7 @@ from .schema import (
     ModelConfig,
     RunConfig,
     SimulationConfig,
+    TrajectoryTrainingConfig,
     TrainingConfig,
     VAEConfig,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "ModelConfig",
     "RunConfig",
     "SimulationConfig",
+    "TrajectoryTrainingConfig",
     "TrainingConfig",
     "VAEConfig",
 ]

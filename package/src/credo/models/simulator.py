@@ -262,6 +262,16 @@ class CounterfactualResult:
     rollout_clamped: Optional[ParticleRollout] = None  # factual dynamics with context clamped to control
     rollout_control_clamped: Optional[ParticleRollout] = None
 
+    def terminal_log_mass_diff(self) -> float:
+        """Terminal factual-reference log-mass contrast."""
+        logw_p = self.rollout_perturb.terminal_logw.squeeze(0)
+        logw_c = self.rollout_control.terminal_logw.squeeze(0)
+        if self.rollout_perturb.log_m0 is None or self.rollout_control.log_m0 is None:
+            raise ValueError("Counterfactual mass comparison requires rollout.log_m0.")
+        log_mass_p = self.rollout_perturb.log_m0.squeeze(0) + torch.logsumexp(logw_p, 0)
+        log_mass_c = self.rollout_control.log_m0.squeeze(0) + torch.logsumexp(logw_c, 0)
+        return float((log_mass_p - log_mass_c).item())
+
     def terminal_mass_diff(self) -> float:
         logw_p = self.rollout_perturb.terminal_logw.squeeze(0)
         logw_c = self.rollout_control.terminal_logw.squeeze(0)

@@ -3,11 +3,33 @@
 ## 2.0.5
 
 - Marked the package release as `credo==2.0.5`.
+- Added the first production trajectory training stack: `TrajectoryView`,
+  sample-aware trajectory particle initialization, `TrajectoryTrainer`,
+  per-key/time trajectory evaluation tables, and generic/LPS trajectory
+  runners.
+- Added a reproducible LPS 90m/6h/10h trajectory input builder and generated
+  `../inputs/LPS/credo_lps_90m_6h_10h_celltype.h5ad` from the local private
+  LPS AnnData.
+- Added same-start, same-noise trajectory counterfactuals with time-indexed
+  checkpoint metrics.
+- Extended multi-time endpoint loss plumbing to separate prediction
+  `measure_key`s from perturbation `embedding_id`s while preserving the
+  legacy positional endpoint-loss API.
+- Added VAE latent support to the generic trajectory runner for count-only
+  trajectory inputs.
+- Canonicalized exposure/count table keys and made pooled finite-measure
+  geometry sample-mass-weighted when sample-specific masses are present.
 - Canonicalized `MassTable` perturbation, time, and sample keys as strings
   during duplicate detection, pooled/sample mode checks, and lookup,
   preventing validation/measure-build mismatches for numeric or categorical
   metadata.
-- Added regression coverage for string-equivalent mass keys.
+- Added regression coverage for sparse donor-aware trajectory training, LPS
+  runner smoke tests, trajectory counterfactuals, and string-equivalent mass
+  keys.
+- Added a production-layer randomized stress harness covering sparse
+  donor-aware trajectory views, measure-key/embedding-id separation,
+  checkpoint endpoint diagnostics, trajectory counterfactuals, and one-epoch
+  trainer smoke cases.
 
 ## 2.0.4
 
@@ -45,6 +67,6 @@
 - Fixed non-uniform time integration for count fitness and made package-level
   clamped-context counterfactuals operational.
 
-This release provides the compact CREDO package and multi-time building blocks.
-A dedicated production `TrajectoryTrainer` and LPS three-time runner remain a
-separate integration step.
+In 2.0.2, this provided the compact CREDO package and multi-time building
+blocks. The dedicated production `TrajectoryTrainer` and LPS three-time runner
+were added later in 2.0.5.
