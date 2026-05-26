@@ -6,7 +6,7 @@ from typing import Dict, Iterable, Sequence, Tuple
 import torch
 import torch.nn as nn
 
-from ..data.core import TrajectoryProblem
+from ..data.core import MeasureKey, SparseTrajectoryProblem, TrajectoryProblem
 from ..models.weighted_sde import ParticleRollout
 from .uot import UOTLoss
 
@@ -76,36 +76,51 @@ def checkpoint_indices_for_trajectory(
 
 
 def build_target_tensors_by_time(
-    trajectory: TrajectoryProblem,
+    trajectory: TrajectoryProblem | SparseTrajectoryProblem,
     *,
     time_labels: Iterable[str] | None = None,
     perturbation_ids: Sequence[str] | None = None,
+    measure_keys: Sequence[MeasureKey] | None = None,
     device: str | torch.device = "cpu",
     dtype: torch.dtype = torch.float32,
-) -> Tuple[Dict[str, Dict[str, torch.Tensor]], Dict[str, Dict[str, torch.Tensor]]]:
-    """Convert pooled trajectory measures into UOT target dictionaries."""
+) -> Tuple[Dict[str, Dict[MeasureKey, torch.Tensor]], Dict[str, Dict[MeasureKey, torch.Tensor]]]:
+    """Convert trajectory measures into UOT target dictionaries.
+
+    Pooled trajectories use perturbation-id keys.  Sample-aware trajectories use
+    ``(sample_id, perturbation_id)`` keys and should pass the same key ordering
+    to ``MultiTimeEndpointLoss``.
+    """
     labels = list(trajectory.time_labels if time_labels is None else time_labels)
     if not labels:
         raise ValueError("time_labels must contain at least one label")
     missing = [label for label in labels if label not in trajectory.measures]
     if missing:
         raise KeyError(f"Unknown trajectory time labels: {missing}")
-    if not all(isinstance(key, str) for label in labels for key in trajectory.measures[label]):
-        raise ValueError("build_target_tensors_by_time expects pooled perturbation-id trajectory keys")
-    pids = list(perturbation_ids or trajectory.perturbation_ids)
+    if measure_keys is not None and perturbation_ids is not None:
+        raise ValueError("Pass either measure_keys or perturbation_ids, not both.")
+    if measure_keys is not None:
+        keys = list(measure_keys)
+    elif perturbation_ids is not None:
+        requested = {str(pid) for pid in perturbation_ids}
+        if all(isinstance(key, str) for key in trajectory.keys):
+            keys = [str(pid) for pid in perturbation_ids]
+        else:
+            keys = [key for key in trajectory.keys if isinstance(key, tuple) and key[1] in requested]
+    else:
+        keys = list(trajectory.keys)
 
-    target_support: Dict[str, Dict[str, torch.Tensor]] = {}
-    target_logw: Dict[str, Dict[str, torch.Tensor]] = {}
+    target_support: Dict[str, Dict[MeasureKey, torch.Tensor]] = {}
+    target_logw: Dict[str, Dict[MeasureKey, torch.Tensor]] = {}
     for label in labels:
         target_support[label] = {}
         target_logw[label] = {}
-        for pid in pids:
-            if pid not in trajectory.measures[label]:
+        for key in keys:
+            if key not in trajectory.measures[label]:
                 continue
-            mu = trajectory.measures[label][pid]
+            mu = trajectory.measures[label][key]
             sup, weights = mu.to_torch(device=str(device), dtype=dtype)
-            target_support[label][pid] = sup
-            target_logw[label][pid] = torch.log(weights + 1e-30)
+            target_support[label][key] = sup
+            target_logw[label][key] = torch.log(weights + 1e-30)
     return target_support, target_logw
 
 
@@ -125,9 +140,9 @@ class MultiTimeEndpointLoss(nn.Module):
         self,
         rollout: ParticleRollout,
         checkpoint_indices: Dict[str, int],
-        target_support_by_time: Dict[str, Dict[str, torch.Tensor]],
-        target_logw_by_time: Dict[str, Dict[str, torch.Tensor]],
-        perturbation_ids: list[str],
+        target_support_by_time: Dict[str, Dict[MeasureKey, torch.Tensor]],
+        target_logw_by_time: Dict[str, Dict[MeasureKey, torch.Tensor]],
+        perturbation_ids: list[MeasureKey],
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
         if rollout.log_m0 is None:
             raise ValueError("MultiTimeEndpointLoss requires rollout.log_m0 for absolute masses")

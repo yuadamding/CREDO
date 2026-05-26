@@ -9,7 +9,7 @@ Likelihood: Dirichlet-multinomial or overdispersed multinomial.
 
 The integrated fitness zeta_g is computed from the growth trajectory:
     zeta_g(tau) = integral_0^tau r_bar_g(s) ds
-               ≈ (1/K) sum_k r_bar_g(tau_k)  * delta_tau
+               ≈ sum_k r_bar_g(tau_k) * delta_tau_k
 where r_bar_g = E_{p_g}[r_g] = sum_i w_norm_i r_i.
 """
 from __future__ import annotations
@@ -30,20 +30,7 @@ def integrated_fitness(
 
     Returns [G] tensor.
     """
-    K = growth_steps.shape[0]
-    dtau = tau_steps[1] - tau_steps[0]  # assume uniform
-
-    # Normalised weights at each step
-    logw_k = logw_steps[:K]  # [K, G, N]
-    logw_norm = logw_k - torch.logsumexp(logw_k, dim=-1, keepdim=True)
-    w_norm = logw_norm.exp()  # [K, G, N]
-
-    # Average growth: [K, G]
-    r_bar = (w_norm * growth_steps).sum(-1)
-
-    # Integrate
-    zeta = (r_bar * dtau).sum(0)  # [G]
-    return zeta
+    return integrated_fitness_curve(growth_steps, logw_steps, tau_steps)[-1]
 
 
 def integrated_fitness_curve(
@@ -54,8 +41,7 @@ def integrated_fitness_curve(
     """Compute cumulative integrated average fitness at every checkpoint.
 
     Returns ``zeta[k, g] = integral from tau_steps[0] to tau_steps[k]`` with
-    shape ``[K+1, G]``.  Unlike the legacy final-only helper, this supports
-    non-uniform time grids.
+    shape ``[K+1, G]`` and supports non-uniform time grids.
     """
     K = growth_steps.shape[0]
     if logw_steps.shape[0] != K + 1 or tau_steps.shape[0] != K + 1:
@@ -117,13 +103,16 @@ class DirichletMultinomialLikelihood(nn.Module):
         n_total: torch.Tensor,    # [S]     total counts per replicate
     ) -> torch.Tensor:
         """Return negative log-likelihood (to minimise)."""
+        observed_totals = counts.sum(dim=1)
+        if not torch.allclose(observed_totals, n_total.to(dtype=counts.dtype), rtol=1e-5, atol=1e-5):
+            raise ValueError("n_total must equal counts.sum(dim=1) for Dirichlet-multinomial likelihood.")
         phi = self.log_phi.exp()
         alpha = phi * pi + 1e-8   # [S, G]  concentration parameters
 
-        # lgamma terms
-        ll = (torch.lgamma(phi.unsqueeze(0).unsqueeze(0))
-              - torch.lgamma(phi.unsqueeze(0).unsqueeze(0) + n_total.unsqueeze(1)))
-        ll = ll + (torch.lgamma(alpha + counts) - torch.lgamma(alpha)).sum(-1, keepdim=True)
+        count_constant = torch.lgamma(n_total + 1.0) - torch.lgamma(counts + 1.0).sum(-1)
+        concentration_terms = torch.lgamma(phi) - torch.lgamma(phi + n_total)
+        category_terms = (torch.lgamma(alpha + counts) - torch.lgamma(alpha)).sum(-1)
+        ll = count_constant + concentration_terms + category_terms
 
         return -ll.sum()
 

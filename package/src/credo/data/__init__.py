@@ -11,6 +11,7 @@ from .core import (
     ProgramScoreTable,
     ReplicateCountTable,
     SimulationTruth,
+    SparseTrajectoryProblem,
     TimeAxis,
     TrajectoryProblem,
 )
@@ -55,6 +56,7 @@ __all__ = [
     "ProgramScoreTable",
     "ReplicateCountTable",
     "SimulationTruth",
+    "SparseTrajectoryProblem",
     "TimeAxis",
     "TrajectoryProblem",
     "VAELatentResult",

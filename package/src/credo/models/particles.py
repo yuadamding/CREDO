@@ -11,6 +11,7 @@ from .simulator import (
     initialise_particles,
     initialise_particles_from_measures,
     initialise_particles_from_trajectory,
+    rollout_with_clamped_context,
 )
 from .weighted_sde import ParticleRollout, WeightedParticleSimulator
 
@@ -22,4 +23,5 @@ __all__ = [
     "initialise_particles",
     "initialise_particles_from_measures",
     "initialise_particles_from_trajectory",
+    "rollout_with_clamped_context",
 ]

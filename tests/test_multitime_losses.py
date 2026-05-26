@@ -13,7 +13,12 @@ from credo.data.core import (
     PerturbationCatalog,
     TimeAxis,
 )
-from credo.losses.counts import count_fractions_from_zeta, integrated_fitness, integrated_fitness_curve
+from credo.losses.counts import (
+    DirichletMultinomialLikelihood,
+    count_fractions_from_zeta,
+    integrated_fitness,
+    integrated_fitness_curve,
+)
 from credo.losses.multitime import (
     MultiTimeEndpointLoss,
     build_target_tensors_by_time,
@@ -118,7 +123,7 @@ def test_build_target_tensors_by_time_accepts_trajectory_problem() -> None:
     assert target_logw["10h"]["LPS__mono"].shape == (4,)
 
 
-def test_build_target_tensors_rejects_sample_aware_keys() -> None:
+def test_build_target_tensors_accepts_sample_aware_keys() -> None:
     labels = ["90m", "6h"]
     cell_df = pd.DataFrame(
         [
@@ -145,8 +150,11 @@ def test_build_target_tensors_rejects_sample_aware_keys() -> None:
     )
     trajectory = data.to_trajectory_problem(by_sample=True)
 
-    with pytest.raises(ValueError, match="pooled perturbation-id trajectory keys"):
-        build_target_tensors_by_time(trajectory)
+    target_support, target_logw = build_target_tensors_by_time(trajectory)
+
+    key = ("D1", "LPS__mono")
+    assert target_support["90m"][key].shape == (2, 2)
+    assert target_logw["6h"][key].shape == (2,)
 
 
 def test_build_target_tensors_rejects_empty_and_unknown_labels() -> None:
@@ -171,7 +179,7 @@ def test_integrated_fitness_curve_matches_final_old_count_likelihood() -> None:
     assert torch.allclose(curve[-1], final)
 
 
-def test_integrated_fitness_preserves_legacy_scalar_dtau() -> None:
+def test_integrated_fitness_uses_variable_dtau() -> None:
     growth_steps = torch.tensor([[[1.0, 3.0]], [[2.0, 4.0]], [[5.0, 7.0]]])
     logw_steps = torch.zeros(4, 1, 2)
     tau_steps = torch.tensor([0.0, 0.2, 0.7, 1.0])
@@ -179,7 +187,7 @@ def test_integrated_fitness_preserves_legacy_scalar_dtau() -> None:
     zeta = integrated_fitness(growth_steps, logw_steps, tau_steps)
 
     r_bar = growth_steps.mean(-1)
-    expected = (r_bar * (tau_steps[1] - tau_steps[0])).sum(0)
+    expected = (r_bar * (tau_steps[1:] - tau_steps[:-1])[:, None]).sum(0)
     assert torch.equal(zeta, expected)
 
 
@@ -205,3 +213,33 @@ def test_integrated_fitness_curve_uses_variable_dtau() -> None:
     curve = integrated_fitness_curve(growth_steps, logw_steps, tau_steps)
 
     assert torch.allclose(curve.squeeze(1), torch.tensor([0.0, 0.4, 1.4, 2.0]))
+
+
+def test_dirichlet_multinomial_includes_count_constant() -> None:
+    lik = DirichletMultinomialLikelihood(log_phi=float(np.log(5.0)))
+    counts = torch.tensor([[2.0, 1.0]])
+    pi = torch.tensor([[0.25, 0.75]])
+    n_total = torch.tensor([3.0])
+
+    loss = lik(counts, pi, n_total)
+
+    phi = torch.tensor(5.0)
+    alpha = phi * pi
+    expected_ll = (
+        torch.lgamma(n_total + 1.0)
+        - torch.lgamma(counts + 1.0).sum(-1)
+        + torch.lgamma(phi)
+        - torch.lgamma(phi + n_total)
+        + (torch.lgamma(alpha + counts) - torch.lgamma(alpha)).sum(-1)
+    )
+    assert torch.allclose(loss, -expected_ll.sum())
+
+
+def test_dirichlet_multinomial_validates_totals() -> None:
+    lik = DirichletMultinomialLikelihood()
+    with pytest.raises(ValueError, match="n_total must equal"):
+        lik(
+            counts=torch.tensor([[2.0, 1.0]]),
+            pi=torch.tensor([[0.5, 0.5]]),
+            n_total=torch.tensor([4.0]),
+        )

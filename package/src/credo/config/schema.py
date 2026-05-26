@@ -96,8 +96,6 @@ class ModelConfig(BaseModel):
 class SimulationConfig(BaseModel):
     n_particles: int = 128
     n_steps: int = 24
-    resample_ess_threshold: float = 0.5
-    enable_resampling: bool = False
     store_history: bool = False
 
 

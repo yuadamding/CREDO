@@ -11,6 +11,7 @@ from credo.data.core import (
     MassTable,
     PerturbSeqDynamicsData,
     PerturbationCatalog,
+    SparseTrajectoryProblem,
     TimeAxis,
     TrajectoryProblem,
 )
@@ -82,8 +83,10 @@ def test_trajectory_to_endpoint_backward_compatibility() -> None:
 def test_trajectory_problem_requires_common_keys() -> None:
     data = _three_time_data()
 
-    with pytest.raises(NotImplementedError, match="requires common measure keys"):
-        data.to_trajectory_problem(require_all_times=False)
+    sparse = data.to_trajectory_problem(require_all_times=False)
+
+    assert isinstance(sparse, SparseTrajectoryProblem)
+    assert sparse.target_keys("90m", "10h") == {"LPS__mono", "ctrl"}
 
 
 def test_to_trajectory_problem_rejects_empty_time_labels() -> None:
@@ -110,6 +113,43 @@ def test_trajectory_problem_rejects_mixed_key_types() -> None:
             time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
             time_labels=["t0", "t1"],
         )
+
+
+def test_sparse_trajectory_preserves_incomplete_donor_time_keys() -> None:
+    labels = ["90m", "6h", "10h"]
+    rows = []
+    latent = []
+    for label in labels:
+        donors = ["D1", "D2"] if label != "6h" else ["D1"]
+        for donor in donors:
+            for cell_i in range(2):
+                rows.append(
+                    {
+                        "cell_id": f"{label}_{donor}_{cell_i}",
+                        "perturbation_id": "LPS__mono",
+                        "time_label": label,
+                        "sample_id": donor,
+                    }
+                )
+                latent.append([float(len(latent)), 0.0])
+    cell_df = pd.DataFrame(rows)
+    data = PerturbSeqDynamicsData(
+        time_axis=TimeAxis(labels=labels, physical_times=[1.5, 6.0, 10.0]),
+        catalog=PerturbationCatalog(["LPS__mono"], ["LPS__mono"]),
+        cell_state=CellStateTable(cell_df, np.asarray(latent, dtype=np.float32)),
+        mass_table=MassTable(
+            cell_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
+            .size()
+            .rename("mass")
+            .reset_index()
+        ),
+    )
+
+    sparse = data.to_sparse_trajectory_problem(by_sample=True)
+
+    assert sparse.available_keys("90m") == {("D1", "LPS__mono"), ("D2", "LPS__mono")}
+    assert sparse.available_keys("6h") == {("D1", "LPS__mono")}
+    assert sparse.target_keys("90m", "6h") == {("D1", "LPS__mono")}
 
 
 def test_same_seed_trajectory_initialization_starts_identically() -> None:

@@ -460,6 +460,104 @@ class TrajectoryProblem:
         )
 
 
+@dataclass
+class SparseTrajectoryProblem:
+    """Multi-time finite-measure problem with missing sample/time keys allowed.
+
+    ``measures[time_label][key]`` stores only observed finite measures.  This is
+    useful for donor-aware time courses where not every donor/perturbation
+    combination exists at every observed time.
+    """
+    measures: Dict[str, Dict[MeasureKey, FiniteMeasure]]
+    catalog: PerturbationCatalog
+    time_axis: TimeAxis
+    time_labels: List[str]
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.validate()
+
+    def validate(self) -> None:
+        if len(self.time_labels) < 2:
+            raise ValueError("SparseTrajectoryProblem requires at least two time labels")
+        missing = [label for label in self.time_labels if label not in self.measures]
+        if missing:
+            raise ValueError(f"Missing measure dictionaries for time labels: {missing}")
+        for label in self.time_labels:
+            self.time_axis.tau(label)
+
+        all_keys: set[MeasureKey] = set()
+        key_modes: set[bool] = set()
+        for label in self.time_labels:
+            keys = set(self.measures[label].keys())
+            invalid = [key for key in keys if not _is_valid_measure_key(key)]
+            if invalid:
+                raise ValueError(
+                    f"Invalid sparse trajectory measure keys at time {label}: "
+                    f"{_format_measure_keys(set(invalid))}"
+                )
+            all_keys.update(keys)
+            key_modes.update(isinstance(key, tuple) for key in keys)
+        if not all_keys:
+            raise ValueError("SparseTrajectoryProblem requires at least one observed measure")
+        if len(key_modes) > 1:
+            raise ValueError("SparseTrajectoryProblem measure keys must be all pooled ids or all sample-aware tuples")
+
+    @property
+    def keys(self) -> List[MeasureKey]:
+        out: set[MeasureKey] = set()
+        for label in self.time_labels:
+            out.update(self.measures[label].keys())
+        return sorted(out, key=str)
+
+    @property
+    def perturbation_ids(self) -> List[str]:
+        if all(isinstance(key, str) for key in self.keys):
+            return [str(key) for key in self.keys]
+        return sorted({str(key[1]) for key in self.keys if isinstance(key, tuple)})
+
+    @property
+    def observed_taus(self) -> List[float]:
+        return [self.tau(label) for label in self.time_labels]
+
+    def tau(self, time_label: str) -> float:
+        return self.time_axis.tau(time_label)
+
+    def available_keys(self, time_label: str) -> set[MeasureKey]:
+        if time_label not in self.measures:
+            raise KeyError(f"Unknown trajectory time label: {time_label!r}")
+        return set(self.measures[time_label].keys())
+
+    def target_keys(self, source_label: str, target_label: str) -> set[MeasureKey]:
+        return self.available_keys(source_label) & self.available_keys(target_label)
+
+    def get(self, time_label: str, key: MeasureKey) -> FiniteMeasure:
+        return self.measures[time_label][key]
+
+    def interval_pairs(self) -> List[Tuple[str, str]]:
+        return list(zip(self.time_labels[:-1], self.time_labels[1:]))
+
+    def to_endpoint_problem(
+        self,
+        initial_label: Optional[str] = None,
+        terminal_label: Optional[str] = None,
+    ) -> EndpointProblem:
+        init_label = initial_label or self.time_labels[0]
+        term_label = terminal_label or self.time_labels[-1]
+        common_keys = self.target_keys(init_label, term_label)
+        if not common_keys:
+            raise ValueError(f"No common measure keys for endpoint view {init_label!r}->{term_label!r}")
+        if not all(isinstance(key, str) for key in common_keys):
+            raise ValueError("Sample-aware SparseTrajectoryProblem cannot be viewed as an EndpointProblem")
+        perturbation_ids = sorted(str(key) for key in common_keys)
+        return EndpointProblem(
+            initial={pid: self.measures[init_label][pid] for pid in perturbation_ids},
+            terminal={pid: self.measures[term_label][pid] for pid in perturbation_ids},
+            time_axis=self.time_axis,
+            perturbation_ids=perturbation_ids,
+        )
+
+
 # ---------------------------------------------------------------------------
 # SimulationTruth  (for synthetic benchmarks)
 # ---------------------------------------------------------------------------
@@ -571,7 +669,7 @@ class PerturbSeqDynamicsData:
         time_labels: Optional[Sequence[str]] = None,
         perturbations: Optional[Sequence[str]] = None,
         require_all_times: bool = True,
-    ) -> TrajectoryProblem:
+    ) -> TrajectoryProblem | SparseTrajectoryProblem:
         """Construct a multi-time finite-measure view.
 
         By default this returns pooled perturbation-keyed measures for every
@@ -580,9 +678,10 @@ class PerturbSeqDynamicsData:
         pairs with support at every requested time are kept.
         """
         if not require_all_times:
-            raise NotImplementedError(
-                "TrajectoryProblem currently requires common measure keys at every time label; "
-                "leave require_all_times=True or build an explicit sparse trajectory object."
+            return self.to_sparse_trajectory_problem(
+                by_sample=by_sample,
+                time_labels=time_labels,
+                perturbations=perturbations,
             )
         labels = list(self.time_axis.labels if time_labels is None else time_labels)
         if len(labels) < 2:
@@ -640,6 +739,62 @@ class PerturbSeqDynamicsData:
                 "latent_dim": self.latent_dim,
                 "by_sample": by_sample,
                 "require_all_times": require_all_times,
+            },
+        )
+
+    def to_sparse_trajectory_problem(
+        self,
+        *,
+        by_sample: bool = False,
+        time_labels: Optional[Sequence[str]] = None,
+        perturbations: Optional[Sequence[str]] = None,
+    ) -> SparseTrajectoryProblem:
+        """Construct a trajectory view that keeps incomplete sample/time keys."""
+        labels = list(self.time_axis.labels if time_labels is None else time_labels)
+        if len(labels) < 2:
+            raise ValueError("Need at least two time labels for a sparse trajectory problem")
+        for label in labels:
+            self.time_axis.tau(label)
+
+        requested_pids = list(perturbations or self.catalog.perturbation_ids)
+        requested_pid_set = set(requested_pids)
+        df = self.cell_state.df
+
+        def has_cells(pid: str, label: str, sample_id: Optional[str] = None) -> bool:
+            mask = (df["perturbation_id"] == pid) & (df["time_label"] == label)
+            if sample_id is not None:
+                mask = mask & (df["sample_id"].astype(str) == str(sample_id))
+            return bool(mask.any())
+
+        measures: Dict[str, Dict[MeasureKey, FiniteMeasure]] = {label: {} for label in labels}
+        if by_sample:
+            pairs = (
+                df.loc[df["perturbation_id"].isin(requested_pid_set), ["sample_id", "perturbation_id"]]
+                .drop_duplicates()
+                .sort_values(["sample_id", "perturbation_id"])
+            )
+            for row in pairs.itertuples(index=False):
+                sample_id = str(row.sample_id)
+                pid = str(row.perturbation_id)
+                key: MeasureKey = (sample_id, pid)
+                for label in labels:
+                    if has_cells(pid, label, sample_id):
+                        measures[label][key] = self.build_measure(pid, label, sample_id=sample_id)
+        else:
+            for pid in requested_pids:
+                for label in labels:
+                    if has_cells(str(pid), label):
+                        measures[label][str(pid)] = self.build_measure(str(pid), label)
+
+        return SparseTrajectoryProblem(
+            measures=measures,
+            catalog=self.catalog,
+            time_axis=self.time_axis,
+            time_labels=labels,
+            metadata={
+                "latent_dim": self.latent_dim,
+                "by_sample": by_sample,
+                "require_all_times": False,
             },
         )
 

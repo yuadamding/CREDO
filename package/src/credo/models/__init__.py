@@ -25,6 +25,7 @@ from .particles import (
     initialise_particles,
     initialise_particles_from_measures,
     initialise_particles_from_trajectory,
+    rollout_with_clamped_context,
 )
 
 __all__ = [
@@ -53,5 +54,6 @@ __all__ = [
     "initialise_particles_from_trajectory",
     "log1p_normalize_expression_matrix",
     "maybe_materialize_dense_matrix",
+    "rollout_with_clamped_context",
     "standardize_latent",
 ]

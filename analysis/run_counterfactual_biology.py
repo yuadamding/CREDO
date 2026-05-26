@@ -21,7 +21,11 @@ from credo.data.hnscc import (  # noqa: E402
     prepare_hnscc_obs,
 )
 from credo.models.full_model import FullDynamicsModel  # noqa: E402
-from credo.models.simulator import _control_embedding_context, initialise_particles  # noqa: E402
+from credo.models.simulator import (  # noqa: E402
+    _control_embedding_context,
+    initialise_particles,
+    rollout_with_clamped_context,
+)
 from credo.models.weighted_sde import ParticleRollout, WeightedParticleSimulator  # noqa: E402
 
 from hnscc_biology_common import infer_target_gene  # noqa: E402
@@ -201,73 +205,6 @@ def _action_summary(rollout: ParticleRollout) -> dict:
 
 
 @torch.no_grad()
-def _rollout_clamped_context(
-    model: FullDynamicsModel,
-    z0: torch.Tensor,
-    logw0: torch.Tensor,
-    log_m0: torch.Tensor,
-    pid: str,
-    context_steps: torch.Tensor,
-    *,
-    n_steps: int,
-) -> ParticleRollout:
-    if context_steps.shape[0] < n_steps:
-        raise ValueError(
-            f"Clamped context has {context_steps.shape[0]} steps, but rollout requested {n_steps} steps."
-        )
-    device = z0.device
-    dtype = z0.dtype
-    tau_steps = torch.linspace(0.0, 1.0, n_steps + 1, device=device, dtype=dtype)
-    dtau = 1.0 / max(n_steps, 1)
-    z = z0.clone()
-    logw = logw0.clone()
-    z_list = [z]
-    logw_list = [logw]
-    drift_list = []
-    sigma_list = []
-    growth_list = []
-
-    for k in range(n_steps):
-        tau_k = tau_steps[k]
-        context = context_steps[k].to(device=device, dtype=dtype)
-        n_programs = model.context_agg.n_programs
-        q = context[:n_programs]
-        s = context[n_programs:]
-        a = model.embedding([pid])
-        b = model.embedding.growth_intercepts([pid])
-        eta_z = model.context_agg.encoder.eta(z)
-        coeffs = model.coeff_nets(
-            z=z,
-            tau=tau_k,
-            context=context,
-            a=a,
-            growth_intercept=b,
-            eta_z=eta_z,
-            q=q,
-            s=s,
-        )
-        drift_list.append(coeffs.drift)
-        sigma_list.append(coeffs.sigma_diag)
-        growth_list.append(coeffs.growth)
-        noise = torch.randn_like(z)
-        z = z + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise
-        logw = logw + coeffs.growth * dtau
-        z_list.append(z)
-        logw_list.append(logw)
-
-    return ParticleRollout(
-        z_steps=torch.stack(z_list, dim=0),
-        logw_steps=torch.stack(logw_list, dim=0),
-        tau_steps=tau_steps,
-        log_m0=log_m0.detach().clone(),
-        drift_steps=torch.stack(drift_list, dim=0),
-        sigma_steps=torch.stack(sigma_list, dim=0),
-        growth_steps=torch.stack(growth_list, dim=0),
-        context_steps=context_steps.detach().clone(),
-    )
-
-
-@torch.no_grad()
 def _program_summary(model: FullDynamicsModel, rollout: ParticleRollout, labels: list[str] | None) -> dict:
     eta = model.context_agg.encoder.eta(rollout.terminal_z)[0]
     w = torch.softmax(rollout.terminal_logw[0], dim=-1)
@@ -356,24 +293,24 @@ def main() -> None:
         reference_clamped = None
         if args.context_clamped and reference.context_steps is not None:
             torch.manual_seed(seed)
-            clamped = _rollout_clamped_context(
-                model,
-                z0.clone(),
-                logw0.clone(),
-                log_m0.clone(),
-                pid,
-                reference.context_steps,
+            clamped = rollout_with_clamped_context(
+                model=model,
+                z0=z0.clone(),
+                logw0=logw0.clone(),
+                log_m0=log_m0.clone(),
+                perturbation_ids=[pid],
+                context_steps=reference.context_steps,
                 n_steps=args.n_steps,
             )
             with _control_embedding_context(model, pid, mode="reference_consistent"):
                 torch.manual_seed(seed)
-                reference_clamped = _rollout_clamped_context(
-                    model,
-                    z0.clone(),
-                    logw0.clone(),
-                    log_m0.clone(),
-                    pid,
-                    reference.context_steps,
+                reference_clamped = rollout_with_clamped_context(
+                    model=model,
+                    z0=z0.clone(),
+                    logw0=logw0.clone(),
+                    log_m0=log_m0.clone(),
+                    perturbation_ids=[pid],
+                    context_steps=reference.context_steps,
                     n_steps=args.n_steps,
                 )
 

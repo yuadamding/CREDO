@@ -29,7 +29,7 @@ class ParticleRollout:
     drift_steps: Optional[torch.Tensor] = None      # [K, G, N, d]
     sigma_steps: Optional[torch.Tensor] = None      # [K, G, N, d]
     growth_steps: Optional[torch.Tensor] = None     # [K, G, N]
-    context_steps: Optional[torch.Tensor] = None    # [K+1, C]
+    context_steps: Optional[torch.Tensor] = None    # [K, C], context for tau_k -> tau_{k+1}
 
     @property
     def n_steps(self) -> int:

@@ -113,13 +113,120 @@ def initialise_particles_from_trajectory(
     )
 
 
+@torch.no_grad()
+def rollout_with_clamped_context(
+    model: FullDynamicsModel,
+    z0: torch.Tensor,
+    logw0: torch.Tensor,
+    log_m0: torch.Tensor,
+    perturbation_ids: List[str],
+    context_steps: torch.Tensor,
+    *,
+    n_steps: Optional[int] = None,
+    tau_start: float = 0.0,
+    tau_end: float = 1.0,
+    tau_grid: Optional[torch.Tensor] = None,
+) -> ParticleRollout:
+    """Roll out dynamics while reusing a fixed context trajectory.
+
+    ``context_steps[k]`` is the context used for the transition
+    ``tau_steps[k] -> tau_steps[k + 1]`` and therefore has length ``K``, not
+    ``K+1``.  This helper is used for context-clamped counterfactuals.
+    """
+    if z0.shape[:2] != logw0.shape:
+        raise ValueError("z0 and logw0 shapes are inconsistent")
+    if z0.shape[0] != len(perturbation_ids):
+        raise ValueError("perturbation_ids length must match z0.shape[0]")
+
+    device = z0.device
+    dtype = z0.dtype
+    if tau_grid is None:
+        K = int(n_steps if n_steps is not None else context_steps.shape[0])
+        if K < 1:
+            raise ValueError("n_steps must be >= 1")
+        tau_steps = torch.linspace(tau_start, tau_end, K + 1, device=device, dtype=dtype)
+    else:
+        tau_steps = tau_grid.to(device=device, dtype=dtype)
+        if tau_steps.ndim != 1 or len(tau_steps) < 2:
+            raise ValueError("tau_grid must be a 1D tensor with at least two points")
+        expected_start = torch.as_tensor(tau_start, device=device, dtype=dtype)
+        expected_end = torch.as_tensor(tau_end, device=device, dtype=dtype)
+        if not torch.isclose(tau_steps[0], expected_start):
+            raise ValueError("tau_grid[0] must equal tau_start")
+        if not torch.isclose(tau_steps[-1], expected_end):
+            raise ValueError("tau_grid[-1] must equal tau_end")
+        if not torch.all(tau_steps[1:] > tau_steps[:-1]):
+            raise ValueError("tau_grid must be strictly increasing")
+        K = len(tau_steps) - 1
+        if n_steps is not None and int(n_steps) != K:
+            raise ValueError("n_steps must match len(tau_grid) - 1")
+
+    if context_steps.shape[0] < K:
+        raise ValueError(
+            f"Clamped context has {context_steps.shape[0]} steps, but rollout requested {K} steps."
+        )
+
+    z = z0.clone()
+    logw = logw0.clone()
+    z_list = [z]
+    logw_list = [logw]
+    drift_list = []
+    sigma_list = []
+    growth_list = []
+    used_context = []
+
+    n_programs = model.context_agg.n_programs
+    for k in range(K):
+        tau_k = tau_steps[k]
+        dtau = tau_steps[k + 1] - tau_steps[k]
+        context = context_steps[k].to(device=device, dtype=dtype)
+        q = context[:n_programs]
+        s = context[n_programs:]
+        a = model.embedding(perturbation_ids)
+        b = model.embedding.growth_intercepts(perturbation_ids)
+        eta_z = model.context_agg.encoder.eta(z)
+        coeffs = model.coeff_nets(
+            z=z,
+            tau=tau_k,
+            context=context,
+            a=a,
+            growth_intercept=b,
+            eta_z=eta_z,
+            q=q,
+            s=s,
+        )
+
+        drift_list.append(coeffs.drift)
+        sigma_list.append(coeffs.sigma_diag)
+        growth_list.append(coeffs.growth)
+        used_context.append(context.detach())
+
+        noise = torch.randn_like(z)
+        z = z + coeffs.drift * dtau + coeffs.sigma_diag * torch.sqrt(dtau) * noise
+        logw = logw + coeffs.growth * dtau
+        z_list.append(z)
+        logw_list.append(logw)
+
+    return ParticleRollout(
+        z_steps=torch.stack(z_list, dim=0),
+        logw_steps=torch.stack(logw_list, dim=0),
+        tau_steps=tau_steps,
+        log_m0=log_m0.detach().clone(),
+        drift_steps=torch.stack(drift_list, dim=0),
+        sigma_steps=torch.stack(sigma_list, dim=0),
+        growth_steps=torch.stack(growth_list, dim=0),
+        context_steps=torch.stack(used_context, dim=0),
+    )
+
+
 @dataclass
 class CounterfactualResult:
     """Paired simulation outputs for a single perturbation."""
     perturbation_id: str
     rollout_perturb: ParticleRollout
     rollout_control: ParticleRollout
-    rollout_clamped: Optional[ParticleRollout] = None  # context clamped to control
+    rollout_clamped: Optional[ParticleRollout] = None  # factual dynamics with context clamped to control
+    rollout_control_clamped: Optional[ParticleRollout] = None
 
     def terminal_mass_diff(self) -> float:
         logw_p = self.rollout_perturb.terminal_logw.squeeze(0)
@@ -179,7 +286,9 @@ class CounterfactualEngine:
         ----------
         endpoint: provides P4 initial conditions
         perturbation_ids: which perturbations to analyse
-        clamp_context: if True, also run with context fixed to control trajectory
+        clamp_context: if True, also run with context fixed to the control trajectory.
+            This requires ``self.simulator.store_history=True`` so control
+            context checkpoints are available.
         control_rollout_mode:
             - ``reference_consistent``: for ``soft_ref``, keep the shared
               reference embedding and set only the perturbation residual to zero
@@ -192,6 +301,8 @@ class CounterfactualEngine:
             raise ValueError(
                 "control_rollout_mode must be 'reference_consistent' or 'zero_centered'."
             )
+        if clamp_context and not self.simulator.store_history:
+            raise ValueError("clamp_context=True requires a simulator with store_history=True.")
 
         for pid in perturbation_ids:
             if pid not in endpoint.initial:
@@ -222,10 +333,37 @@ class CounterfactualEngine:
                     perturbation_ids=[pid],
                 )
 
+            rollout_clamped = None
+            rollout_control_clamped = None
+            if clamp_context:
+                if rollout_c.context_steps is None:
+                    raise ValueError("Control rollout did not store context_steps for clamped context.")
+                rollout_clamped = rollout_with_clamped_context(
+                    model=self.model,
+                    z0=z0p,
+                    logw0=lw0p,
+                    log_m0=lm0p,
+                    perturbation_ids=[pid],
+                    context_steps=rollout_c.context_steps,
+                    n_steps=rollout_c.n_steps,
+                )
+                with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+                    rollout_control_clamped = rollout_with_clamped_context(
+                        model=self.model,
+                        z0=z0c,
+                        logw0=lw0c,
+                        log_m0=lm0c,
+                        perturbation_ids=[pid],
+                        context_steps=rollout_c.context_steps,
+                        n_steps=rollout_c.n_steps,
+                    )
+
             result = CounterfactualResult(
                 perturbation_id=pid,
                 rollout_perturb=rollout_p,
                 rollout_control=rollout_c,
+                rollout_clamped=rollout_clamped,
+                rollout_control_clamped=rollout_control_clamped,
             )
             results.append(result)
 

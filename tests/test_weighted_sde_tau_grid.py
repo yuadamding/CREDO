@@ -96,5 +96,6 @@ def test_rollout_accepts_nonuniform_tau_grid() -> None:
     assert torch.equal(rollout.tau_steps, tau_grid)
     assert rollout.z_steps.shape[0] == len(tau_grid)
     assert rollout.growth_steps.shape[0] == len(tau_grid) - 1
+    assert rollout.context_steps.shape[0] == len(tau_grid) - 1
     assert torch.allclose(rollout.terminal_z, torch.ones_like(rollout.terminal_z))
     assert torch.allclose(rollout.terminal_logw, torch.full_like(rollout.terminal_logw, 2.0))

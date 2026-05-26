@@ -18,7 +18,7 @@ log-domain balanced Sinkhorn otherwise.
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from typing import Dict, Hashable, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -158,13 +158,13 @@ class UOTLoss(nn.Module):
         self,
         pred_z: torch.Tensor,              # [G, N, d]
         pred_logw_abs: torch.Tensor,       # [G, N]  absolute log-weights
-        target_support: Dict[str, torch.Tensor],  # pid -> [m, d]
-        target_logw: Dict[str, torch.Tensor],     # pid -> [m] absolute log-weights
+        target_support: Dict[Hashable, torch.Tensor],  # key -> [m, d]
+        target_logw: Dict[Hashable, torch.Tensor],     # key -> [m] absolute log-weights
         perturbation_ids: list,
-        weights: Optional[Dict[str, float]] = None,
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        weights: Optional[Dict[Hashable, float]] = None,
+    ) -> Tuple[torch.Tensor, Dict[Hashable, torch.Tensor]]:
         total = torch.tensor(0.0, device=pred_z.device, dtype=pred_z.dtype)
-        per_pid: Dict[str, torch.Tensor] = {}
+        per_pid: Dict[Hashable, torch.Tensor] = {}
 
         for g, pid in enumerate(perturbation_ids):
             if pid not in target_support:
