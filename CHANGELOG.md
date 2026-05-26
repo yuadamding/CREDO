@@ -17,6 +17,14 @@
   counterfactual branches record simulator-consumed noise provenance.
 - Added `program_occupancy_tv_fact_vs_ref` to counterfactual biology output as
   an interpretable learned-program occupancy shift alongside energy distance.
+- Tightened biological calibration further: final result metadata now has
+  precedence over stale config metadata for `requested_mass_mode`, expansion
+  readiness requires a positive log-mass effect and depletion is reported
+  separately, distribution/program fold support is computed over unique
+  replicate keys, and `program_occupancy_tv_fact_vs_ref` now has null and
+  stability gates for plasticity/state-shift calls.
+- Added `--practical-null-floors-json` so claim calibration floors can be set
+  per metric instead of relying only on the bundled small positive defaults.
 
 ## 2.0.11
 

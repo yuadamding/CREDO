@@ -127,8 +127,12 @@ negative-control null gaps, explicit requested mass-mode metadata, and
 claim-specific counterfactual checks. Counterfactual null calibration can
 include control guides with `--include-controls-for-null`, and replicate
 support is counted from unique fold/run identifiers rather than raw rows.
-Metric-specific null gates use a small positive practical floor so an exactly
-zero same-noise control counterfactual does not make tiny effects claim-ready.
+Metric-specific null gates use a positive practical floor so an exactly
+zero same-noise control counterfactual does not make tiny effects claim-ready;
+override the defaults with `--practical-null-floors-json '{"mass": 0.05}'` or
+a JSON file containing metric keys such as `mass`, `distribution_shift`,
+`program_occupancy_tv`, `tnf_expansion_program`, `cis_like_program`, and
+`tsk_pemt_program`.
 Single guide genes are reported as
 `not_assessable` for guide concordance, not as a pass. The table separates
 `claim_ready_strict` from `claim_ready_screening`; screening can retain
@@ -136,15 +140,18 @@ otherwise well-supported single-guide candidates without marking them as
 strictly claim-ready. Ecology-dependent calls require replicated
 context-ablation evidence; plasticity/state-shift calls require stable
 diffusion/action evidence, distribution-shift null support, and
-fold-level above-null distribution-shift support. TNF-expansion, CIS-like, and
-TSK/pEMT readiness are reported as separate signed program axes and require
-positive program movement plus matching program-null support. The table
+fold-level above-null distribution-shift or learned-program-occupancy support.
+Expansion readiness requires a positive log-mass effect above the mass null;
+depletion readiness is reported separately for negative mass effects.
+TNF-expansion, CIS-like, and TSK/pEMT readiness are reported as separate signed
+program axes and require positive program movement plus matching program-null
+and fold-support evidence. The table
 records the missing condition, such as
 `needs-counterfactual-replicates`, `needs-fold-stability`,
 `needs-guide-concordance`, `needs-explicit-mass-mode`, `missing-mass-null`,
 `below-context-null-gap`, or `needs-context-ablation`, and it also emits axis-specific columns such as
-`expansion_claim_ready`, `tnf_expansion_claim_ready`, `cis_like_claim_ready`,
-`plasticity_claim_ready`, and `ecology_claim_ready`.
+`expansion_claim_ready`, `depletion_claim_ready`, `tnf_expansion_claim_ready`,
+`cis_like_claim_ready`, `plasticity_claim_ready`, and `ecology_claim_ready`.
 
 ## Public Imports
 
