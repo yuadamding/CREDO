@@ -10,6 +10,40 @@ import pytest
 from runners.run_credo_trajectory import build_study_from_anndata, main as trajectory_main, parse_args
 
 
+def _write_tiny_runner_adata(
+    tmp_path,
+    *,
+    mass_values: list[float] | None = None,
+    include_mass_col: bool = True,
+) -> str:
+    rows = []
+    latent = []
+    rng = np.random.default_rng(41)
+    i = 0
+    for pid, is_control in [("ctrl", True), ("LPS__mono", False)]:
+        for time_i, (label, physical) in enumerate([("90m", 1.5), ("6h", 6.0), ("10h", 10.0)]):
+            for cell_i in range(2):
+                row = {
+                    "cell_id": f"{pid}_{label}_{cell_i}",
+                    "time_label": label,
+                    "physical_time": physical,
+                    "sample_id": "D1",
+                    "perturbation_id": pid,
+                    "is_control": is_control,
+                }
+                if include_mass_col:
+                    row["mass_value"] = float(mass_values[i] if mass_values is not None else 1.0)
+                rows.append(row)
+                latent.append(rng.normal(loc=float(time_i), scale=0.01, size=2))
+                i += 1
+    obs = pd.DataFrame(rows).set_index("cell_id", drop=False)
+    adata = ad.AnnData(X=np.ones((len(obs), 4), dtype=np.float32), obs=obs)
+    adata.obsm["X_pca"] = np.asarray(latent, dtype=np.float32)
+    data_path = tmp_path / "tiny_runner_input.h5ad"
+    adata.write_h5ad(data_path)
+    return str(data_path)
+
+
 def test_lps_trajectory_runner_smoke(tmp_path) -> None:
     rows = []
     latent = []
@@ -75,6 +109,7 @@ def test_lps_trajectory_runner_smoke(tmp_path) -> None:
     assert {"physical_time", "normalized_tau", "interval_physical_duration"}.issubset(pred.columns)
     manifest = json.loads((output_dir / "run_manifest.json").read_text())
     assert manifest["package_version"] == "2.0.9"
+    assert manifest["resolved_mass_mode"] == "group_total"
 
 
 def test_lps_trajectory_runner_vae_source_only_with_extra_timepoint(tmp_path) -> None:
@@ -201,6 +236,82 @@ def test_lps_trajectory_runner_ambiguous_constant_mass_requires_mode(tmp_path) -
         )
 
 
+def test_explicit_mass_mode_missing_mass_column_raises(tmp_path) -> None:
+    data_path = _write_tiny_runner_adata(tmp_path, include_mass_col=False)
+
+    for mode in ["group_total", "per_cell_contribution"]:
+        args = parse_args(
+            [
+                "--data-path", data_path,
+                "--output-dir", str(tmp_path / f"run_{mode}"),
+                "--source-label", "90m",
+                "--target-labels", "6h,10h",
+                "--physical-times", "90m:1.5,6h:6.0,10h:10.0",
+                "--mass-mode", mode,
+                "--mass-col", "missing_mass",
+            ]
+        )
+        with pytest.raises(KeyError, match="--mass-col"):
+            build_study_from_anndata(args)
+
+
+def test_auto_mass_mode_rejects_any_constant_multicell_group(tmp_path) -> None:
+    values = []
+    for i in range(12):
+        values.append(1.0 if i < 2 else 1.0 + 0.01 * i)
+    data_path = _write_tiny_runner_adata(tmp_path, mass_values=values)
+    args = parse_args(
+        [
+            "--data-path", data_path,
+            "--output-dir", str(tmp_path / "run_auto"),
+            "--source-label", "90m",
+            "--target-labels", "6h,10h",
+            "--physical-times", "90m:1.5,6h:6.0,10h:10.0",
+            "--mass-mode", "auto",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="constant within at least one multi-cell group"):
+        build_study_from_anndata(args)
+
+
+def test_group_total_rejects_nonconstant_group_values(tmp_path) -> None:
+    values = [1.0 + 0.01 * i for i in range(12)]
+    data_path = _write_tiny_runner_adata(tmp_path, mass_values=values)
+    args = parse_args(
+        [
+            "--data-path", data_path,
+            "--output-dir", str(tmp_path / "run_group_total"),
+            "--source-label", "90m",
+            "--target-labels", "6h,10h",
+            "--physical-times", "90m:1.5,6h:6.0,10h:10.0",
+            "--mass-mode", "group_total",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="group_total requires"):
+        build_study_from_anndata(args)
+
+
+def test_count_mass_mode_ignores_mass_column_by_design(tmp_path) -> None:
+    data_path = _write_tiny_runner_adata(tmp_path, mass_values=[100.0] * 12)
+    args = parse_args(
+        [
+            "--data-path", data_path,
+            "--output-dir", str(tmp_path / "run_count"),
+            "--source-label", "90m",
+            "--target-labels", "6h,10h",
+            "--physical-times", "90m:1.5,6h:6.0,10h:10.0",
+            "--mass-mode", "count",
+        ]
+    )
+
+    study = build_study_from_anndata(args)
+
+    assert study.mass_table.get("ctrl", "90m", "D1") == 2.0
+    assert args.resolved_mass_mode == "count"
+
+
 def test_per_cell_mass_mode_sums_contributions(tmp_path) -> None:
     rows = []
     latent = []
@@ -260,3 +371,34 @@ def test_vae_gene_mask_uses_rank_not_var_order() -> None:
     mask = _column_mask_for_vae(adata, args)
 
     assert adata.var_names[mask].tolist() == ["g1", "g3"]
+
+
+def test_vae_fallback_gene_selection_uses_fit_mask_not_targets() -> None:
+    from runners.run_credo_trajectory import _column_mask_for_vae
+
+    counts = np.asarray(
+        [
+            [1.0, 5.0, 1.0],
+            [50.0, 5.0, 1.0],
+            [1.0, 1.0, 1.0],
+            [1.0, 100.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    obs = pd.DataFrame({"time_label": ["90m", "90m", "10h", "10h"]})
+    adata = ad.AnnData(X=counts, obs=obs)
+    adata.var_names = ["source_var", "target_var", "flat"]
+    adata.var["hv_gene"] = [True, True, True]
+    args = parse_args(
+        [
+            "--data-path", "dummy.h5ad",
+            "--output-dir", "dummy",
+            "--expression-gene-mask-col", "hv_gene",
+            "--expression-top-genes", "1",
+        ]
+    )
+    source_mask = obs["time_label"].eq("90m").to_numpy()
+
+    mask = _column_mask_for_vae(adata, args, selection_mask=source_mask)
+
+    assert adata.var_names[mask].tolist() == ["source_var"]

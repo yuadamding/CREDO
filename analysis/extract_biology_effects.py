@@ -114,6 +114,32 @@ def _q75(series: pd.Series) -> float:
     return float(values.quantile(0.75)) if not values.empty else float("nan")
 
 
+def _q95(series: pd.Series) -> float:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    return float(values.quantile(0.95)) if not values.empty else float("nan")
+
+
+def _sign_consistency(series: pd.Series) -> float:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    values = values.loc[values.ne(0.0)]
+    if values.empty:
+        return float("nan")
+    mean = float(values.mean())
+    if mean == 0.0:
+        return float("nan")
+    return float((np.sign(values) == np.sign(mean)).mean())
+
+
+def _abs_cv(series: pd.Series) -> float:
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    if len(values) < 2:
+        return float("nan")
+    denom = abs(float(values.mean()))
+    if denom <= 1e-12:
+        return float("nan")
+    return float(values.std(ddof=1) / denom)
+
+
 def _aggregate(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
     work = df.copy()
     if "pred_expansion_ratio" in work.columns:
@@ -153,6 +179,28 @@ def _aggregate(df: pd.DataFrame, *, prefix: str = "") -> pd.DataFrame:
             agg_spec[out_col] = spec
 
     out = work.groupby("perturbation_id", dropna=False).agg(**agg_spec).reset_index()
+    extra_parts = [out]
+    if "pred_log_expansion" in work.columns:
+        fold_stability = (
+            work.groupby("perturbation_id", dropna=False)["pred_log_expansion"]
+            .agg(
+                fold_log_expansion_sign_consistency=_sign_consistency,
+                fold_log_expansion_abs_cv=_abs_cv,
+            )
+            .reset_index()
+        )
+        extra_parts.append(fold_stability)
+    if "state_tv" in work.columns:
+        state_stability = (
+            work.groupby("perturbation_id", dropna=False)["state_tv"]
+            .agg(fold_state_tv_abs_cv=_abs_cv)
+            .reset_index()
+        )
+        extra_parts.append(state_stability)
+    if len(extra_parts) > 1:
+        out = extra_parts[0]
+        for part in extra_parts[1:]:
+            out = out.merge(part, on="perturbation_id", how="left")
     out["target_gene"] = out["perturbation_id"].map(infer_target_gene)
     if prefix:
         rename = {
@@ -218,26 +266,36 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
     raw = df.copy()
     if raw["perturbation_id"].duplicated().any():
         agg_spec = {}
+        stability_cols = {
+            "delta_log_mass_fact_vs_ref",
+            "geom_shift_fact_vs_ref",
+            "weighted_mean_shift_l2_fact_vs_ref",
+            "growth_action_fact",
+            "drift_action_fact",
+            "diffusion_action_fact",
+            "context_dependence_geom",
+            "context_dependence_mass",
+        }
         for col in raw.columns:
             if col == "perturbation_id":
                 continue
             if pd.api.types.is_numeric_dtype(raw[col]):
                 agg_spec[col] = "mean"
-                if col in {
-                    "delta_log_mass_fact_vs_ref",
-                    "geom_shift_fact_vs_ref",
-                    "growth_action_fact",
-                    "drift_action_fact",
-                    "diffusion_action_fact",
-                    "context_dependence_geom",
-                    "context_dependence_mass",
-                }:
+                if col in stability_cols:
                     raw[f"{col}_std"] = pd.to_numeric(raw[col], errors="coerce")
                     agg_spec[f"{col}_std"] = "std"
             else:
                 agg_spec[col] = _mode_or_first
         out = raw.groupby("perturbation_id", dropna=False).agg(agg_spec).reset_index()
         out["counterfactual_n_folds"] = raw.groupby("perturbation_id", dropna=False)["perturbation_id"].size().to_numpy()
+        for col in stability_cols:
+            if col in raw.columns:
+                stability = (
+                    raw.groupby("perturbation_id", dropna=False)[col]
+                    .agg(**{f"{col}_sign_consistency": _sign_consistency, f"{col}_abs_cv": _abs_cv})
+                    .reset_index()
+                )
+                out = out.merge(stability, on="perturbation_id", how="left")
     else:
         out = raw
         out["counterfactual_n_folds"] = 1
@@ -258,6 +316,113 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
     if "terminal_entropy_reference" in out.columns and "terminal_state_entropy_ref" not in out.columns:
         out["terminal_state_entropy_ref"] = out["terminal_entropy_reference"]
     return out.drop(columns=["target_gene"], errors="ignore")
+
+
+def _add_guide_concordance(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    metric = None
+    for candidate in ["delta_log_mass_fact_vs_ref", "pred_log_expansion_mean", "true_log_expansion_mean"]:
+        if candidate in out.columns:
+            metric = candidate
+            break
+    if metric is None:
+        out["same_gene_n_guides"] = np.nan
+        out["same_gene_sgrna_concordance"] = np.nan
+        out["same_gene_effect_abs_cv"] = np.nan
+        return out
+
+    work = out.loc[~out["target_gene"].astype(str).str.lower().eq("control")].copy()
+    guide_stats = (
+        work.groupby("target_gene", dropna=False)
+        .agg(
+            same_gene_n_guides=("perturbation_id", "nunique"),
+            same_gene_sgrna_concordance=(metric, _sign_consistency),
+            same_gene_effect_abs_cv=(metric, _abs_cv),
+        )
+        .reset_index()
+    )
+    return out.merge(guide_stats, on="target_gene", how="left")
+
+
+def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    if "delta_log_mass" not in out.columns:
+        out["delta_log_mass"] = np.nan
+    is_control = out.get("is_control", pd.Series(False, index=out.index))
+    controls = out.loc[is_control.fillna(False).astype(bool)]
+    control_mass_gap = _q95(controls["delta_log_mass"].abs()) if not controls.empty else float("nan")
+    out["control_null_abs_delta_log_mass_q95"] = control_mass_gap
+    if pd.isna(control_mass_gap):
+        out["negative_control_gap_pass"] = pd.NA
+    else:
+        out["negative_control_gap_pass"] = pd.to_numeric(out["delta_log_mass"], errors="coerce").abs() > control_mass_gap
+
+    n_folds = pd.to_numeric(out.get("n_folds", pd.Series(np.nan, index=out.index)), errors="coerce")
+    fold_sign = pd.to_numeric(
+        out.get("fold_log_expansion_sign_consistency", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["fold_stability_pass"] = (n_folds >= 2) & (fold_sign.fillna(1.0) >= 0.75)
+
+    n_guides = pd.to_numeric(
+        out.get("same_gene_n_guides", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    guide_conc = pd.to_numeric(
+        out.get("same_gene_sgrna_concordance", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["guide_concordance_pass"] = (n_guides < 2) | (guide_conc >= 0.75)
+
+    cf_folds = pd.to_numeric(
+        out.get("counterfactual_n_folds", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["counterfactual_replicate_pass"] = cf_folds.fillna(0) >= 2
+
+    diffusion_sign = pd.to_numeric(
+        out.get("diffusion_action_fact_sign_consistency", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["plasticity_stability_pass"] = (
+        out["counterfactual_replicate_pass"]
+        & diffusion_sign.fillna(1.0).ge(0.75)
+    )
+
+    context_available = out.get(
+        "context_dependence_geom",
+        pd.Series(np.nan, index=out.index),
+    ).notna()
+    context_sign = pd.to_numeric(
+        out.get("context_dependence_geom_sign_consistency", pd.Series(np.nan, index=out.index)),
+        errors="coerce",
+    )
+    out["ecology_ablation_pass"] = context_available & (
+        (~out["counterfactual_replicate_pass"]) | context_sign.fillna(1.0).ge(0.75)
+    )
+
+    def gate(row: pd.Series) -> str:
+        priority = str(row.get("priority_class", "watch"))
+        if priority == "artifact-watch":
+            return "artifact-watch"
+        if pd.isna(row.get("delta_log_mass_fact_vs_ref", np.nan)):
+            return "counterfactual-pending"
+        if not bool(row.get("fold_stability_pass", False)):
+            return "needs-fold-stability"
+        if not bool(row.get("guide_concordance_pass", True)):
+            return "needs-guide-concordance"
+        null_pass = row.get("negative_control_gap_pass", pd.NA)
+        if not pd.isna(null_pass) and not bool(null_pass):
+            return "below-control-null-gap"
+        if priority == "ecology-dependent" and not bool(row.get("ecology_ablation_pass", False)):
+            return "needs-context-ablation"
+        if priority == "plasticity/state-shift" and not bool(row.get("plasticity_stability_pass", False)):
+            return "needs-diffusion-stability"
+        return "claim-ready"
+
+    out["biological_interpretation_gate"] = out.apply(gate, axis=1)
+    out["claim_ready"] = out["biological_interpretation_gate"].eq("claim-ready")
+    return out
 
 
 def classify_mechanistic_v2(row: pd.Series) -> str:
@@ -347,6 +512,7 @@ def _add_priority(df: pd.DataFrame) -> pd.DataFrame:
     out["priority_class_v2"] = out.apply(classify_mechanistic_v2, axis=1)
     out["priority_class"] = out["priority_class_v2"]
     out = out.drop(columns=["_mass_error_q75"], errors="ignore")
+    out = _add_biological_gates(out)
     return out.sort_values("priority_score", ascending=False, na_position="last").reset_index(drop=True)
 
 
@@ -379,6 +545,7 @@ def main() -> None:
             how="left",
         )
 
+    effects = _add_guide_concordance(effects)
     ranked = _add_priority(effects)
     ranked.to_csv(output_dir / "biological_effects_per_perturbation.csv", index=False)
     ranked.to_csv(output_dir / "biological_effects_per_perturbation_v2.csv", index=False)
@@ -392,6 +559,11 @@ def main() -> None:
             "priority_class",
             "priority_class_pre_counterfactual",
             "priority_score",
+            "biological_interpretation_gate",
+            "claim_ready",
+            "fold_stability_pass",
+            "guide_concordance_pass",
+            "negative_control_gap_pass",
             "delta_log_mass",
             "delta_log_mass_fact_vs_ref",
             "geom_shift_fact_vs_ref",

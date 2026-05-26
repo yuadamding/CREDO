@@ -318,7 +318,7 @@ def main() -> None:
         ref_log_mass = float(_terminal_log_mass(reference)[0].item())
         fact_mean = _weighted_mean(factual.terminal_z[0], factual.terminal_logw[0])
         ref_mean = _weighted_mean(reference.terminal_z[0], reference.terminal_logw[0])
-        geom_shift = float(torch.linalg.norm(fact_mean - ref_mean).item())
+        mean_shift_l2 = float(torch.linalg.norm(fact_mean - ref_mean).item())
         fact_program = _program_summary(model, factual, state_labels)
         ref_program = _program_summary(model, reference, state_labels)
         program_shift = abs(fact_program["dominant_program_fraction"] - ref_program["dominant_program_fraction"])
@@ -340,8 +340,13 @@ def main() -> None:
             "log_mass_reference": ref_log_mass,
             "delta_log_mass_fact_vs_ref": fact_log_mass - ref_log_mass,
             "mass_ratio_fact_vs_ref": float(np.exp(fact_log_mass - ref_log_mass)),
-            "geometry_shift_l2": geom_shift,
-            "geom_shift_fact_vs_ref": geom_shift,
+            "weighted_mean_shift_l2_fact_vs_ref": mean_shift_l2,
+            "geometry_shift_l2": mean_shift_l2,
+            "geom_shift_fact_vs_ref": mean_shift_l2,
+            "geometry_metric": "weighted_mean_l2",
+            "control_rollout_mode": "reference_consistent",
+            "same_initial_particles": True,
+            "common_noise": True,
             "terminal_entropy_factual": terminal_entropy_factual,
             "terminal_entropy_reference": terminal_entropy_reference,
             "terminal_state_entropy_fact": terminal_entropy_factual,
@@ -383,6 +388,27 @@ def main() -> None:
 
     out = pd.DataFrame(rows).sort_values("delta_log_mass_fact_vs_ref", ascending=False)
     out.to_csv(output_dir / "counterfactual_biology_effects.csv", index=False)
+    manifest = {
+        "run_dir": str(run_dir),
+        "source_split": args.source_split,
+        "n_particles": int(args.n_particles),
+        "n_steps": int(args.n_steps),
+        "seed": int(args.seed),
+        "context_clamped": bool(args.context_clamped),
+        "control_rollout_mode": "reference_consistent",
+        "same_initial_particles": True,
+        "common_noise": True,
+        "reference_protocol": "delta_zero_soft_ref_reference_consistent",
+        "geometry_metric": "weighted_mean_l2",
+        "geometry_metric_note": (
+            "weighted_mean_shift_l2_fact_vs_ref is a weighted terminal mean shift, "
+            "not a full distributional Sinkhorn/Wasserstein distance."
+        ),
+    }
+    (output_dir / "counterfactual_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     print(output_dir / "counterfactual_biology_effects.csv")
 
 

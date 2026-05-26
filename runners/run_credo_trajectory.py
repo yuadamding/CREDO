@@ -7,6 +7,7 @@ to all downstream observed checkpoints.
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import json
 import platform
 import subprocess
@@ -75,6 +76,19 @@ def _git_sha() -> str | None:
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
+    except Exception:
+        return None
+
+
+def _git_dirty() -> bool | None:
+    try:
+        status = subprocess.check_output(
+            ["git", "status", "--porcelain"],
+            cwd=Path(__file__).resolve().parent.parent,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return bool(status.strip())
     except Exception:
         return None
 
@@ -174,8 +188,33 @@ def _load_obsm_latent(adata: ad.AnnData, latent_key: str) -> np.ndarray:
     return latent
 
 
-def _column_mask_for_vae(adata: ad.AnnData, args: argparse.Namespace) -> np.ndarray:
+def _matrix_column_scores(matrix: object, selection_mask: np.ndarray | None = None) -> np.ndarray:
+    if selection_mask is not None:
+        matrix = matrix[selection_mask, :]
+    if sp.issparse(matrix):
+        mean = np.asarray(matrix.mean(axis=0)).ravel()
+        second = np.asarray(matrix.power(2).mean(axis=0)).ravel()
+    else:
+        arr = np.asarray(matrix)
+        mean = arr.mean(axis=0)
+        second = (arr ** 2).mean(axis=0)
+    var = np.maximum(second - mean ** 2, 0.0)
+    return np.log1p(var / np.maximum(mean, 1e-8))
+
+
+def _column_mask_for_vae(
+    adata: ad.AnnData,
+    args: argparse.Namespace,
+    *,
+    selection_mask: np.ndarray | None = None,
+) -> np.ndarray:
     n_top = int(args.expression_top_genes)
+    if selection_mask is not None:
+        selection_mask = np.asarray(selection_mask, dtype=bool)
+        if selection_mask.shape != (adata.n_obs,):
+            raise ValueError("selection_mask must have shape [adata.n_obs].")
+        if not selection_mask.any():
+            raise ValueError("selection_mask for VAE gene selection is empty.")
     if args.expression_gene_mask_col and args.expression_gene_mask_col in adata.var:
         mask = np.asarray(adata.var[args.expression_gene_mask_col]).astype(bool)
         if mask.any():
@@ -191,15 +230,7 @@ def _column_mask_for_vae(adata: ad.AnnData, args: argparse.Namespace) -> np.ndar
                     keep = masked_idx[order[:n_top]]
                 else:
                     matrix = adata.layers[args.vae_layer] if args.vae_layer in adata.layers else adata.X
-                    if sp.issparse(matrix):
-                        mean = np.asarray(matrix.mean(axis=0)).ravel()
-                        second = np.asarray(matrix.power(2).mean(axis=0)).ravel()
-                    else:
-                        arr = np.asarray(matrix)
-                        mean = arr.mean(axis=0)
-                        second = (arr ** 2).mean(axis=0)
-                    var = np.maximum(second - mean ** 2, 0.0)
-                    score = np.log1p(var / np.maximum(mean, 1e-8))
+                    score = _matrix_column_scores(matrix, selection_mask=selection_mask)
                     order = np.argsort(score[masked_idx])[::-1]
                     keep = masked_idx[order[:n_top]]
                 capped = np.zeros(adata.n_vars, dtype=bool)
@@ -209,15 +240,7 @@ def _column_mask_for_vae(adata: ad.AnnData, args: argparse.Namespace) -> np.ndar
     if n_top <= 0 or n_top >= adata.n_vars:
         return np.ones(adata.n_vars, dtype=bool)
     matrix = adata.layers[args.vae_layer] if args.vae_layer in adata.layers else adata.X
-    if sp.issparse(matrix):
-        mean = np.asarray(matrix.mean(axis=0)).ravel()
-        second = np.asarray(matrix.power(2).mean(axis=0)).ravel()
-    else:
-        arr = np.asarray(matrix)
-        mean = arr.mean(axis=0)
-        second = (arr ** 2).mean(axis=0)
-    var = np.maximum(second - mean ** 2, 0.0)
-    score = np.log1p(var / np.maximum(mean, 1e-8))
+    score = _matrix_column_scores(matrix, selection_mask=selection_mask)
     keep = np.argsort(score)[::-1][:n_top]
     mask = np.zeros(adata.n_vars, dtype=bool)
     mask[keep] = True
@@ -236,15 +259,16 @@ def _load_latent(
     if args.latent_source != "vae":
         raise ValueError(f"Unknown latent source {args.latent_source!r}")
     matrix = adata.layers[args.vae_layer] if args.vae_layer in adata.layers else adata.X
-    gene_mask = _column_mask_for_vae(adata, args)
-    matrix_all = matrix[row_mask, :][:, gene_mask]
-    matrix_all = log1p_normalize_expression_matrix(matrix_all)
     if fit_mask is None:
         fit_mask = row_mask
     if fit_mask.shape != row_mask.shape:
         raise ValueError("fit_mask must have the same length as row_mask.")
     if not fit_mask.any():
         raise ValueError("VAE fit mask is empty.")
+    selection_mask = fit_mask if args.vae_fit_source_only else row_mask
+    gene_mask = _column_mask_for_vae(adata, args, selection_mask=selection_mask)
+    matrix_all = matrix[row_mask, :][:, gene_mask]
+    matrix_all = log1p_normalize_expression_matrix(matrix_all)
     matrix_fit = matrix[fit_mask, :][:, gene_mask]
     matrix_fit = log1p_normalize_expression_matrix(matrix_fit)
     device = "cuda" if args.device == "auto" else args.device
@@ -313,6 +337,16 @@ def _load_latent(
             "weight_decay": float(args.vae_weight_decay),
             "kl_weight": float(args.vae_kl_weight),
             "kl_warmup_epochs": int(args.vae_kl_warmup_epochs),
+            "gene_selection_method": (
+                "rank_col"
+                if args.expression_gene_rank_col and args.expression_gene_rank_col in adata.var
+                else "score_col"
+                if args.expression_gene_score_col and args.expression_gene_score_col in adata.var
+                else "fallback_dispersion"
+            ),
+            "gene_selection_scope": "source_only" if args.vae_fit_source_only else "requested_cells",
+            "gene_rank_col": str(args.expression_gene_rank_col or ""),
+            "gene_score_col": str(args.expression_gene_score_col or ""),
         },
         train_cell_indices=np.flatnonzero(fit_mask).astype(int).tolist(),
         latent_standardization=stats,
@@ -347,6 +381,10 @@ def _physical_times(obs: pd.DataFrame, labels: list[str], args: argparse.Namespa
 
 def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData:
     adata = ad.read_h5ad(args.data_path)
+    args.adata_n_obs = int(adata.n_obs)
+    args.adata_n_vars = int(adata.n_vars)
+    args.adata_obs_columns = [str(col) for col in adata.obs.columns]
+    args.adata_var_names_sha256 = _sha256_text_lines([str(name) for name in adata.var_names])
     obs_all = adata.obs.copy()
     target_labels = _parse_csv(args.target_labels)
     labels = [args.source_label] + target_labels
@@ -380,7 +418,10 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
 
     cell_df = obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].reset_index(drop=True)
     mass_group_cols = ["perturbation_id", "time_label", "sample_id"]
-    if args.mass_mode == "count" or not (args.mass_col and args.mass_col in obs.columns):
+    mass_col_present = bool(args.mass_col and args.mass_col in obs.columns)
+    if args.mass_mode == "count":
+        resolved_mass_mode = "count"
+        mass_mode_reason = "explicit_count_mode"
         mass_df = (
             obs.groupby(mass_group_cols, observed=True)
             .size()
@@ -388,33 +429,64 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
             .rename("mass")
             .reset_index()
         )
+    elif not args.mass_col:
+        if args.mass_mode == "auto":
+            resolved_mass_mode = "count"
+            mass_mode_reason = "auto_no_mass_column_requested"
+            mass_df = (
+                obs.groupby(mass_group_cols, observed=True)
+                .size()
+                .astype(float)
+                .rename("mass")
+                .reset_index()
+            )
+        else:
+            raise ValueError(f"--mass-mode {args.mass_mode} requires --mass-col.")
+    elif not mass_col_present:
+        if args.mass_mode == "auto":
+            resolved_mass_mode = "count"
+            mass_mode_reason = f"auto_missing_mass_column:{args.mass_col}"
+            mass_df = (
+                obs.groupby(mass_group_cols, observed=True)
+                .size()
+                .astype(float)
+                .rename("mass")
+                .reset_index()
+            )
+        else:
+            raise KeyError(f"--mass-col {args.mass_col!r} not found in AnnData obs.")
     else:
         mass_values = obs[args.mass_col].astype(float)
         if not np.isfinite(mass_values.to_numpy()).all() or np.any(mass_values.to_numpy() <= 0):
-            raise ValueError("--mass-col must contain positive finite per-cell mass contributions.")
+            raise ValueError("--mass-col must contain positive finite mass values.")
         group = obs.assign(_mass=mass_values).groupby(mass_group_cols, observed=True)["_mass"]
         constant_groups = group.nunique().le(1)
-        ambiguous_constant = bool(constant_groups.all() and group.size().median() > 1)
+        multicell_groups = group.size().gt(1)
+        ambiguous_constant = bool((constant_groups & multicell_groups).any())
         if args.mass_mode == "auto":
             if ambiguous_constant:
                 raise ValueError(
-                    "--mass-col is constant within every multi-cell group. Specify "
+                    "--mass-col is constant within at least one multi-cell group. Specify "
                     "--mass-mode group_total if values are group-level totals, or "
                     "--mass-mode per_cell_contribution if they should be summed."
                 )
-            mass_mode = "per_cell_contribution"
+            resolved_mass_mode = "per_cell_contribution"
+            mass_mode_reason = "auto_nonconstant_mass_values"
         else:
-            mass_mode = args.mass_mode
+            resolved_mass_mode = args.mass_mode
+            mass_mode_reason = f"explicit_{resolved_mass_mode}"
 
-        if mass_mode == "group_total":
+        if resolved_mass_mode == "group_total":
             bad = constant_groups[~constant_groups]
             if len(bad) > 0:
                 raise ValueError("--mass-mode group_total requires exactly one unique mass value per group.")
             mass_df = group.first().rename("mass").reset_index()
-        elif mass_mode == "per_cell_contribution":
+        elif resolved_mass_mode == "per_cell_contribution":
             mass_df = group.sum().rename("mass").reset_index()
         else:
-            raise ValueError(f"Unsupported mass mode for --mass-col: {mass_mode!r}")
+            raise ValueError(f"Unsupported mass mode for --mass-col: {resolved_mass_mode!r}")
+    args.resolved_mass_mode = resolved_mass_mode
+    args.mass_mode_resolution_reason = mass_mode_reason
 
     pids = sorted(obs["perturbation_id"].unique().tolist())
     control_mask = _as_bool(obs[args.control_col])
@@ -434,7 +506,7 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg = RunConfig(output_dir=args.output_dir, device=args.device)
     cfg.git_sha = _git_sha()
     cfg.data.mass_value_col = args.mass_col
-    cfg.data.mass_mode = args.mass_mode
+    cfg.data.mass_mode = getattr(args, "resolved_mass_mode", args.mass_mode)
     cfg.latent.source = "vae" if args.latent_source == "vae" else "pca"
     cfg.latent.key = "X_vae" if args.latent_source == "vae" else args.latent_key
     cfg.latent.dim = latent_dim
@@ -476,6 +548,24 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     return cfg
 
 
+def _sha256_text_lines(lines: list[str]) -> str:
+    import hashlib
+
+    payload = "\n".join(lines).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _dependency_versions() -> dict[str, str | None]:
+    names = ["anndata", "numpy", "pandas", "scipy", "torch"]
+    versions: dict[str, str | None] = {}
+    for name in names:
+        try:
+            versions[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            versions[name] = None
+    return versions
+
+
 def write_run_manifest(args: argparse.Namespace, output_dir: str | Path) -> None:
     from credo import __version__ as credo_version
 
@@ -484,10 +574,20 @@ def write_run_manifest(args: argparse.Namespace, output_dir: str | Path) -> None
     manifest = {
         "package_version": credo_version,
         "git_sha": _git_sha(),
+        "git_dirty": _git_dirty(),
         "python": sys.version,
         "platform": platform.platform(),
         "torch": torch.__version__,
+        "torch_cuda_version": torch.version.cuda,
         "cuda_available": bool(torch.cuda.is_available()),
+        "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+        "dependency_versions": _dependency_versions(),
+        "resolved_mass_mode": getattr(args, "resolved_mass_mode", None),
+        "mass_mode_resolution_reason": getattr(args, "mass_mode_resolution_reason", None),
+        "adata_n_obs": getattr(args, "adata_n_obs", None),
+        "adata_n_vars": getattr(args, "adata_n_vars", None),
+        "adata_obs_columns": getattr(args, "adata_obs_columns", None),
+        "adata_var_names_sha256": getattr(args, "adata_var_names_sha256", None),
         "command": " ".join(sys.argv),
         "args": {
             key: str(value) if isinstance(value, Path) else value
@@ -521,8 +621,8 @@ def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path)
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
-    write_run_manifest(args, args.output_dir)
     study = build_study_from_anndata(args)
+    write_run_manifest(args, args.output_dir)
     write_input_manifests(study, args.output_dir)
     labels = [args.source_label] + _parse_csv(args.target_labels)
     by_sample = args.key_mode == "sample_aware"

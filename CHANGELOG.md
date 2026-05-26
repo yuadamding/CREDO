@@ -5,6 +5,26 @@
 - Marked the package release as `credo==2.0.9`.
 - Preserved the 2.0.8 correctness-hardening state with soft-reference,
   explicit mass-mode, semantic-invariant, and trajectory provenance fixes.
+- Hardened trajectory runner mass semantics so explicit `group_total` and
+  `per_cell_contribution` modes fail when `--mass-col` is absent, while
+  `auto` rejects any constant multi-cell group instead of silently guessing.
+- Made fallback VAE gene selection use the VAE fitting subset when source-only
+  fitting is requested, preventing target-time expression from choosing genes.
+- Added provenance fields for resolved mass mode, AnnData shape/schema,
+  dependency versions, CUDA details, git dirty status, and var-name hashes.
+- Added semantic regressions for soft-reference counterfactual embedding
+  context, extreme mass-faithful context values, strict mass-mode behavior,
+  and VAE source-only fallback gene selection.
+- Added `weighted_mean_shift_l2_fact_vs_ref` as the explicit name for the
+  current counterfactual mean-shift metric while retaining the legacy
+  `geom_shift_fact_vs_ref` alias for compatibility.
+- Added biological interpretation gates to the HNSCC effect summary: fold
+  stability, same-gene guide concordance, negative-control null gap,
+  counterfactual replicate support, plasticity/diffusion stability, and
+  context-ablation evidence are now emitted alongside priority classes.
+- Added counterfactual provenance fields and a `counterfactual_manifest.json`
+  that records same-start/same-noise, reference-consistent control rollout,
+  context-clamping, and the weighted-mean geometry metric convention.
 
 ## 2.0.8
 

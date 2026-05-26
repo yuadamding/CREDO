@@ -39,6 +39,12 @@ def rollout_metrics_by_key_time(
             idx = checkpoint_indices[label]
             pred_log_mass = rollout.log_m0[g] + torch.logsumexp(rollout.logw_steps[idx, g], dim=0)
             target_log_mass = pred_log_mass.new_tensor(float(target_mu.total_mass)).log()
+            source_log_mass = pred_log_mass.new_tensor(float(source_mu.total_mass)).log()
+            physical_duration = float(
+                view.trajectory.time_axis.physical(label)
+                - view.trajectory.time_axis.physical(view.source_label)
+            )
+            log_mass_delta = pred_log_mass - source_log_mass
             if isinstance(key, tuple):
                 sample_id, perturbation_id = key
             else:
@@ -54,15 +60,18 @@ def rollout_metrics_by_key_time(
                     "normalized_tau": float(view.trajectory.tau(label)),
                     "physical_time": float(view.trajectory.time_axis.physical(label)),
                     "source_physical_time": float(view.trajectory.time_axis.physical(view.source_label)),
-                    "interval_physical_duration": float(
-                        view.trajectory.time_axis.physical(label)
-                        - view.trajectory.time_axis.physical(view.source_label)
-                    ),
+                    "interval_physical_duration": physical_duration,
                     "n_source_cells": int(source_mu.n_atoms),
                     "n_target_cells": int(target_mu.n_atoms),
                     "source_mass": float(source_mu.total_mass),
                     "target_mass": float(target_mu.total_mass),
                     "predicted_mass": float(pred_log_mass.detach().exp().cpu()),
+                    "log_mass_delta": float(log_mass_delta.detach().cpu()),
+                    "log_mass_delta_per_physical_time": (
+                        float((log_mass_delta / physical_duration).detach().cpu())
+                        if physical_duration != 0.0
+                        else float("nan")
+                    ),
                     "log_mass_error": float(
                         (pred_log_mass - target_log_mass).detach().cpu()
                     ),

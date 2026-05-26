@@ -46,7 +46,7 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
                     "uot": 0.5,
                     "mass_pred": 10.0,
                     "mass_true": 10.0,
-                    "mass_rel_error": 0.0,
+                    "mass_rel_error": 0.2,
                     "is_control": True,
                     "n_init_atoms": 10,
                     "n_term_atoms": 10,
@@ -137,7 +137,95 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
     assert notch["counterfactual_n_folds"] == 2
     assert notch["delta_log_mass_fact_vs_ref_std"] > 0
     assert "priority_class_v2" in out.columns
+    assert "biological_interpretation_gate" in out.columns
+    assert "fold_stability_pass" in out.columns
+    assert "guide_concordance_pass" in out.columns
+    assert "negative_control_gap_pass" in out.columns
+    assert notch["biological_interpretation_gate"] == "needs-fold-stability"
     assert notch["shared_guide_null_gap"] > 0
+
+
+def test_biological_gates_detect_guide_discordance(tmp_path: Path) -> None:
+    cv_root = tmp_path / "with"
+    for fold in range(2):
+        run_dir = cv_root / "setting_a" / f"fold_{fold}"
+        run_dir.mkdir(parents=True)
+        (run_dir / "config.json").write_text(
+            json.dumps({"split": {"split_strategy": "random_kfold", "fold_index": fold}})
+        )
+        (run_dir / "results_summary.json").write_text(json.dumps({"shared_guide_embedding": False}))
+        pd.DataFrame(
+            [
+                {
+                    "perturbation_id": "GeneA_sg1",
+                    "mass_pred": 20.0,
+                    "mass_true": 10.0,
+                    "mass_rel_error": 0.1,
+                    "is_control": False,
+                    "n_init_atoms": 10,
+                    "n_term_atoms": 20,
+                },
+                {
+                    "perturbation_id": "GeneA_sg2",
+                    "mass_pred": 5.0,
+                    "mass_true": 10.0,
+                    "mass_rel_error": 0.1,
+                    "is_control": False,
+                    "n_init_atoms": 10,
+                    "n_term_atoms": 5,
+                },
+                {
+                    "perturbation_id": "NTC",
+                    "mass_pred": 10.0,
+                    "mass_true": 10.0,
+                    "mass_rel_error": 0.0,
+                    "is_control": True,
+                    "n_init_atoms": 10,
+                    "n_term_atoms": 10,
+                },
+            ]
+        ).to_csv(run_dir / "test_endpoint_metrics.csv", index=False)
+        pd.DataFrame(
+            [
+                {"perturbation_id": "GeneA_sg1", "pred_expansion_ratio": 2.0, "true_expansion_ratio": 2.0},
+                {"perturbation_id": "GeneA_sg2", "pred_expansion_ratio": 0.5, "true_expansion_ratio": 0.5},
+            ]
+        ).to_csv(run_dir / "test_state_metrics.csv", index=False)
+
+    cf = pd.DataFrame(
+        [
+            {"perturbation_id": "GeneA_sg1", "delta_log_mass_fact_vs_ref": 0.8, "diffusion_action_fact": 0.2},
+            {"perturbation_id": "GeneA_sg1", "delta_log_mass_fact_vs_ref": 0.9, "diffusion_action_fact": 0.3},
+            {"perturbation_id": "GeneA_sg2", "delta_log_mass_fact_vs_ref": -0.7, "diffusion_action_fact": 0.2},
+            {"perturbation_id": "GeneA_sg2", "delta_log_mass_fact_vs_ref": -0.8, "diffusion_action_fact": 0.3},
+        ]
+    )
+    cf_path = tmp_path / "counterfactual.csv"
+    cf.to_csv(cf_path, index=False)
+    out_dir = tmp_path / "out"
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "analysis" / "extract_biology_effects.py"),
+            "--cv-root",
+            str(cv_root),
+            "--counterfactual-effects",
+            str(cf_path),
+            "--output-dir",
+            str(out_dir),
+        ],
+        check=True,
+    )
+
+    out = pd.read_csv(out_dir / "biological_effects_per_perturbation.csv")
+    sg1 = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+    sg2 = out.loc[out["perturbation_id"].eq("GeneA_sg2")].iloc[0]
+    assert sg1["same_gene_n_guides"] == 2
+    assert sg2["same_gene_n_guides"] == 2
+    assert sg1["same_gene_sgrna_concordance"] == 0.5
+    assert sg1["guide_concordance_pass"] == np.False_
+    assert sg1["biological_interpretation_gate"] == "needs-guide-concordance"
 
 
 def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:

@@ -99,8 +99,10 @@ For the generic trajectory runner, finite-measure mass semantics are explicit:
 --mass-mode per_cell_contribution # per-cell mass contributions that should sum
 ```
 
-The default `--mass-mode auto` refuses ambiguous constant mass columns and asks
-you to choose `group_total` or `per_cell_contribution`.
+The default `--mass-mode auto` refuses any constant multi-cell mass group and
+asks you to choose `group_total` or `per_cell_contribution`. Explicit
+`group_total` and `per_cell_contribution` modes require `--mass-col`; only
+`count` intentionally ignores the mass column.
 
 Run the focused test suite:
 
@@ -117,6 +119,15 @@ python scripts/stress_test_trajectory_production.py \
   --counterfactual-cases 300 \
   --trainer-cases 100
 ```
+
+Biology summary tables include conservative interpretation gates. A ranked hit
+is marked `claim-ready` only when available evidence clears fold-stability,
+same-gene guide-concordance, negative-control null-gap, and claim-specific
+counterfactual checks. Ecology-dependent calls require context-ablation
+evidence; plasticity/state-shift calls require stable diffusion/action evidence.
+Otherwise the table records the missing condition, such as
+`needs-fold-stability`, `needs-guide-concordance`, or
+`needs-context-ablation`.
 
 ## Public Imports
 
@@ -148,3 +159,6 @@ per-key/time prediction tables.
 - Endpoint fitting uses finite-measure geometry plus log-mass consistency; the
   endpoint quantity is a Sinkhorn-geometry-plus-log-mass proxy, not a full
   KL-relaxed unbalanced OT solver.
+- Trajectory counterfactual output names the current distribution summary as
+  `weighted_mean_shift_l2_fact_vs_ref`; the older `geom_shift_fact_vs_ref`
+  column is retained as a compatibility alias.

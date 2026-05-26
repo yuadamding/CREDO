@@ -222,6 +222,7 @@ class TrajectoryCounterfactualEngine:
                     factual_clamped.logw_steps[idx, 0],
                 )
                 context_gap = float(torch.linalg.norm(mean_f - mean_fc).detach().cpu())
+            mean_shift_l2 = float(torch.linalg.norm(mean_f - mean_r).detach().cpu())
             rows.append(
                 {
                     "measure_key": str(measure_key),
@@ -232,7 +233,10 @@ class TrajectoryCounterfactualEngine:
                     "log_mass_factual": float(log_mass_f.detach().cpu()),
                     "log_mass_reference": float(log_mass_r.detach().cpu()),
                     "delta_log_mass_fact_vs_ref": float((log_mass_f - log_mass_r).detach().cpu()),
-                    "geom_shift_fact_vs_ref": float(torch.linalg.norm(mean_f - mean_r).detach().cpu()),
+                    "weighted_mean_shift_l2_fact_vs_ref": mean_shift_l2,
+                    # Backward-compatible alias. This is a mean shift, not a
+                    # full distributional Sinkhorn/Wasserstein geometry.
+                    "geom_shift_fact_vs_ref": mean_shift_l2,
                     "context_dependence_geom": context_gap,
                 }
             )

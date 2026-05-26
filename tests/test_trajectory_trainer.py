@@ -302,3 +302,4 @@ def test_trajectory_counterfactual_same_start_same_noise() -> None:
     assert result.factual_clamped is not None
     assert torch.allclose(result.factual_clamped.tau_steps, tau_grid)
     assert set(result.metrics_by_time["target_label"]) == {"6h", "10h"}
+    assert "weighted_mean_shift_l2_fact_vs_ref" in result.metrics_by_time.columns
