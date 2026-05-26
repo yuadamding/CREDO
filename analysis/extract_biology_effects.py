@@ -275,12 +275,18 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
     if "perturbation_id" not in df.columns:
         raise KeyError("Counterfactual effects file must contain perturbation_id.")
     raw = df.copy()
+    if "fold_id" in raw.columns:
+        dup = raw.duplicated(["perturbation_id", "fold_id"], keep=False)
+        if dup.any():
+            preview = raw.loc[dup, ["perturbation_id", "fold_id"]].head(5).to_dict("records")
+            raise ValueError(f"Duplicate counterfactual rows for perturbation/fold: {preview}")
     if raw["perturbation_id"].duplicated().any():
         agg_spec = {}
         stability_cols = {
             "delta_log_mass_fact_vs_ref",
             "geom_shift_fact_vs_ref",
             "weighted_mean_shift_l2_fact_vs_ref",
+            "energy_distance_fact_vs_ref",
             "growth_action_fact",
             "drift_action_fact",
             "diffusion_action_fact",
@@ -298,7 +304,13 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
             else:
                 agg_spec[col] = _mode_or_first
         out = raw.groupby("perturbation_id", dropna=False).agg(agg_spec).reset_index()
-        out["counterfactual_n_folds"] = raw.groupby("perturbation_id", dropna=False)["perturbation_id"].size().to_numpy()
+        if "fold_id" in raw.columns:
+            n_reps = raw.groupby("perturbation_id", dropna=False)["fold_id"].nunique()
+        elif "run_dir" in raw.columns:
+            n_reps = raw.groupby("perturbation_id", dropna=False)["run_dir"].nunique()
+        else:
+            n_reps = raw.groupby("perturbation_id", dropna=False)["perturbation_id"].size()
+        out["counterfactual_n_folds"] = out["perturbation_id"].map(n_reps).astype(int)
         for col in stability_cols:
             if col in raw.columns:
                 stability = (
@@ -333,6 +345,8 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
 
 def _add_guide_concordance(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    if "sgRNA_id" not in out.columns:
+        out["sgRNA_id"] = out["perturbation_id"]
     metric = None
     for candidate in ["delta_log_mass_fact_vs_ref", "pred_log_expansion_mean", "true_log_expansion_mean"]:
         if candidate in out.columns:
@@ -345,10 +359,11 @@ def _add_guide_concordance(df: pd.DataFrame) -> pd.DataFrame:
         return out
 
     work = out.loc[~out["target_gene"].astype(str).str.lower().eq("control")].copy()
+    guide_col = "sgRNA_id" if "sgRNA_id" in work.columns else "perturbation_id"
     guide_stats = (
         work.groupby("target_gene", dropna=False)
         .agg(
-            same_gene_n_guides=("perturbation_id", "nunique"),
+            same_gene_n_guides=(guide_col, "nunique"),
             same_gene_sgrna_concordance=(metric, _sign_consistency),
             same_gene_effect_abs_cv=(metric, _abs_cv),
         )
@@ -379,8 +394,11 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
 
     if "weighted_mean_shift_l2_fact_vs_ref" not in out.columns and "geom_shift_fact_vs_ref" in out.columns:
         out["weighted_mean_shift_l2_fact_vs_ref"] = out["geom_shift_fact_vs_ref"]
+    if "energy_distance_fact_vs_ref" not in out.columns:
+        out["energy_distance_fact_vs_ref"] = np.nan
     add_metric_null("delta_log_mass", "mass")
     add_metric_null("weighted_mean_shift_l2_fact_vs_ref", "mean_shift")
+    add_metric_null("energy_distance_fact_vs_ref", "distribution_shift")
     add_metric_null("context_dependence_geom", "context_dependence")
     add_metric_null("diffusion_action", "diffusion_action")
     out["control_null_abs_delta_log_mass_q95"] = out["mass_null_abs_q95"]
@@ -476,7 +494,7 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
                 return "needs-context-ablation"
         elif priority == "plasticity/state-shift":
             for pass_col, name in [
-                ("mean_shift_null_gap_pass", "mean-shift"),
+                ("distribution_shift_null_gap_pass", "distribution-shift"),
                 ("diffusion_action_null_gap_pass", "diffusion"),
             ]:
                 null_reason = null_gate(row, pass_col, name)
@@ -508,7 +526,7 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     out["plasticity_claim_ready"] = (
         stable
         & out["plasticity_stability_pass"]
-        & pass_series("mean_shift_null_gap_pass")
+        & pass_series("distribution_shift_null_gap_pass")
         & pass_series("diffusion_action_null_gap_pass")
     )
     out["ecology_claim_ready"] = (
@@ -518,11 +536,45 @@ def _add_biological_gates(df: pd.DataFrame) -> pd.DataFrame:
     )
     tsk = pd.to_numeric(out.get("z_delta_autocrine_tnf_tsk_score", pd.Series(0.0, index=out.index)), errors="coerce")
     pemt = pd.to_numeric(out.get("z_delta_pemt_score", pd.Series(0.0, index=out.index)), errors="coerce")
-    out["tsk_pemt_claim_ready"] = out["expansion_claim_ready"] & ((tsk >= 0.5) | (pemt >= 0.5))
+    out["tsk_pemt_claim_ready"] = stable & ((tsk >= 0.5) | (pemt >= 0.5))
     out["transformation_claim_ready"] = (
         out["tsk_pemt_claim_ready"]
         & (out["plasticity_claim_ready"] | out["ecology_claim_ready"])
     )
+    out["claim_ready_strict"] = out["claim_ready"]
+
+    def screening_ready(row: pd.Series) -> bool:
+        priority = str(row.get("priority_class", "watch"))
+        if priority == "artifact-watch":
+            return False
+        if pd.isna(row.get("delta_log_mass_fact_vs_ref", np.nan)):
+            return False
+        if not bool(row.get("counterfactual_replicate_pass", False)):
+            return False
+        if not bool(row.get("fold_stability_pass", False)):
+            return False
+        if str(row.get("guide_concordance_status", "not_assessable")) == "fail":
+            return False
+        explicit_mass = row.get("explicit_mass_mode_pass", pd.NA)
+        if pd.notna(explicit_mass) and not bool(explicit_mass):
+            return False
+        if priority == "ecology-dependent":
+            return bool(row.get("ecology_ablation_pass", False)) and null_gate(
+                row,
+                "context_dependence_null_gap_pass",
+                "context",
+            ) is None
+        if priority == "plasticity/state-shift":
+            return bool(row.get("plasticity_stability_pass", False)) and all(
+                null_gate(row, pass_col, name) is None
+                for pass_col, name in [
+                    ("distribution_shift_null_gap_pass", "distribution-shift"),
+                    ("diffusion_action_null_gap_pass", "diffusion"),
+                ]
+            )
+        return null_gate(row, "mass_null_gap_pass", "mass") is None
+
+    out["claim_ready_screening"] = out.apply(screening_ready, axis=1)
     out["claim_blocking_reasons"] = out["biological_interpretation_gate"].where(
         ~out["claim_ready"],
         "",
@@ -666,12 +718,15 @@ def main() -> None:
             "priority_score",
             "biological_interpretation_gate",
             "claim_ready",
+            "claim_ready_strict",
+            "claim_ready_screening",
             "claim_blocking_reasons",
             "fold_stability_pass",
             "guide_concordance_pass",
             "guide_concordance_status",
             "explicit_mass_mode_pass",
             "negative_control_gap_pass",
+            "distribution_shift_null_gap_pass",
             "expansion_claim_ready",
             "plasticity_claim_ready",
             "ecology_claim_ready",
@@ -680,6 +735,7 @@ def main() -> None:
             "delta_log_mass",
             "delta_log_mass_fact_vs_ref",
             "geom_shift_fact_vs_ref",
+            "energy_distance_fact_vs_ref",
             "delta_tnf_expansion_score",
             "delta_autocrine_tnf_tsk_score",
             "delta_pemt_score",

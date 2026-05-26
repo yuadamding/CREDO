@@ -131,6 +131,7 @@ def _run_one_fold(args: argparse.Namespace, run_dir: Path, device: str, fold_i: 
     split_name = "analysis" if args.source_split == "all" else args.source_split
 
     program_centroids = _program_centroids(config, obs, latent, original_split)
+    data_cfg = config.get("data", {}) if isinstance(config.get("data", {}), dict) else {}
     data = build_study_from_split(
         obs,
         latent,
@@ -138,6 +139,7 @@ def _run_one_fold(args: argparse.Namespace, run_dir: Path, device: str, fold_i: 
         split_name=split_name,
         mass_value_col=config.get("mass_value_col"),
         mass_scope=config.get("mass_scope", "subset_only"),
+        mass_mode=data_cfg.get("mass_mode") or config.get("mass_mode") or config.get("train_mass_mode", "auto"),
     )
 
     controls = set(config.get("control_ids", []))

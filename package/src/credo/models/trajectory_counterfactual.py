@@ -28,6 +28,18 @@ def _weighted_mean(z: torch.Tensor, logw: torch.Tensor) -> torch.Tensor:
     return (weights[:, None] * z).sum(dim=0)
 
 
+def _weighted_energy_distance(z_a: torch.Tensor, logw_a: torch.Tensor, z_b: torch.Tensor, logw_b: torch.Tensor) -> float:
+    w_a = torch.softmax(logw_a, dim=0)
+    w_b = torch.softmax(logw_b, dim=0)
+    d_ab = torch.cdist(z_a, z_b)
+    d_aa = torch.cdist(z_a, z_a)
+    d_bb = torch.cdist(z_b, z_b)
+    cross = (w_a[:, None] * w_b[None, :] * d_ab).sum()
+    self_a = (w_a[:, None] * w_a[None, :] * d_aa).sum()
+    self_b = (w_b[:, None] * w_b[None, :] * d_bb).sum()
+    return float(torch.clamp(2.0 * cross - self_a - self_b, min=0.0).detach().cpu())
+
+
 @dataclass
 class TrajectoryCounterfactualResult:
     """Counterfactual trajectory outputs for one measure key."""
@@ -215,6 +227,12 @@ class TrajectoryCounterfactualEngine:
             log_mass_r = reference.log_m0[0] + torch.logsumexp(reference.logw_steps[idx, 0], dim=0)
             mean_f = _weighted_mean(factual.z_steps[idx, 0], factual.logw_steps[idx, 0])
             mean_r = _weighted_mean(reference.z_steps[idx, 0], reference.logw_steps[idx, 0])
+            energy = _weighted_energy_distance(
+                factual.z_steps[idx, 0],
+                factual.logw_steps[idx, 0],
+                reference.z_steps[idx, 0],
+                reference.logw_steps[idx, 0],
+            )
             context_gap = float("nan")
             if factual_clamped is not None:
                 mean_fc = _weighted_mean(
@@ -234,6 +252,7 @@ class TrajectoryCounterfactualEngine:
                     "log_mass_reference": float(log_mass_r.detach().cpu()),
                     "delta_log_mass_fact_vs_ref": float((log_mass_f - log_mass_r).detach().cpu()),
                     "weighted_mean_shift_l2_fact_vs_ref": mean_shift_l2,
+                    "energy_distance_fact_vs_ref": energy,
                     # Backward-compatible alias. This is a mean shift, not a
                     # full distributional Sinkhorn/Wasserstein geometry.
                     "geom_shift_fact_vs_ref": mean_shift_l2,

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.0.11
+
+- Marked the package release as `credo==2.0.11`.
+- Promotes the 2.0.10 null-calibration and provenance hardening state:
+  HNSCC mass-mode semantics, control-guide counterfactual nulls, unique-fold
+  replicate counting, distributional state-shift metrics, strict/screening
+  claim-readiness, and hashed input/final manifests.
+
 ## 2.0.10
 
 - Marked the package release as `credo==2.0.10`.
@@ -7,6 +15,22 @@
   counterfactual provenance, VAE row-mask hashes, explicit mass-mode claim
   gating, metric-specific biological null gates, and conservative
   axis-specific claim-readiness outputs.
+- Added HNSCC mass-mode semantics matching the generic trajectory runner:
+  `count`, `group_total`, `per_cell_contribution`, and strict `auto` handling.
+- Added optional control-guide counterfactual output for metric-specific null
+  calibration via `--include-controls-for-null`.
+- Made counterfactual replicate support count unique `fold_id` or `run_dir`
+  values instead of raw rows, and reject duplicated perturbation/fold rows.
+- Added `energy_distance_fact_vs_ref` as a distributional state-shift metric
+  and require distribution-shift null support for plasticity claim readiness.
+- Decoupled TSK/pEMT claim readiness from expansion readiness while keeping
+  transformation readiness dependent on TSK/pEMT plus plasticity or ecology
+  support.
+- Guide concordance now uses `sgRNA_id` when available, and reports separate
+  strict versus screening claim-readiness columns.
+- The trajectory runner now writes `input_manifest.json` and
+  `final_manifest.json` with SHA256 hashes for key input-derived and output
+  artifacts.
 
 ## 2.0.9
 

@@ -158,6 +158,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-cells-p60", type=int, default=20)
     parser.add_argument("--mass-value-col", default=None)
     parser.add_argument("--mass-scope", choices=["full_obs", "subset_only"], default="subset_only")
+    parser.add_argument(
+        "--mass-mode",
+        choices=["auto", "count", "group_total", "per_cell_contribution"],
+        default="auto",
+        help=(
+            "Mass semantics for --mass-value-col. count ignores the column; "
+            "group_total uses one repeated group total; per_cell_contribution sums values; "
+            "auto refuses ambiguous repeated group totals."
+        ),
+    )
     parser.add_argument("--guide-confident-only", dest="guide_confident_only", action="store_true")
     parser.add_argument("--include-nonconfident", dest="guide_confident_only", action="store_false")
     parser.add_argument("--expression-gene-mask-col", default="hv_gene")
@@ -703,6 +713,7 @@ def main() -> None:
             split,
             mass_value_col=args.mass_value_col,
             mass_scope=args.mass_scope,
+            mass_mode=args.mass_mode,
         )
     else:
         train_data = build_study_from_split(
@@ -712,6 +723,7 @@ def main() -> None:
             split_name="train",
             mass_value_col=args.mass_value_col,
             mass_scope=args.mass_scope,
+            mass_mode=args.mass_mode,
         )
         test_data = build_study_from_split(
             obs,
@@ -720,6 +732,7 @@ def main() -> None:
             split_name="test",
             mass_value_col=args.mass_value_col,
             mass_scope=args.mass_scope,
+            mass_mode=args.mass_mode,
         )
     supported_pids = supported_intersection(
         train_data,
@@ -853,6 +866,7 @@ def main() -> None:
             "min_cells_p60": args.min_cells_p60,
             "mass_value_col": args.mass_value_col,
             "mass_scope": args.mass_scope,
+            "mass_mode": args.mass_mode,
         },
         model=ModelConfig(
             embedding_dim=args.embedding_dim,
@@ -1016,6 +1030,7 @@ def main() -> None:
         "max_train_target_atoms": args.max_train_target_atoms,
         "mass_value_col": args.mass_value_col,
         "mass_scope": args.mass_scope,
+        "mass_mode": args.mass_mode,
         "train_mass_mode": train_data.mass_table.df.attrs.get("mass_mode"),
         "test_mass_mode": test_data.mass_table.df.attrs.get("mass_mode"),
         "train_cells": int(train_data.cell_state.n_cells),
@@ -1252,6 +1267,7 @@ def main() -> None:
         f"- CPU threads / interop threads: `{args.cpu_threads}` / `{args.cpu_interop_threads}`",
         f"- Max train target atoms per perturbation: `{args.max_train_target_atoms}`",
         f"- Mass scope: `{args.mass_scope}`",
+        f"- Requested mass mode: `{args.mass_mode}`",
         f"- Train mass mode: `{train_data.mass_table.df.attrs.get('mass_mode')}`",
         f"- Test mass mode: `{test_data.mass_table.df.attrs.get('mass_mode')}`",
         f"- Supported perturbations: `{len(supported_pids)}`",

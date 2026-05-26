@@ -883,6 +883,7 @@ def build_study_from_split(
     split_name: str,
     mass_value_col: str | None = None,
     mass_scope: str = "subset_only",
+    mass_mode: str = "auto",
 ) -> PerturbSeqDynamicsData:
     """Build a split-specific study object.
 
@@ -902,27 +903,74 @@ def build_study_from_split(
     cell_df = sub_obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].copy()
     mass_obs = obs if mass_scope == "full_obs" else sub_obs
     mass_source_df = mass_obs[["perturbation_id", "time_label", "sample_id"]].copy()
-    if mass_value_col is None:
+    mass_group_cols = ["perturbation_id", "time_label", "sample_id"]
+    if mass_mode not in {"auto", "count", "group_total", "per_cell_contribution"}:
+        raise ValueError("mass_mode must be 'auto', 'count', 'group_total', or 'per_cell_contribution'.")
+    if mass_mode == "count":
         mass_df = (
-            mass_source_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
+            mass_source_df.groupby(mass_group_cols, observed=True)
             .size()
+            .astype(float)
             .rename("mass")
             .reset_index()
         )
-        mass_mode = f"{mass_scope}_cell_count_fallback"
-    else:
-        if mass_value_col not in mass_obs.columns:
+        resolved_mass_mode = f"{mass_scope}:count"
+    elif mass_value_col is None:
+        if mass_mode == "auto":
+            mass_df = (
+                mass_source_df.groupby(mass_group_cols, observed=True)
+                .size()
+                .astype(float)
+                .rename("mass")
+                .reset_index()
+            )
+            resolved_mass_mode = f"{mass_scope}:count:auto_no_mass_value_col"
+        else:
+            raise ValueError(f"mass_mode={mass_mode!r} requires mass_value_col.")
+    elif mass_value_col not in mass_obs.columns:
+        if mass_mode == "auto":
+            mass_df = (
+                mass_source_df.groupby(mass_group_cols, observed=True)
+                .size()
+                .astype(float)
+                .rename("mass")
+                .reset_index()
+            )
+            resolved_mass_mode = f"{mass_scope}:count:auto_missing_mass_value_col:{mass_value_col}"
+        else:
             raise KeyError(f"Requested mass_value_col {mass_value_col!r} not present in obs.")
-        mass_source_df[mass_value_col] = pd.to_numeric(mass_obs[mass_value_col], errors="coerce").fillna(0.0).to_numpy()
-        mass_df = (
-            mass_source_df.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)[mass_value_col]
-            .sum()
-            .rename("mass")
-            .reset_index()
-        )
-        mass_mode = f"{mass_scope}:{mass_value_col}_sum"
+    else:
+        values = pd.to_numeric(mass_obs[mass_value_col], errors="coerce")
+        if values.isna().any() or not np.isfinite(values.to_numpy()).all() or np.any(values.to_numpy() <= 0):
+            raise ValueError("mass_value_col must contain positive finite mass values.")
+        mass_source_df[mass_value_col] = values.to_numpy()
+        group = mass_source_df.groupby(mass_group_cols, observed=True)[mass_value_col]
+        constant_groups = group.nunique().le(1)
+        multicell_groups = group.size().gt(1)
+        ambiguous_constant = bool((constant_groups & multicell_groups).any())
+        if mass_mode == "auto":
+            if ambiguous_constant:
+                raise ValueError(
+                    "mass_value_col is constant within at least one multi-cell group. "
+                    "Use mass_mode='group_total' for group-level totals or "
+                    "mass_mode='per_cell_contribution' for values that should be summed."
+                )
+            resolved = "per_cell_contribution"
+            resolved_mass_mode = f"{mass_scope}:{mass_value_col}:auto_per_cell_contribution"
+        else:
+            resolved = mass_mode
+            resolved_mass_mode = f"{mass_scope}:{mass_value_col}:{resolved}"
+
+        if resolved == "group_total":
+            if (~constant_groups).any():
+                raise ValueError("mass_mode='group_total' requires exactly one unique mass value per group.")
+            mass_df = group.first().rename("mass").reset_index()
+        elif resolved == "per_cell_contribution":
+            mass_df = group.sum().rename("mass").reset_index()
+        else:
+            raise ValueError(f"Unsupported mass mode with mass_value_col: {resolved!r}")
     mass_df = mass_df.loc[pd.to_numeric(mass_df["mass"], errors="coerce").fillna(0.0) > 0].reset_index(drop=True)
-    mass_df.attrs["mass_mode"] = mass_mode
+    mass_df.attrs["mass_mode"] = resolved_mass_mode
 
     perturbation_ids = sorted(cell_df["perturbation_id"].unique().tolist())
     control_ids = sorted(sub_obs.loc[sub_obs["is_control"].astype(bool), "perturbation_id"].unique().tolist())
@@ -1339,6 +1387,7 @@ def build_study_from_vae_latent(
     *,
     mass_value_col: str | None = None,
     mass_scope: str = "subset_only",
+    mass_mode: str = "auto",
 ) -> tuple[PerturbSeqDynamicsData, PerturbSeqDynamicsData]:
     """Build train and test ``PerturbSeqDynamicsData`` from a VAE latent result.
 
@@ -1353,6 +1402,7 @@ def build_study_from_vae_latent(
         split_name="train",
         mass_value_col=mass_value_col,
         mass_scope=mass_scope,
+        mass_mode=mass_mode,
     )
     test_data = build_study_from_split(
         obs,
@@ -1361,5 +1411,6 @@ def build_study_from_vae_latent(
         split_name="test",
         mass_value_col=mass_value_col,
         mass_scope=mass_scope,
+        mass_mode=mass_mode,
     )
     return train_data, test_data

@@ -46,6 +46,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--max-perturbations", type=int, default=0)
     parser.add_argument("--perturbations", default="", help="Comma-separated perturbation ids.")
+    parser.add_argument(
+        "--include-controls-for-null",
+        action="store_true",
+        help="Also emit control-guide same-start counterfactuals for metric-specific null calibration.",
+    )
     parser.add_argument("--context-clamped", action="store_true")
     parser.add_argument("--fold-id", default=None, help="Optional fold label written to the output table.")
     return parser.parse_args()
@@ -173,6 +178,23 @@ def _weighted_mean(z: torch.Tensor, logw: torch.Tensor) -> torch.Tensor:
     return (w.unsqueeze(-1) * z).sum(dim=-2)
 
 
+def _weighted_energy_distance(
+    z_a: torch.Tensor,
+    logw_a: torch.Tensor,
+    z_b: torch.Tensor,
+    logw_b: torch.Tensor,
+) -> float:
+    w_a = torch.softmax(logw_a, dim=-1)
+    w_b = torch.softmax(logw_b, dim=-1)
+    d_ab = torch.cdist(z_a, z_b)
+    d_aa = torch.cdist(z_a, z_a)
+    d_bb = torch.cdist(z_b, z_b)
+    cross = (w_a[:, None] * w_b[None, :] * d_ab).sum()
+    self_a = (w_a[:, None] * w_a[None, :] * d_aa).sum()
+    self_b = (w_b[:, None] * w_b[None, :] * d_bb).sum()
+    return float(torch.clamp(2.0 * cross - self_a - self_b, min=0.0).item())
+
+
 def _entropy(logw: torch.Tensor) -> float:
     w = torch.softmax(logw, dim=-1)
     return float((-(w * torch.log(w + 1e-30)).sum(dim=-1)).item())
@@ -185,6 +207,33 @@ def _tensor_sha256(tensor: torch.Tensor) -> str:
     hasher.update(str(arr.dtype).encode("utf-8"))
     hasher.update(arr.tobytes())
     return hasher.hexdigest()
+
+
+def _select_counterfactual_pids(
+    available: list[str],
+    control_ids: set[str],
+    requested: list[str],
+    *,
+    include_controls_for_null: bool,
+    max_perturbations: int,
+) -> list[str]:
+    available_set = set(available)
+    requested_set = set(requested)
+    noncontrols = [pid for pid in available if pid not in control_ids]
+    if requested:
+        noncontrols = [pid for pid in noncontrols if pid in requested_set]
+    if max_perturbations > 0:
+        noncontrols = noncontrols[:max_perturbations]
+    controls = []
+    if include_controls_for_null:
+        controls = [pid for pid in available if pid in control_ids]
+        if requested:
+            controls = [pid for pid in controls if pid in requested_set]
+    selected = [*noncontrols, *controls]
+    missing = sorted(requested_set - available_set)
+    if missing:
+        raise KeyError(f"Requested perturbations not available in study: {missing}")
+    return selected
 
 
 def _action_deltas(fact: dict, ref: dict) -> dict:
@@ -250,6 +299,7 @@ def main() -> None:
         source_split = pd.Series("analysis", index=obs.index, dtype="object")
 
     program_centroids = _program_centroids(config, obs, latent, original_split)
+    data_cfg = config.get("data", {}) if isinstance(config.get("data", {}), dict) else {}
     data = build_study_from_split(
         obs,
         latent,
@@ -257,17 +307,20 @@ def main() -> None:
         split_name=split_name,
         mass_value_col=config.get("mass_value_col"),
         mass_scope=config.get("mass_scope", "subset_only"),
+        mass_mode=data_cfg.get("mass_mode") or config.get("mass_mode") or config.get("train_mass_mode", "auto"),
     )
     supported = [pid for pid in config["supported_perturbations"] if pid in data.catalog.perturbation_ids]
     requested = [pid.strip() for pid in args.perturbations.split(",") if pid.strip()]
-    if requested:
-        supported = [pid for pid in supported if pid in set(requested)]
     controls = set(config.get("control_ids", []))
-    supported = [pid for pid in supported if pid not in controls]
-    if args.max_perturbations > 0:
-        supported = supported[: args.max_perturbations]
+    supported = _select_counterfactual_pids(
+        supported,
+        controls,
+        requested,
+        include_controls_for_null=args.include_controls_for_null,
+        max_perturbations=args.max_perturbations,
+    )
     if not supported:
-        raise ValueError("No non-control perturbations selected for counterfactual analysis.")
+        raise ValueError("No perturbations selected for counterfactual analysis.")
     endpoint = data.to_endpoint_problem(supported, initial_label="P4", terminal_label="P60")
 
     model = _build_model(config, latent.shape[1], program_centroids, device)
@@ -295,6 +348,7 @@ def main() -> None:
         )
         noise_seed = seed + 100_000
         noise_steps = simulator.sample_noise_like(z0, args.n_steps, seed=noise_seed)
+        noise_steps_original = noise_steps.clone()
         factual = simulator.rollout(
             z0,
             logw0,
@@ -351,6 +405,12 @@ def main() -> None:
         fact_mean = _weighted_mean(factual.terminal_z[0], factual.terminal_logw[0])
         ref_mean = _weighted_mean(reference.terminal_z[0], reference.terminal_logw[0])
         mean_shift_l2 = float(torch.linalg.norm(fact_mean - ref_mean).item())
+        energy_distance = _weighted_energy_distance(
+            factual.terminal_z[0],
+            factual.terminal_logw[0],
+            reference.terminal_z[0],
+            reference.terminal_logw[0],
+        )
         fact_program = _program_summary(model, factual, state_labels)
         ref_program = _program_summary(model, reference, state_labels)
         program_shift = abs(fact_program["dominant_program_fraction"] - ref_program["dominant_program_fraction"])
@@ -363,6 +423,7 @@ def main() -> None:
             "perturbation_id": pid,
             "target_gene": infer_target_gene(pid),
             "sgRNA_id": pid,
+            "is_control": pid in controls,
             "fold_id": fold_id,
             "run_dir": str(run_dir),
             "source_split": args.source_split,
@@ -373,6 +434,7 @@ def main() -> None:
             "delta_log_mass_fact_vs_ref": fact_log_mass - ref_log_mass,
             "mass_ratio_fact_vs_ref": float(np.exp(fact_log_mass - ref_log_mass)),
             "weighted_mean_shift_l2_fact_vs_ref": mean_shift_l2,
+            "energy_distance_fact_vs_ref": energy_distance,
             "geometry_shift_l2": mean_shift_l2,
             "legacy_geom_shift_fact_vs_ref": mean_shift_l2,
             "geom_shift_fact_vs_ref": mean_shift_l2,
@@ -428,6 +490,11 @@ def main() -> None:
             row["geom_shift_ref_vs_ref_clamped"] = float(torch.linalg.norm(ref_mean - reference_clamped_mean).item())
             row["delta_log_mass_ref_vs_ref_clamped"] = row["log_mass_reference"] - row["log_mass_reference_clamped_context"]
             row["terminal_state_entropy_reference_clamped"] = _entropy(reference_clamped.terminal_logw[0])
+        if not torch.equal(noise_steps, noise_steps_original):
+            raise RuntimeError("Counterfactual rollout mutated explicit noise_steps.")
+        for flag in ["same_initial_particles", "same_initial_logw", "same_initial_log_m0", "common_noise"]:
+            if not bool(row[flag]):
+                raise RuntimeError(f"Counterfactual invariant failed for {pid}: {flag}")
         rows.append(row)
 
     out = pd.DataFrame(rows).sort_values("delta_log_mass_fact_vs_ref", ascending=False)
@@ -439,6 +506,7 @@ def main() -> None:
         "n_steps": int(args.n_steps),
         "seed": int(args.seed),
         "context_clamped": bool(args.context_clamped),
+        "include_controls_for_null": bool(args.include_controls_for_null),
         "control_rollout_mode": "reference_consistent",
         "same_initial_particles": bool(
             (out["initial_particles_sha256_factual"] == out["initial_particles_sha256_reference"]).all()

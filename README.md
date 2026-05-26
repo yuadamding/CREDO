@@ -124,11 +124,18 @@ Biology summary tables include conservative interpretation gates. A ranked hit
 is marked `claim-ready` only when evidence clears counterfactual replicate
 support, fold-stability, same-gene guide-concordance, metric-specific
 negative-control null gaps, explicit mass-mode metadata when available, and
-claim-specific counterfactual checks. Single guide genes are reported as
-`not_assessable` for guide concordance, not as a pass. Ecology-dependent calls
-require replicated context-ablation evidence; plasticity/state-shift calls
-require stable diffusion/action evidence and state-shift null support. The
-table records the missing condition, such as
+claim-specific counterfactual checks. Counterfactual null calibration can
+include control guides with `--include-controls-for-null`, and replicate
+support is counted from unique fold/run identifiers rather than raw rows.
+Single guide genes are reported as
+`not_assessable` for guide concordance, not as a pass. The table separates
+`claim_ready_strict` from `claim_ready_screening`; screening can retain
+otherwise well-supported single-guide candidates without marking them as
+strictly claim-ready. Ecology-dependent calls require replicated
+context-ablation evidence; plasticity/state-shift calls require stable
+diffusion/action evidence and distribution-shift null support. TSK/pEMT
+readiness is reported separately from expansion readiness. The table
+records the missing condition, such as
 `needs-counterfactual-replicates`, `needs-fold-stability`,
 `needs-guide-concordance`, `needs-explicit-mass-mode`, `missing-mass-null`,
 `below-context-null-gap`, or `needs-context-ablation`, and it also emits axis-specific columns such as
@@ -160,6 +167,8 @@ per-key/time prediction tables.
   reference branch removes the perturbation residual rather than swapping in a
   control initial population. The HNSCC counterfactual manifest computes
   same-start and same-noise flags from tensor checksums.
+- Trajectory runs write `input_manifest.json` and `final_manifest.json` with
+  hashes for key input-derived tables and output artifacts.
 - Ecological context is computed from absolute particle weights, including
   `log_m0`, so expansion and depletion affect global context.
 - Endpoint fitting uses finite-measure geometry plus log-mass consistency; the
@@ -168,3 +177,5 @@ per-key/time prediction tables.
 - Trajectory counterfactual output names the current distribution summary as
   `weighted_mean_shift_l2_fact_vs_ref`; the older `geom_shift_fact_vs_ref`
   column is retained as a compatibility alias.
+- Counterfactual biology output additionally emits `energy_distance_fact_vs_ref`
+  as a distributional state-shift metric for null-gated plasticity claims.

@@ -567,6 +567,14 @@ def _sha256_text_lines(lines: list[str]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _sha256_file(path: str | Path) -> str:
+    hasher = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def _dependency_versions() -> dict[str, str | None]:
     names = ["anndata", "numpy", "pandas", "scipy", "torch"]
     versions: dict[str, str | None] = {}
@@ -612,7 +620,10 @@ def write_run_manifest(args: argparse.Namespace, output_dir: str | Path) -> None
 def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    study.mass_table.df.to_csv(out / "mass_table.csv", index=False)
+    mass_table_path = out / "mass_table.csv"
+    cell_count_path = out / "cell_count_table.csv"
+    mass_summary_path = out / "mass_summary_by_time_sample.csv"
+    study.mass_table.df.to_csv(mass_table_path, index=False)
     cell_counts = (
         study.cell_state.df
         .groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
@@ -620,7 +631,7 @@ def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path)
         .rename("n_cells")
         .reset_index()
     )
-    cell_counts.to_csv(out / "cell_count_table.csv", index=False)
+    cell_counts.to_csv(cell_count_path, index=False)
     mass_summary = (
         study.mass_table.df
         .groupby(["time_label", "sample_id"], observed=True)["mass"]
@@ -628,7 +639,55 @@ def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path)
         .rename("total_mass")
         .reset_index()
     )
-    mass_summary.to_csv(out / "mass_summary_by_time_sample.csv", index=False)
+    mass_summary.to_csv(mass_summary_path, index=False)
+    input_manifest = {
+        "mass_table_sha256": _sha256_file(mass_table_path),
+        "cell_count_table_sha256": _sha256_file(cell_count_path),
+        "mass_summary_by_time_sample_sha256": _sha256_file(mass_summary_path),
+        "n_mass_rows": int(len(study.mass_table.df)),
+        "n_cell_count_rows": int(len(cell_counts)),
+    }
+    (out / "input_manifest.json").write_text(
+        json.dumps(input_manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+
+def write_final_manifest(output_dir: str | Path) -> None:
+    from credo import __version__ as credo_version
+
+    out = Path(output_dir)
+    paths = [
+        "run_manifest.json",
+        "input_manifest.json",
+        "mass_table.csv",
+        "cell_count_table.csv",
+        "mass_summary_by_time_sample.csv",
+        "trajectory_config.json",
+        "measure_key_manifest.csv",
+        "target_coverage_by_time.csv",
+        "training_history.csv",
+        "validation_history.csv",
+        "predicted_metrics_by_key_time.csv",
+        "checkpoint_last.pt",
+        "checkpoint_best.pt",
+        "checkpoint_best_ema.pt",
+    ]
+    outputs = {
+        rel: {"sha256": _sha256_file(out / rel), "bytes": int((out / rel).stat().st_size)}
+        for rel in paths
+        if (out / rel).exists()
+    }
+    manifest = {
+        "package_version": credo_version,
+        "git_sha": _git_sha(),
+        "git_dirty": _git_dirty(),
+        "outputs": outputs,
+    }
+    (out / "final_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -663,6 +722,7 @@ def main(argv: list[str] | None = None) -> None:
         output_dir=args.output_dir,
     )
     trainer.train()
+    write_final_manifest(args.output_dir)
 
 
 if __name__ == "__main__":

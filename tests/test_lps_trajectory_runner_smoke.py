@@ -103,13 +103,20 @@ def test_lps_trajectory_runner_smoke(tmp_path) -> None:
     assert (output_dir / "cell_count_table.csv").exists()
     assert (output_dir / "mass_summary_by_time_sample.csv").exists()
     assert (output_dir / "run_manifest.json").exists()
+    assert (output_dir / "input_manifest.json").exists()
+    assert (output_dir / "final_manifest.json").exists()
     mass_table = pd.read_csv(output_dir / "mass_table.csv")
     assert set(mass_table["mass"].round(6)) == {1.0}
     pred = pd.read_csv(output_dir / "predicted_metrics_by_key_time.csv")
     assert {"physical_time", "normalized_tau", "interval_physical_duration"}.issubset(pred.columns)
     manifest = json.loads((output_dir / "run_manifest.json").read_text())
-    assert manifest["package_version"] == "2.0.10"
+    assert manifest["package_version"] == "2.0.11"
     assert manifest["resolved_mass_mode"] == "group_total"
+    input_manifest = json.loads((output_dir / "input_manifest.json").read_text())
+    final_manifest = json.loads((output_dir / "final_manifest.json").read_text())
+    assert len(input_manifest["mass_table_sha256"]) == 64
+    assert final_manifest["package_version"] == "2.0.11"
+    assert "mass_table.csv" in final_manifest["outputs"]
 
 
 def test_lps_trajectory_runner_vae_source_only_with_extra_timepoint(tmp_path) -> None:

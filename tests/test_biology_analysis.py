@@ -8,6 +8,7 @@ from pathlib import Path
 import anndata as ad
 import numpy as np
 import pandas as pd
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +94,7 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
                 "fold_id": "fold_0",
                 "delta_log_mass_fact_vs_ref": 0.7,
                 "geom_shift_fact_vs_ref": 1.2,
+                "energy_distance_fact_vs_ref": 1.1,
                 "growth_action_fact": 0.3,
                 "drift_action_fact": 0.4,
                 "diffusion_action_fact": 0.5,
@@ -105,6 +107,7 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
                 "fold_id": "fold_1",
                 "delta_log_mass_fact_vs_ref": 0.9,
                 "geom_shift_fact_vs_ref": 1.4,
+                "energy_distance_fact_vs_ref": 1.3,
                 "growth_action_fact": 0.5,
                 "drift_action_fact": 0.6,
                 "diffusion_action_fact": 0.7,
@@ -141,6 +144,7 @@ def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> N
     assert np.isclose(notch["delta_log_mass_fact_vs_ref"], 0.8)
     assert np.isclose(notch["delta_log_mass"], 0.8)
     assert np.isclose(notch["geom_shift_fact_vs_ref"], 1.3)
+    assert np.isclose(notch["energy_distance_fact_vs_ref"], 1.2)
     assert np.isclose(notch["legacy_geom_shift_fact_vs_ref"], 1.3)
     assert np.isclose(notch["diffusion_action"], 0.6)
     assert np.isclose(notch["context_dependence_geom"], 0.7)
@@ -237,6 +241,31 @@ def test_biological_gates_detect_guide_discordance(tmp_path: Path) -> None:
     assert sg1["same_gene_sgrna_concordance"] == 0.5
     assert sg1["guide_concordance_pass"] == np.False_
     assert sg1["biological_interpretation_gate"] == "needs-guide-concordance"
+
+
+def test_guide_concordance_uses_sgrna_id_when_present() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "GeneA_collapsed",
+                "sgRNA_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "delta_log_mass_fact_vs_ref": 0.8,
+            },
+            {
+                "perturbation_id": "GeneA_collapsed",
+                "sgRNA_id": "GeneA_sg2",
+                "target_gene": "GENEA",
+                "delta_log_mass_fact_vs_ref": 0.9,
+            },
+        ]
+    )
+
+    out = mod._add_guide_concordance(df)
+
+    assert out["same_gene_n_guides"].iloc[0] == 2
+    assert out["same_gene_sgrna_concordance"].iloc[0] == 1.0
 
 
 def test_biological_gate_missing_fold_stability_does_not_pass() -> None:
@@ -402,6 +431,8 @@ def test_single_guide_is_not_claim_ready_strict() -> None:
     assert row["guide_concordance_status"] == "not_assessable"
     assert row["guide_concordance_pass"] == np.False_
     assert row["biological_interpretation_gate"] == "needs-guide-concordance"
+    assert row["claim_ready_strict"] == np.False_
+    assert row["claim_ready_screening"] == np.True_
 
 
 def test_metric_specific_context_null_blocks_ecology_claim() -> None:
@@ -438,6 +469,117 @@ def test_metric_specific_context_null_blocks_ecology_claim() -> None:
 
     assert row["context_dependence_null_gap_pass"] == np.False_
     assert row["biological_interpretation_gate"] == "below-context-null-gap"
+
+
+def test_counterfactual_n_folds_counts_unique_fold_ids(tmp_path: Path) -> None:
+    mod = _biology_module()
+    raw = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold_0",
+                "delta_log_mass_fact_vs_ref": 0.7,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold_1",
+                "delta_log_mass_fact_vs_ref": 0.9,
+            },
+        ]
+    )
+    path = tmp_path / "counterfactual_unique_folds.csv"
+    raw.to_csv(path, index=False)
+
+    out = mod._load_counterfactual_effects(path)
+
+    assert out.loc[0, "counterfactual_n_folds"] == 2
+
+
+def test_duplicate_counterfactual_fold_rows_raise(tmp_path: Path) -> None:
+    mod = _biology_module()
+    path = tmp_path / "dupe_cf.csv"
+    pd.DataFrame(
+        [
+            {"perturbation_id": "GeneA_sg1", "fold_id": "fold_0", "delta_log_mass_fact_vs_ref": 0.7},
+            {"perturbation_id": "GeneA_sg1", "fold_id": "fold_0", "delta_log_mass_fact_vs_ref": 0.8},
+        ]
+    ).to_csv(path, index=False)
+
+    with pytest.raises(ValueError, match="Duplicate counterfactual rows"):
+        mod._load_counterfactual_effects(path)
+
+
+def test_plasticity_claim_requires_distributional_metric_null() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+                "weighted_mean_shift_l2_fact_vs_ref": 0.05,
+                "diffusion_action": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "plasticity/state-shift",
+                "delta_log_mass": 1.0,
+                "delta_log_mass_fact_vs_ref": 1.0,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "diffusion_action": 1.0,
+                "diffusion_action_fact_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "weighted_mean_shift_l2_fact_vs_ref": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert pd.isna(row["distribution_shift_null_gap_pass"])
+    assert row["biological_interpretation_gate"] == "missing-distribution-shift-null"
+    assert row["plasticity_claim_ready"] == np.False_
+
+
+def test_tsk_pemt_claim_does_not_require_expansion_ready() -> None:
+    mod = _biology_module()
+    df = pd.DataFrame(
+        [
+            {
+                "perturbation_id": "ctrl",
+                "target_gene": "control",
+                "is_control": True,
+                "priority_class": "watch",
+                "delta_log_mass": 0.05,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "target_gene": "GENEA",
+                "is_control": False,
+                "priority_class": "growth-high",
+                "delta_log_mass": 0.01,
+                "delta_log_mass_fact_vs_ref": 0.01,
+                "delta_log_mass_fact_vs_ref_sign_consistency": 1.0,
+                "counterfactual_n_folds": 2,
+                "same_gene_n_guides": 2,
+                "same_gene_sgrna_concordance": 1.0,
+                "z_delta_autocrine_tnf_tsk_score": 1.0,
+            },
+        ]
+    )
+
+    out = mod._add_biological_gates(df)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["expansion_claim_ready"] == np.False_
+    assert row["tsk_pemt_claim_ready"] == np.True_
 
 
 def test_auto_mass_mode_metadata_blocks_claim_ready_when_present() -> None:
@@ -522,6 +664,23 @@ def test_counterfactual_tensor_hashes_reflect_equality() -> None:
 
     assert _tensor_sha256(x) == _tensor_sha256(y)
     assert _tensor_sha256(x) != _tensor_sha256(z)
+
+
+def test_counterfactual_pid_selection_can_include_controls_for_nulls() -> None:
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    from run_counterfactual_biology import _select_counterfactual_pids
+
+    selected = _select_counterfactual_pids(
+        ["ctrl", "GeneA_sg1", "GeneB_sg1"],
+        {"ctrl"},
+        [],
+        include_controls_for_null=True,
+        max_perturbations=1,
+    )
+
+    assert selected == ["GeneA_sg1", "ctrl"]
 
 
 def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:
