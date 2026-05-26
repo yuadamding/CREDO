@@ -1,10 +1,27 @@
 # Changelog
 
+## 2.0.9
+
+- Marked the package release as `credo==2.0.9`.
+- Preserved the 2.0.8 correctness-hardening state with soft-reference,
+  explicit mass-mode, semantic-invariant, and trajectory provenance fixes.
+
 ## 2.0.8
 
 - Marked the package release as `credo==2.0.8`.
 - Preserved the stabilized trajectory-trainer package state from the 2.0.6
   hardening pass.
+- Fixed soft-reference effective embeddings so controls receive exactly the
+  learned reference embedding and non-controls receive reference plus residual.
+- Added explicit trajectory runner mass modes (`count`,
+  `per_cell_contribution`, `group_total`) and made ambiguous constant
+  mass-column usage fail until the user declares semantics.
+- Added semantic invariant tests for soft-reference controls, mass-faithful
+  ecological context, stabilized log-weight invariance, and non-uniform
+  finite-measure particle initialization.
+- Added rank/score-aware VAE gene selection, fp32 weak/count loss evaluation
+  under mixed precision, physical-time columns in trajectory prediction tables,
+  and a lightweight `run_manifest.json`.
 
 ## 2.0.6
 

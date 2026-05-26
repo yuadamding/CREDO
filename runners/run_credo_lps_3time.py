@@ -29,6 +29,7 @@ def main(argv: list[str] | None = None) -> None:
         "--key-mode": "sample_aware",
         "--latent-source": "vae",
         "--vae-layer": "counts",
+        "--mass-mode": "per_cell_contribution",
         "--endpoint-time-weights": "6h:0.5,10h:1.0",
         "--steps-per-interval": "12",
     }

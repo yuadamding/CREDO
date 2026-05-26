@@ -16,6 +16,7 @@ class DataConfig(BaseModel):
     train_level: Literal["gene", "sgrna"] = "gene"
     min_total_mass: Optional[float] = None
     mass_value_col: Optional[str] = None
+    mass_mode: Literal["auto", "count", "per_cell_contribution", "group_total"] = "auto"
     mass_scope: Literal["full_obs", "subset_only"] = "subset_only"
 
 

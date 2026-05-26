@@ -7,15 +7,17 @@ to all downstream observed checkpoints.
 from __future__ import annotations
 
 import argparse
+import json
+import platform
 import subprocess
 import sys
-import warnings
 from pathlib import Path
 
 import anndata as ad
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
+import torch
 
 ROOT = Path(__file__).resolve().parent.parent / "package"
 sys.path.insert(0, str(ROOT / "src"))
@@ -87,6 +89,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sample-col", default="sample_id")
     parser.add_argument("--control-col", default="is_control")
     parser.add_argument("--mass-col", default="mass_value")
+    parser.add_argument(
+        "--mass-mode",
+        choices=["auto", "count", "per_cell_contribution", "group_total"],
+        default="auto",
+        help=(
+            "How to construct finite-measure masses. 'count' ignores --mass-col "
+            "and uses captured cell counts; 'per_cell_contribution' sums --mass-col "
+            "within each perturbation/time/sample group; 'group_total' requires "
+            "--mass-col to be constant within each group and uses that value once. "
+            "'auto' refuses ambiguous constant group masses."
+        ),
+    )
     parser.add_argument("--cell-id-col", default="cell_id")
     parser.add_argument("--source-label", default="90m")
     parser.add_argument("--target-labels", default="6h,10h")
@@ -116,6 +130,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--vae-fit-all-cells", dest="vae_fit_source_only", action="store_false")
     parser.set_defaults(vae_fit_source_only=True)
     parser.add_argument("--expression-gene-mask-col", default="hv_gene")
+    parser.add_argument("--expression-gene-rank-col", default="")
+    parser.add_argument("--expression-gene-score-col", default="")
     parser.add_argument("--expression-top-genes", type=int, default=2000)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--epochs", type=int, default=300)
@@ -164,7 +180,28 @@ def _column_mask_for_vae(adata: ad.AnnData, args: argparse.Namespace) -> np.ndar
         mask = np.asarray(adata.var[args.expression_gene_mask_col]).astype(bool)
         if mask.any():
             if n_top > 0 and int(mask.sum()) > n_top:
-                keep = np.flatnonzero(mask)[:n_top]
+                masked_idx = np.flatnonzero(mask)
+                if args.expression_gene_rank_col and args.expression_gene_rank_col in adata.var:
+                    rank = pd.to_numeric(adata.var[args.expression_gene_rank_col], errors="coerce").to_numpy()
+                    order = np.argsort(np.where(np.isfinite(rank[masked_idx]), rank[masked_idx], np.inf))
+                    keep = masked_idx[order[:n_top]]
+                elif args.expression_gene_score_col and args.expression_gene_score_col in adata.var:
+                    score = pd.to_numeric(adata.var[args.expression_gene_score_col], errors="coerce").to_numpy()
+                    order = np.argsort(np.where(np.isfinite(score[masked_idx]), score[masked_idx], -np.inf))[::-1]
+                    keep = masked_idx[order[:n_top]]
+                else:
+                    matrix = adata.layers[args.vae_layer] if args.vae_layer in adata.layers else adata.X
+                    if sp.issparse(matrix):
+                        mean = np.asarray(matrix.mean(axis=0)).ravel()
+                        second = np.asarray(matrix.power(2).mean(axis=0)).ravel()
+                    else:
+                        arr = np.asarray(matrix)
+                        mean = arr.mean(axis=0)
+                        second = (arr ** 2).mean(axis=0)
+                    var = np.maximum(second - mean ** 2, 0.0)
+                    score = np.log1p(var / np.maximum(mean, 1e-8))
+                    order = np.argsort(score[masked_idx])[::-1]
+                    keep = masked_idx[order[:n_top]]
                 capped = np.zeros(adata.n_vars, dtype=bool)
                 capped[keep] = True
                 return capped
@@ -342,36 +379,42 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
         obs["cell_id"] = obs.index.astype(str)
 
     cell_df = obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].reset_index(drop=True)
-    if args.mass_col and args.mass_col in obs.columns:
-        mass_values = obs[args.mass_col].astype(float)
-        if not np.isfinite(mass_values.to_numpy()).all() or np.any(mass_values.to_numpy() <= 0):
-            raise ValueError("--mass-col must contain positive finite per-cell mass contributions.")
-        mass_group_cols = [args.perturbation_col, args.time_col]
-        if args.key_mode == "sample_aware":
-            mass_group_cols.append(args.sample_col)
-        group = obs.assign(_mass=mass_values).groupby(mass_group_cols, observed=True)["_mass"]
-        if group.size().median() > 10 and group.nunique().median() <= 1:
-            warnings.warn(
-                "--mass-col appears constant within many groups. Confirm it is a per-cell "
-                "finite-measure contribution, not a repeated group-level mass.",
-                RuntimeWarning,
-                stacklevel=2,
-            )
+    mass_group_cols = ["perturbation_id", "time_label", "sample_id"]
+    if args.mass_mode == "count" or not (args.mass_col and args.mass_col in obs.columns):
         mass_df = (
-            obs.assign(_mass=mass_values)
-            .groupby(["perturbation_id", "time_label", "sample_id"], observed=True)["_mass"]
-            .sum()
-            .rename("mass")
-            .reset_index()
-        )
-    else:
-        mass_df = (
-            obs.groupby(["perturbation_id", "time_label", "sample_id"], observed=True)
+            obs.groupby(mass_group_cols, observed=True)
             .size()
             .astype(float)
             .rename("mass")
             .reset_index()
         )
+    else:
+        mass_values = obs[args.mass_col].astype(float)
+        if not np.isfinite(mass_values.to_numpy()).all() or np.any(mass_values.to_numpy() <= 0):
+            raise ValueError("--mass-col must contain positive finite per-cell mass contributions.")
+        group = obs.assign(_mass=mass_values).groupby(mass_group_cols, observed=True)["_mass"]
+        constant_groups = group.nunique().le(1)
+        ambiguous_constant = bool(constant_groups.all() and group.size().median() > 1)
+        if args.mass_mode == "auto":
+            if ambiguous_constant:
+                raise ValueError(
+                    "--mass-col is constant within every multi-cell group. Specify "
+                    "--mass-mode group_total if values are group-level totals, or "
+                    "--mass-mode per_cell_contribution if they should be summed."
+                )
+            mass_mode = "per_cell_contribution"
+        else:
+            mass_mode = args.mass_mode
+
+        if mass_mode == "group_total":
+            bad = constant_groups[~constant_groups]
+            if len(bad) > 0:
+                raise ValueError("--mass-mode group_total requires exactly one unique mass value per group.")
+            mass_df = group.first().rename("mass").reset_index()
+        elif mass_mode == "per_cell_contribution":
+            mass_df = group.sum().rename("mass").reset_index()
+        else:
+            raise ValueError(f"Unsupported mass mode for --mass-col: {mass_mode!r}")
 
     pids = sorted(obs["perturbation_id"].unique().tolist())
     control_mask = _as_bool(obs[args.control_col])
@@ -390,6 +433,8 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
 def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg = RunConfig(output_dir=args.output_dir, device=args.device)
     cfg.git_sha = _git_sha()
+    cfg.data.mass_value_col = args.mass_col
+    cfg.data.mass_mode = args.mass_mode
     cfg.latent.source = "vae" if args.latent_source == "vae" else "pca"
     cfg.latent.key = "X_vae" if args.latent_source == "vae" else args.latent_key
     cfg.latent.dim = latent_dim
@@ -431,6 +476,27 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     return cfg
 
 
+def write_run_manifest(args: argparse.Namespace, output_dir: str | Path) -> None:
+    from credo import __version__ as credo_version
+
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    manifest = {
+        "package_version": credo_version,
+        "git_sha": _git_sha(),
+        "python": sys.version,
+        "platform": platform.platform(),
+        "torch": torch.__version__,
+        "cuda_available": bool(torch.cuda.is_available()),
+        "command": " ".join(sys.argv),
+        "args": {
+            key: str(value) if isinstance(value, Path) else value
+            for key, value in vars(args).items()
+        },
+    }
+    (out / "run_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+
+
 def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -455,6 +521,7 @@ def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path)
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    write_run_manifest(args, args.output_dir)
     study = build_study_from_anndata(args)
     write_input_manifests(study, args.output_dir)
     labels = [args.source_label] + _parse_csv(args.target_labels)

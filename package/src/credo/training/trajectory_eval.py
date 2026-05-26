@@ -51,6 +51,13 @@ def rollout_metrics_by_key_time(
                     "embedding_id": embedding_id_for_measure_key(key),
                     "time_label": label,
                     "tau": float(view.trajectory.tau(label)),
+                    "normalized_tau": float(view.trajectory.tau(label)),
+                    "physical_time": float(view.trajectory.time_axis.physical(label)),
+                    "source_physical_time": float(view.trajectory.time_axis.physical(view.source_label)),
+                    "interval_physical_duration": float(
+                        view.trajectory.time_axis.physical(label)
+                        - view.trajectory.time_axis.physical(view.source_label)
+                    ),
                     "n_source_cells": int(source_mu.n_atoms),
                     "n_target_cells": int(target_mu.n_atoms),
                     "source_mass": float(source_mu.total_mass),

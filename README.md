@@ -78,6 +78,7 @@ Minimal LPS three-time trajectory smoke run:
 python runners/run_credo_lps_3time.py \
   --data-path ../inputs/LPS/credo_lps_90m_6h_10h_celltype.h5ad \
   --output-dir runs/lps_trajectory_smoke \
+  --mass-mode per_cell_contribution \
   --latent-source vae \
   --vae-layer counts \
   --vae-latent-dim 8 \
@@ -89,6 +90,17 @@ python runners/run_credo_lps_3time.py \
   --steps-per-interval 2 \
   --ecology-off
 ```
+
+For the generic trajectory runner, finite-measure mass semantics are explicit:
+
+```text
+--mass-mode count                 # use captured cell counts
+--mass-mode group_total           # one group-level mass value repeated on cells
+--mass-mode per_cell_contribution # per-cell mass contributions that should sum
+```
+
+The default `--mass-mode auto` refuses ambiguous constant mass columns and asks
+you to choose `group_total` or `per_cell_contribution`.
 
 Run the focused test suite:
 
@@ -123,3 +135,16 @@ keeps sample-aware `measure_key`s separate from string perturbation
 `embedding_id`s, rolls out one global-time path from a source label, evaluates
 checkpointed finite-measure losses at downstream target labels, and writes
 per-key/time prediction tables.
+
+## Semantic Guarantees
+
+- In `soft_ref` mode, controls have effective embedding equal to the learned
+  shared reference, and non-controls have reference plus residual.
+- Counterfactuals use the same source finite measure and particle seed; the
+  reference branch removes the perturbation residual rather than swapping in a
+  control initial population.
+- Ecological context is computed from absolute particle weights, including
+  `log_m0`, so expansion and depletion affect global context.
+- Endpoint fitting uses finite-measure geometry plus log-mass consistency; the
+  endpoint quantity is a Sinkhorn-geometry-plus-log-mass proxy, not a full
+  KL-relaxed unbalanced OT solver.

@@ -374,12 +374,12 @@ class TrajectoryTrainer:
         loss_weak = torch.tensor(0.0, device=self.device)
         if tc.lambda_weak > 0 and rollout.drift_steps is not None:
             loss_weak = self.weak_loss(
-                z_steps=rollout.z_steps,
-                logw_steps=rollout.logw_steps,
-                drift_steps=rollout.drift_steps,
-                sigma_steps=rollout.sigma_steps,
-                growth_steps=rollout.growth_steps,
-                tau_steps=rollout.tau_steps,
+                z_steps=rollout.z_steps.float(),
+                logw_steps=rollout.logw_steps.float(),
+                drift_steps=rollout.drift_steps.float(),
+                sigma_steps=rollout.sigma_steps.float(),
+                growth_steps=rollout.growth_steps.float(),
+                tau_steps=rollout.tau_steps.float(),
                 refresh_centers=(epoch % 10 == 0),
             )
 
@@ -391,21 +391,21 @@ class TrajectoryTrainer:
             and rollout.growth_steps is not None
         ):
             exposures = {
-                label: value.to(device=self.device, dtype=rollout.growth_steps.dtype)
+                label: value.to(device=self.device, dtype=torch.float32)
                 for label, value in self.count_data["exposures"].items()
             }
             count_matrices = {
-                label: value.to(device=self.device, dtype=rollout.growth_steps.dtype)
+                label: value.to(device=self.device, dtype=torch.float32)
                 for label, value in self.count_data["count_matrices"].items()
             }
             n_totals = {
-                label: value.to(device=self.device, dtype=rollout.growth_steps.dtype)
+                label: value.to(device=self.device, dtype=torch.float32)
                 for label, value in self.count_data["n_totals"].items()
             }
             loss_count, count_logs = self.count_lik.forward_with_logs(
-                growth_steps=rollout.growth_steps,
-                logw_steps=rollout.logw_steps,
-                tau_steps=rollout.tau_steps,
+                growth_steps=rollout.growth_steps.float(),
+                logw_steps=rollout.logw_steps.float(),
+                tau_steps=rollout.tau_steps.float(),
                 exposures=exposures,
                 count_matrices=count_matrices,
                 n_totals=n_totals,

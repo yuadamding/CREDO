@@ -104,18 +104,16 @@ class PerturbationEmbedding(nn.Module):
                 -1,
             )
         out = torch.zeros(len(perturbation_ids), self.embedding_dim, device=device, dtype=dtype)
-        if self.reference_embedding is not None:
-            out = out + self.reference_embedding.to(device=device, dtype=dtype).unsqueeze(0)
         for i, pid in enumerate(perturbation_ids):
             if pid not in self.control_ids and self.embeddings is not None:
                 local_idx = self._nc_to_local[pid]
                 out[i] = self.embeddings[local_idx]
-                if self.reference_embedding is not None:
-                    out[i] = out[i] + self.reference_embedding.to(device=device, dtype=dtype)
+        if self.reference_embedding is not None:
+            out = out + self.reference_embedding.to(device=device, dtype=dtype).unsqueeze(0)
         return out
 
     def control_anchor_is_exact(self) -> bool:
-        """Verify that control embeddings are exactly zero (no gradient flow)."""
+        """Verify that anchored-mode control residuals are exactly zero."""
         if self.shared_guide_embedding:
             return False
         if not self.anchor_controls:
