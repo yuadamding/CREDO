@@ -170,6 +170,7 @@ class ContextAggregator(nn.Module):
         logw: torch.Tensor,  # [G, N]  absolute log-weights
         a: torch.Tensor,     # [G, r]  perturbation embeddings (unused here, for API compat.)
         log_m0: torch.Tensor,  # [G]  log initial mass per perturbation
+        tau: torch.Tensor | float | None = None,  # accepted for transformer-compatible API
     ) -> ContextState:
         stats, _, _ = self.summarize_groups(z, logw, log_m0)
         return self.context_from_group_statistics(stats)

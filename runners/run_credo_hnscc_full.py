@@ -141,6 +141,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mediator-dim", type=int, default=8)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--depth", type=int, default=3)
+    parser.add_argument("--context-kind", choices=["mlp", "transformer"], default="mlp")
+    parser.add_argument("--transformer-token-dim", type=int, default=128)
+    parser.add_argument("--transformer-heads", type=int, default=4)
+    parser.add_argument("--transformer-within-layers", type=int, default=2)
+    parser.add_argument("--transformer-cross-layers", type=int, default=2)
+    parser.add_argument("--transformer-inducing", type=int, default=16)
+    parser.add_argument("--transformer-dropout", type=float, default=0.05)
+    parser.add_argument("--mass-attention-temperature", type=float, default=1.0)
+    parser.add_argument("--transformer-growth-only", dest="transformer_growth_only", action="store_true")
+    parser.add_argument("--transformer-all-coefficients", dest="transformer_growth_only", action="store_false")
+    parser.set_defaults(transformer_growth_only=False)
     parser.add_argument("--n-particles", type=int, default=128)
     parser.add_argument("--n-steps", type=int, default=16)
     parser.add_argument("--eval-particles", type=int, default=384)
@@ -879,6 +890,15 @@ def main() -> None:
             use_growth_intercept=args.use_growth_intercept,
             control_mode=args.control_mode,
             control_ref_penalty=args.lambda_control_ref,
+            context_kind=args.context_kind,
+            transformer_token_dim=args.transformer_token_dim,
+            transformer_heads=args.transformer_heads,
+            transformer_within_layers=args.transformer_within_layers,
+            transformer_cross_layers=args.transformer_cross_layers,
+            transformer_inducing=args.transformer_inducing,
+            transformer_dropout=args.transformer_dropout,
+            mass_attention_temperature=args.mass_attention_temperature,
+            transformer_growth_only=args.transformer_growth_only,
         ),
         simulation=SimulationConfig(
             n_particles=train_particles,
@@ -930,6 +950,15 @@ def main() -> None:
         program_assignment_scale=args.program_assignment_scale,
         control_mode=args.control_mode,
         control_ref_penalty=args.lambda_control_ref,
+        context_kind=args.context_kind,
+        transformer_token_dim=args.transformer_token_dim,
+        transformer_heads=args.transformer_heads,
+        transformer_within_layers=args.transformer_within_layers,
+        transformer_cross_layers=args.transformer_cross_layers,
+        transformer_inducing=args.transformer_inducing,
+        transformer_dropout=args.transformer_dropout,
+        mass_attention_temperature=args.mass_attention_temperature,
+        transformer_growth_only=args.transformer_growth_only,
     ).to(cfg.resolve_device())
 
     trainer = Trainer(model, cfg, train_ep, supported_pids, output_dir=str(output_dir))

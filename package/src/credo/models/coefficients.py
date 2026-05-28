@@ -172,14 +172,16 @@ class CoefficientNetworks(nn.Module):
         eta_z: Optional[torch.Tensor] = None,  # [G, N, K] for ecology
         q: Optional[torch.Tensor] = None,      # [K] for ecology
         s: Optional[torch.Tensor] = None,      # [L] for ecology (optional)
+        growth_context: Optional[torch.Tensor] = None,  # [C] optional growth-only context
     ) -> Coefficients:
         u = self._common_input(z, tau, context)   # [G, N, input_dim]
+        u_growth = u if growth_context is None else self._common_input(z, tau, growth_context)
 
         drift = self.drift_head(u, a)             # [G, N, d]
         sigma_raw = self.sigma_head(u, a)         # [G, N, d]
         sigma_diag = F.softplus(sigma_raw) + self.sigma_min  # [G, N, d]
 
-        growth_raw = self.growth_head(u, a).squeeze(-1)  # [G, N]
+        growth_raw = self.growth_head(u_growth, a).squeeze(-1)  # [G, N]
         if growth_intercept is not None:
             growth_raw = growth_raw + growth_intercept.unsqueeze(-1)
 

@@ -122,6 +122,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--physical-times", default="")
     parser.add_argument("--key-mode", choices=["pooled", "sample_aware"], default="sample_aware")
     parser.add_argument("--sparse-missing", choices=["mask", "error"], default="mask")
+    parser.add_argument("--validation-sample-ids", default="")
+    parser.add_argument("--cv-folds", type=int, default=0)
+    parser.add_argument("--cv-fold-index", type=int, default=0)
     parser.add_argument("--latent-source", choices=["pca", "obsm", "vae"], default="pca")
     parser.add_argument("--latent-key", default="X_pca")
     parser.add_argument("--vae-layer", default="counts")
@@ -163,6 +166,17 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mediator-dim", type=int, default=8)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--depth", type=int, default=3)
+    parser.add_argument("--context-kind", choices=["mlp", "transformer"], default="mlp")
+    parser.add_argument("--transformer-token-dim", type=int, default=128)
+    parser.add_argument("--transformer-heads", type=int, default=4)
+    parser.add_argument("--transformer-within-layers", type=int, default=2)
+    parser.add_argument("--transformer-cross-layers", type=int, default=2)
+    parser.add_argument("--transformer-inducing", type=int, default=16)
+    parser.add_argument("--transformer-dropout", type=float, default=0.05)
+    parser.add_argument("--mass-attention-temperature", type=float, default=1.0)
+    parser.add_argument("--transformer-growth-only", dest="transformer_growth_only", action="store_true")
+    parser.add_argument("--transformer-all-coefficients", dest="transformer_growth_only", action="store_false")
+    parser.set_defaults(transformer_growth_only=False)
     parser.add_argument("--control-mode", choices=["anchored", "free", "soft_ref"], default="soft_ref")
     parser.add_argument("--lambda-weak", type=float, default=0.1)
     parser.add_argument("--lambda-count", type=float, default=0.0)
@@ -517,6 +531,66 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
     )
 
 
+def _subset_study_by_samples(
+    study: PerturbSeqDynamicsData,
+    sample_ids: set[str],
+    *,
+    keep: bool,
+) -> PerturbSeqDynamicsData:
+    cells = study.cell_state.df["sample_id"].astype(str).isin(sample_ids).to_numpy()
+    mass = study.mass_table.df["sample_id"].astype(str).isin(sample_ids).to_numpy()
+    if not keep:
+        cells = ~cells
+        mass = ~mass
+    cell_df = study.cell_state.df.loc[cells].reset_index(drop=True)
+    if cell_df.empty:
+        raise ValueError("Sample split produced an empty cell-state table.")
+    mass_df = study.mass_table.df.loc[mass].reset_index(drop=True).copy()
+    if mass_df.empty:
+        raise ValueError("Sample split produced an empty mass table.")
+    mass_df.attrs.update(getattr(study.mass_table.df, "attrs", {}))
+    latent = study.cell_state.latent[cells].copy()
+    return PerturbSeqDynamicsData(
+        time_axis=study.time_axis,
+        catalog=study.catalog,
+        cell_state=CellStateTable(cell_df, latent),
+        mass_table=MassTable(mass_df),
+        latent_transform=study.latent_transform,
+        exposure_table=study.exposure_table,
+        replicate_counts=study.replicate_counts,
+        program_scores=study.program_scores,
+        truth=study.truth,
+    )
+
+
+def split_validation_samples(
+    study: PerturbSeqDynamicsData,
+    args: argparse.Namespace,
+) -> tuple[PerturbSeqDynamicsData, PerturbSeqDynamicsData | None]:
+    explicit = set(_parse_csv(args.validation_sample_ids))
+    if explicit and args.cv_folds:
+        raise ValueError("Use either --validation-sample-ids or --cv-folds, not both.")
+    if explicit:
+        val_samples = explicit
+    elif args.cv_folds and args.cv_folds > 1:
+        if args.cv_fold_index < 0 or args.cv_fold_index >= args.cv_folds:
+            raise ValueError("--cv-fold-index must be in [0, --cv-folds).")
+        samples = sorted(study.cell_state.df["sample_id"].astype(str).unique().tolist())
+        val_samples = {
+            sample
+            for idx, sample in enumerate(samples)
+            if idx % args.cv_folds == args.cv_fold_index
+        }
+    else:
+        return study, None
+    if not val_samples:
+        raise ValueError("Validation sample split selected no samples.")
+    train = _subset_study_by_samples(study, val_samples, keep=False)
+    validation = _subset_study_by_samples(study, val_samples, keep=True)
+    args.validation_sample_ids_resolved = sorted(val_samples)
+    return train, validation
+
+
 def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg = RunConfig(output_dir=args.output_dir, device=args.device)
     cfg.git_sha = _git_sha()
@@ -538,6 +612,15 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.model.mediator_dim = args.mediator_dim
     cfg.model.hidden_dim = args.hidden_dim
     cfg.model.depth = args.depth
+    cfg.model.context_kind = args.context_kind
+    cfg.model.transformer_token_dim = args.transformer_token_dim
+    cfg.model.transformer_heads = args.transformer_heads
+    cfg.model.transformer_within_layers = args.transformer_within_layers
+    cfg.model.transformer_cross_layers = args.transformer_cross_layers
+    cfg.model.transformer_inducing = args.transformer_inducing
+    cfg.model.transformer_dropout = args.transformer_dropout
+    cfg.model.mass_attention_temperature = args.mass_attention_temperature
+    cfg.model.transformer_growth_only = args.transformer_growth_only
     cfg.model.control_mode = args.control_mode
     cfg.model.ecological_growth = args.ecological_growth
     cfg.model.use_growth_intercept = args.use_growth_intercept
@@ -608,6 +691,9 @@ def write_run_manifest(args: argparse.Namespace, output_dir: str | Path) -> None
         "requested_mass_mode": getattr(args, "mass_mode", None),
         "resolved_mass_mode": getattr(args, "resolved_mass_mode", None),
         "mass_mode_resolution_reason": getattr(args, "mass_mode_resolution_reason", None),
+        "cv_folds": getattr(args, "cv_folds", 0),
+        "cv_fold_index": getattr(args, "cv_fold_index", 0),
+        "validation_sample_ids_resolved": getattr(args, "validation_sample_ids_resolved", None),
         "adata_n_obs": getattr(args, "adata_n_obs", None),
         "adata_n_vars": getattr(args, "adata_n_vars", None),
         "adata_obs_columns": getattr(args, "adata_obs_columns", None),
@@ -704,11 +790,17 @@ def write_final_manifest(output_dir: str | Path) -> None:
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     study = build_study_from_anndata(args)
+    study, validation_study = split_validation_samples(study, args)
     write_run_manifest(args, args.output_dir)
     write_input_manifests(study, args.output_dir)
     labels = [args.source_label] + _parse_csv(args.target_labels)
     by_sample = args.key_mode == "sample_aware"
     trajectory = study.to_sparse_trajectory_problem(by_sample=by_sample, time_labels=labels)
+    validation_trajectory = (
+        validation_study.to_sparse_trajectory_problem(by_sample=by_sample, time_labels=labels)
+        if validation_study is not None
+        else None
+    )
     cfg = build_config(args, latent_dim=study.latent_dim)
 
     model = FullDynamicsModel(
@@ -723,6 +815,15 @@ def main(argv: list[str] | None = None) -> None:
         ecological_growth=cfg.model.ecological_growth,
         use_growth_intercept=cfg.model.use_growth_intercept,
         control_mode=cfg.model.control_mode,
+        context_kind=cfg.model.context_kind,
+        transformer_token_dim=cfg.model.transformer_token_dim,
+        transformer_heads=cfg.model.transformer_heads,
+        transformer_within_layers=cfg.model.transformer_within_layers,
+        transformer_cross_layers=cfg.model.transformer_cross_layers,
+        transformer_inducing=cfg.model.transformer_inducing,
+        transformer_dropout=cfg.model.transformer_dropout,
+        mass_attention_temperature=cfg.model.mass_attention_temperature,
+        transformer_growth_only=cfg.model.transformer_growth_only,
     )
     trainer = TrajectoryTrainer(
         model=model,
@@ -730,6 +831,7 @@ def main(argv: list[str] | None = None) -> None:
         trajectory=trajectory,
         source_label=args.source_label,
         target_labels=_parse_csv(args.target_labels),
+        validation_trajectory=validation_trajectory,
         output_dir=args.output_dir,
     )
     trainer.train()

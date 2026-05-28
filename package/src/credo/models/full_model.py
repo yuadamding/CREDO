@@ -5,7 +5,7 @@ It computes the ecological context, then returns Coefficients and ContextState.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Literal, List, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -13,6 +13,7 @@ import torch.nn as nn
 from .embeddings import PerturbationEmbedding, TimeEmbedding
 from .context import ContextAggregator, ContextState
 from .coefficients import CoefficientNetworks, Coefficients
+from .transformer_context import MassAwareTransformerContextAggregator
 
 
 class FullDynamicsModel(nn.Module):
@@ -59,11 +60,22 @@ class FullDynamicsModel(nn.Module):
         program_assignment_scale: float = 1.0,
         control_mode: str = "soft_ref",
         control_ref_penalty: float = 5e-4,
+        context_kind: Literal["mlp", "transformer"] = "mlp",
+        transformer_token_dim: int = 128,
+        transformer_heads: int = 4,
+        transformer_within_layers: int = 2,
+        transformer_cross_layers: int = 2,
+        transformer_inducing: int = 16,
+        transformer_dropout: float = 0.05,
+        mass_attention_temperature: float = 1.0,
+        transformer_growth_only: bool = False,
     ) -> None:
         super().__init__()
         self.perturbation_ids = perturbation_ids
         self.control_ids = set(control_ids)
         self.control_mode = control_mode
+        self.context_kind = context_kind
+        self.transformer_growth_only = bool(transformer_growth_only)
         self.anchor_controls = control_mode == "anchored"
         self.latent_dim = latent_dim
         self.embedding_dim = embedding_dim
@@ -91,17 +103,54 @@ class FullDynamicsModel(nn.Module):
             shared_guide_embedding=shared_guide_embedding,
         )
 
-        self.context_agg = ContextAggregator(
-            latent_dim=latent_dim,
-            n_programs=self.n_programs,
-            mediator_dim=mediator_dim,
-            context_dim=context_dim,
-            hidden_dim=hidden_dim,
-            use_identity_context=True,
-            fixed_program_centroids=program_centroids,
-            program_assignment_scale=program_assignment_scale,
-            activation_checkpointing=activation_checkpointing,
-        )
+        if context_kind == "mlp":
+            self.context_agg = ContextAggregator(
+                latent_dim=latent_dim,
+                n_programs=self.n_programs,
+                mediator_dim=mediator_dim,
+                context_dim=context_dim,
+                hidden_dim=hidden_dim,
+                use_identity_context=True,
+                fixed_program_centroids=program_centroids,
+                program_assignment_scale=program_assignment_scale,
+                activation_checkpointing=activation_checkpointing,
+            )
+            self.meanfield_context_agg = None
+        elif context_kind == "transformer":
+            self.context_agg = MassAwareTransformerContextAggregator(
+                latent_dim=latent_dim,
+                embedding_dim=embedding_dim,
+                n_programs=self.n_programs,
+                mediator_dim=mediator_dim,
+                context_dim=context_dim,
+                hidden_dim=hidden_dim,
+                token_dim=transformer_token_dim,
+                n_heads=transformer_heads,
+                n_within_layers=transformer_within_layers,
+                n_cross_layers=transformer_cross_layers,
+                n_inducing=transformer_inducing,
+                dropout=transformer_dropout,
+                fixed_program_centroids=program_centroids,
+                program_assignment_scale=program_assignment_scale,
+                activation_checkpointing=activation_checkpointing,
+                mass_attention_temperature=mass_attention_temperature,
+            )
+            if self.transformer_growth_only:
+                self.meanfield_context_agg = ContextAggregator(
+                    latent_dim=latent_dim,
+                    n_programs=self.n_programs,
+                    mediator_dim=mediator_dim,
+                    context_dim=context_dim,
+                    hidden_dim=hidden_dim,
+                    use_identity_context=True,
+                    fixed_program_centroids=program_centroids,
+                    program_assignment_scale=program_assignment_scale,
+                    activation_checkpointing=activation_checkpointing,
+                )
+            else:
+                self.meanfield_context_agg = None
+        else:
+            raise ValueError(f"Unknown context_kind {context_kind!r}")
 
         self.coeff_nets = CoefficientNetworks(
             latent_dim=latent_dim,
@@ -135,23 +184,30 @@ class FullDynamicsModel(nn.Module):
         a = self.embedding(pids)   # [G, r]
         b_g = self.embedding.growth_intercepts(pids)  # [G]
 
-        ctx_state = self.context_agg(z, logw, a, log_m0)
+        ctx_state = self.context_agg(z, logw, a, log_m0, tau=tau)
         ctx = ctx_state.context    # [C]
+        base_context = ctx
+        growth_context = None
+        if self.transformer_growth_only and self.meanfield_context_agg is not None:
+            base_state = self.meanfield_context_agg(z, logw, a, log_m0, tau=tau)
+            base_context = base_state.context
+            growth_context = ctx
 
         # Get program scores for ecology (if enabled)
-        eta_z = self.context_agg.encoder.eta(z)   # [G, N, K]
+        eta_z, _ = self.context_agg.encode_particles(z)   # [G, N, K]
         q = ctx_state.q                             # [K]
         s = ctx_state.s                             # [L]
 
         coeffs = self.coeff_nets(
             z=z,
             tau=tau,
-            context=ctx,
+            context=base_context,
             a=a,
             growth_intercept=b_g,
             eta_z=eta_z,
             q=q,
             s=s,
+            growth_context=growth_context,
         )
 
         return coeffs, ctx_state

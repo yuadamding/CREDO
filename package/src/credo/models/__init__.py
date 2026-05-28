@@ -17,6 +17,8 @@ from .expression_vae import (
     standardize_latent,
 )
 from .full_model import FullDynamicsModel
+from .transformer_blocks import FeedForwardBlock, InducedSetAttentionBlock, MassBiasedCrossAttention
+from .transformer_context import MassAwareTransformerContextAggregator
 from .particles import (
     CounterfactualEngine,
     CounterfactualResult,
@@ -49,9 +51,13 @@ __all__ = [
     "EcologicalPayoff",
     "ExpressionVAE",
     "ExpressionVAETrainingSummary",
+    "FeedForwardBlock",
     "FullDynamicsModel",
     "GroupStatistics",
+    "InducedSetAttentionBlock",
     "LatentStandardization",
+    "MassAwareTransformerContextAggregator",
+    "MassBiasedCrossAttention",
     "ParticleRollout",
     "PerturbationEmbedding",
     "ProgramEncoder",

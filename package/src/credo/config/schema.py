@@ -92,6 +92,35 @@ class ModelConfig(BaseModel):
     n_payoff_ranks: int = 4
     control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"
     control_ref_penalty: float = 5e-4
+    context_kind: Literal["mlp", "transformer"] = "mlp"
+    transformer_token_dim: int = 128
+    transformer_heads: int = 4
+    transformer_within_layers: int = 2
+    transformer_cross_layers: int = 2
+    transformer_inducing: int = 16
+    transformer_dropout: float = 0.05
+    mass_attention_temperature: float = 1.0
+    transformer_growth_only: bool = False
+
+    @model_validator(mode="after")
+    def _validate_transformer_context(self) -> "ModelConfig":
+        if self.transformer_token_dim < 1:
+            raise ValueError("transformer_token_dim must be >= 1.")
+        if self.transformer_heads < 1:
+            raise ValueError("transformer_heads must be >= 1.")
+        if self.transformer_token_dim % self.transformer_heads != 0:
+            raise ValueError("transformer_token_dim must be divisible by transformer_heads.")
+        if self.transformer_within_layers < 1:
+            raise ValueError("transformer_within_layers must be >= 1.")
+        if self.transformer_cross_layers < 1:
+            raise ValueError("transformer_cross_layers must be >= 1.")
+        if self.transformer_inducing < 1:
+            raise ValueError("transformer_inducing must be >= 1.")
+        if not 0.0 <= self.transformer_dropout < 1.0:
+            raise ValueError("transformer_dropout must be in [0, 1).")
+        if self.mass_attention_temperature < 0:
+            raise ValueError("mass_attention_temperature must be >= 0.")
+        return self
 
 
 class SimulationConfig(BaseModel):

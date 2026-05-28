@@ -114,17 +114,23 @@ class TrajectoryTrainer:
             measure_keys=supported_measure_keys,
             sparse_missing=trc.sparse_missing,
         )
-        self.val_view = (
-            TrajectoryView(
+        self.val_view = None
+        if validation_trajectory is not None:
+            model_embedding_ids = set(model.perturbation_ids)
+            validation_measure_keys = [
+                key
+                for key in validation_trajectory.measures[source_label]
+                if embedding_id_for_measure_key(key) in model_embedding_ids
+            ]
+            if not validation_measure_keys:
+                raise ValueError("Validation trajectory has no source keys with trained embeddings.")
+            self.val_view = TrajectoryView(
                 trajectory=validation_trajectory,
                 source_label=source_label,
                 target_labels=self.target_labels,
-                measure_keys=[key for key in self.view.source_keys if key in validation_trajectory.measures[source_label]],
+                measure_keys=validation_measure_keys,
                 sparse_missing=trc.sparse_missing,
             )
-            if validation_trajectory is not None
-            else None
-        )
         if self.val_view is not None:
             self._validate_view_time_axis(self.val_view)
         self.measure_keys = self.view.source_keys

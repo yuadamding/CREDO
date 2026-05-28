@@ -215,16 +215,23 @@ def rollout_with_clamped_context(
         s = context[n_programs:]
         a = model.embedding(perturbation_ids)
         b = model.embedding.growth_intercepts(perturbation_ids)
-        eta_z = model.context_agg.encoder.eta(z)
+        eta_z, _ = model.context_agg.encode_particles(z)
+        base_context = context
+        growth_context = None
+        if getattr(model, "transformer_growth_only", False) and getattr(model, "meanfield_context_agg", None) is not None:
+            base_state = model.meanfield_context_agg(z, logw, a, log_m0, tau=tau_k)
+            base_context = base_state.context
+            growth_context = context
         coeffs = model.coeff_nets(
             z=z,
             tau=tau_k,
-            context=context,
+            context=base_context,
             a=a,
             growth_intercept=b,
             eta_z=eta_z,
             q=q,
             s=s,
+            growth_context=growth_context,
         )
 
         drift_list.append(coeffs.drift)
