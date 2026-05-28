@@ -93,13 +93,13 @@ class ModelConfig(BaseModel):
     control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"
     control_ref_penalty: float = 5e-4
     context_kind: Literal["mlp", "transformer"] = "mlp"
-    transformer_token_dim: int = 128
+    transformer_token_dim: int = 64
     transformer_heads: int = 4
-    transformer_within_layers: int = 2
-    transformer_cross_layers: int = 2
-    transformer_inducing: int = 16
+    transformer_within_layers: int = 1
+    transformer_cross_layers: int = 1
+    transformer_inducing: int = 8
     transformer_dropout: float = 0.05
-    mass_attention_temperature: float = 1.0
+    mass_attention_temperature: float = 0.5
     transformer_growth_only: bool = True
 
     @model_validator(mode="after")
@@ -134,7 +134,7 @@ class TrainingConfig(BaseModel):
     precision: Literal["fp32", "fp16", "bf16"] = "fp32"
     lr_net: float = 3e-4
     lr_embed: float = 1e-3
-    lr_transformer: float = 1e-4
+    lr_transformer: float = 5e-5
     weight_decay: float = 1e-6
     transformer_weight_decay: float = 1e-4
     grad_clip: float = 1.0

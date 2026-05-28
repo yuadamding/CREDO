@@ -409,6 +409,87 @@ def test_transformer_growth_only_clamped_rollout_smoke() -> None:
     assert clamped.growth_context_steps is not None
 
 
+def test_growth_only_clamped_rollout_uses_growth_context_for_ecology() -> None:
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    model.eval()
+    assert model.coeff_nets.ecology is not None
+    with torch.no_grad():
+        model.coeff_nets.ecology.P0.zero_()
+        model.coeff_nets.ecology.P0[:, 0] = 1.0
+        model.coeff_nets.ecology.P0[:, 1] = -1.0
+        if model.coeff_nets.ecology.P_pert is not None:
+            model.coeff_nets.ecology.P_pert.zero_()
+
+    z0 = torch.randn(1, 4, 2)
+    logw0 = torch.full((1, 4), -torch.log(torch.tensor(4.0)))
+    log_m0 = torch.tensor([0.0])
+    base_context = torch.tensor([[0.2, 0.3, 0.5, 0.0, 0.0]])
+    growth_context = torch.tensor([[1.0, 0.0, 0.0, 0.0, 0.0]])
+    legacy_context_a = torch.tensor([[1.0, 0.0, 0.0, 0.0, 0.0]])
+    legacy_context_b = torch.tensor([[0.0, 1.0, 0.0, 0.0, 0.0]])
+    noise = torch.zeros(1, 1, 4, 2)
+
+    clamped_a = rollout_with_clamped_context(
+        model=model,
+        z0=z0,
+        logw0=logw0,
+        log_m0=log_m0,
+        perturbation_ids=["gene_a"],
+        context_steps=legacy_context_a,
+        base_context_steps=base_context,
+        growth_context_steps=growth_context,
+        n_steps=1,
+        noise_steps=noise,
+    )
+    clamped_b = rollout_with_clamped_context(
+        model=model,
+        z0=z0,
+        logw0=logw0,
+        log_m0=log_m0,
+        perturbation_ids=["gene_a"],
+        context_steps=legacy_context_b,
+        base_context_steps=base_context,
+        growth_context_steps=growth_context,
+        n_steps=1,
+        noise_steps=noise,
+    )
+    changed_growth_context = rollout_with_clamped_context(
+        model=model,
+        z0=z0,
+        logw0=logw0,
+        log_m0=log_m0,
+        perturbation_ids=["gene_a"],
+        context_steps=legacy_context_a,
+        base_context_steps=base_context,
+        growth_context_steps=legacy_context_b,
+        n_steps=1,
+        noise_steps=noise,
+    )
+
+    assert torch.allclose(clamped_a.growth_steps, clamped_b.growth_steps, atol=1e-6)
+    assert torch.allclose(clamped_a.terminal_logw, clamped_b.terminal_logw, atol=1e-6)
+    assert not torch.allclose(clamped_a.growth_steps, changed_growth_context.growth_steps, atol=1e-5)
+
+
 def test_transformer_growth_only_clamped_rollout_requires_both_context_roles() -> None:
     model = FullDynamicsModel(
         perturbation_ids=["ctrl", "gene_a"],
@@ -1203,3 +1284,20 @@ def test_initialise_particles_measure_weighted_sampling_respects_atom_weights() 
     weighted_high_fraction = float((weighted_z[0, :, 0] == 10.0).float().mean().item())
     assert 0.4 < uniform_high_fraction < 0.6
     assert weighted_high_fraction < 0.05
+
+
+def test_initialise_particles_legacy_uniform_rejects_nonuniform_measure() -> None:
+    measure = FiniteMeasure(
+        support=np.asarray([[0.0], [10.0]], dtype=np.float32),
+        weights=np.asarray([0.99, 0.01], dtype=np.float32),
+        total_mass=1.0,
+    )
+    endpoint = EndpointProblem(
+        initial={"gene_a": measure},
+        terminal={"gene_a": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["gene_a"],
+    )
+
+    with pytest.raises(ValueError, match="non-uniform finite measure"):
+        initialise_particles(endpoint, ["gene_a"], 8, seed=3, sampling="legacy_uniform")
