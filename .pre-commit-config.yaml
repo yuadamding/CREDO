@@ -1,0 +1,14 @@
+repos:
+  - repo: local
+    hooks:
+      - id: source-hygiene
+        name: source hygiene
+        entry: python tests/check_source_hygiene.py
+        language: system
+        pass_filenames: false
+        files: ^(package|runners|tests|\.github)/.*\.(py|ya?ml)$|^.*\.ya?ml$
+      - id: git-diff-check
+        name: git diff whitespace check
+        entry: git diff --check
+        language: system
+        pass_filenames: false

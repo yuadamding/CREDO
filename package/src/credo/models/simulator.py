@@ -77,13 +77,14 @@ def initialise_particles(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Sample initial particles from the endpoint initial measure.
 
-    This preserves the original endpoint code path exactly: cells are sampled
-    uniformly from the support with ``torch.randint``.  Trajectory-specific
-    helpers may use finite-measure weights, but legacy P4/P60 training keeps
-    identical seeded starts.
+    ``sampling="uniform"`` preserves the original endpoint code path exactly:
+    cells are sampled uniformly from support with ``torch.randint``.  Use
+    ``sampling="legacy_uniform"`` when this legacy path should fail fast on a
+    non-uniform finite measure, or ``sampling="measure_weights"`` to sample
+    atoms by their finite-measure weights.
     """
-    if sampling not in {"uniform", "measure_weights"}:
-        raise ValueError("sampling must be 'uniform' or 'measure_weights'.")
+    if sampling not in {"uniform", "legacy_uniform", "measure_weights"}:
+        raise ValueError("sampling must be 'uniform', 'legacy_uniform', or 'measure_weights'.")
     generator = _make_generator(seed, torch.device(device))
 
     G = len(perturbation_ids)
@@ -96,6 +97,14 @@ def initialise_particles(
         mu: FiniteMeasure = endpoint.initial[pid]
         support = torch.tensor(mu.support, dtype=dtype, device=device)  # [n_atoms, d]
         n_atoms = len(support)
+        if sampling == "legacy_uniform":
+            weights = np.asarray(mu.normalized_weights, dtype=np.float64)
+            expected = np.full_like(weights, 1.0 / max(1, len(weights)))
+            if not np.allclose(weights, expected, rtol=1e-5, atol=1e-8):
+                raise ValueError(
+                    "legacy_uniform sampling requested for a non-uniform finite measure; "
+                    "use sampling='measure_weights' to respect atom weights."
+                )
         if sampling == "measure_weights":
             probs = torch.tensor(mu.normalized_weights, dtype=dtype, device=device)
             idx = torch.multinomial(probs, n_particles, replacement=True, generator=generator)
@@ -251,8 +260,9 @@ def rollout_with_clamped_context(
             if growth_context_steps is not None
             else context
         )
-        q = context[:n_programs]
-        s = context[n_programs:]
+        ecology_context = growth_context if growth_context_steps is not None else context
+        q = ecology_context[:n_programs]
+        s = ecology_context[n_programs:]
         a = model.embedding(perturbation_ids)
         b = model.embedding.growth_intercepts(perturbation_ids)
         eta_z, _ = model.context_agg.encode_particles(z)

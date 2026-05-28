@@ -34,38 +34,8 @@ jobs:
 
       - name: Check hidden Unicode controls
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          forbidden = {
-              "\u202a": "LRE",
-              "\u202b": "RLE",
-              "\u202c": "PDF",
-              "\u202d": "LRO",
-              "\u202e": "RLO",
-              "\u2066": "LRI",
-              "\u2067": "RLI",
-              "\u2068": "FSI",
-              "\u2069": "PDI",
-              "\u2028": "LINE_SEPARATOR",
-              "\u2029": "PARAGRAPH_SEPARATOR",
-          }
-          bad = []
-          paths = (
-              list(Path("package").rglob("*.py"))
-              + list(Path("tests").rglob("*.py"))
-              + list(Path("runners").rglob("*.py"))
-          )
-          for path in paths:
-              text = path.read_text(encoding="utf-8")
-              hits = [(name, text.count(ch)) for ch, name in forbidden.items() if ch in text]
-              if hits:
-                  bad.append((str(path), hits))
-          if bad:
-              for path, hits in bad:
-                  print(path, hits)
-              raise SystemExit("Hidden Unicode control characters found")
-          PY
+          git diff --check
+          python tests/check_source_hygiene.py
 
       - name: Run focused tests
         run: |
