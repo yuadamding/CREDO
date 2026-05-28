@@ -38,7 +38,7 @@ from ..losses.regularizers import RolloutRegularizer
 from ..models.context import GroupStatistics
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import WeightedParticleSimulator
-from ..models.simulator import initialise_particles
+from ..models.simulator import _stable_seed_offset, initialise_particles
 
 
 # ---------------------------------------------------------------------------
@@ -493,6 +493,64 @@ class Trainer:
         return generator
 
     @staticmethod
+    def _pid_seed(base_seed: int, pid: str, *, salt: int = 0) -> int:
+        return int(base_seed) + int(salt) + _stable_seed_offset(pid)
+
+    def _initialise_particles_stable_by_pid(
+        self,
+        perturbation_ids: List[str],
+        *,
+        n_particles: int,
+        dtype: torch.dtype,
+        base_seed: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        z_parts: list[torch.Tensor] = []
+        logw_parts: list[torch.Tensor] = []
+        log_m0_parts: list[torch.Tensor] = []
+        for pid in perturbation_ids:
+            z_pid, logw_pid, log_m0_pid = initialise_particles(
+                self.endpoint,
+                [pid],
+                n_particles=n_particles,
+                device=self.device,
+                dtype=dtype,
+                seed=self._pid_seed(base_seed, pid),
+            )
+            z_parts.append(z_pid)
+            logw_parts.append(logw_pid)
+            log_m0_parts.append(log_m0_pid)
+        return (
+            torch.cat(z_parts, dim=0),
+            torch.cat(logw_parts, dim=0),
+            torch.cat(log_m0_parts, dim=0),
+        )
+
+    def _sample_chunk_noise_stable_by_pid(
+        self,
+        perturbation_ids: List[str],
+        like: torch.Tensor,
+        *,
+        base_seed: int,
+        step_idx: int,
+    ) -> torch.Tensor:
+        parts: list[torch.Tensor] = []
+        shape_tail = tuple(like.shape[1:])
+        for pid in perturbation_ids:
+            generator = self._make_noise_generator(
+                self.device,
+                self._pid_seed(base_seed, pid, salt=10_000 + 1_000_003 * int(step_idx)),
+            )
+            parts.append(
+                torch.randn(
+                    (1,) + shape_tail,
+                    device=like.device,
+                    dtype=like.dtype,
+                    generator=generator,
+                )
+            )
+        return torch.cat(parts, dim=0)
+
+    @staticmethod
     def _weighted_shard_loss(loss_value: torch.Tensor, local_groups: int, total_groups: int) -> torch.Tensor:
         if total_groups <= 0:
             return loss_value
@@ -702,10 +760,6 @@ class Trainer:
     ) -> Dict[str, float]:
         tc = self.config.training
         sc = self.config.simulation
-        if tc.lambda_count > 0:
-            raise NotImplementedError(
-                "Perturbation chunking is not implemented for count loss."
-            )
 
         self.model.train()
         torch.manual_seed(self.config.training.seed + seed_offset + epoch)
@@ -738,16 +792,12 @@ class Trainer:
 
         chunk_states: list[dict] = []
         base_seed = self.config.training.seed + seed_offset + epoch * 1000
-        noise_generator = self._make_noise_generator(self.device, base_seed + 17)
-        for chunk_idx, chunk_pids in enumerate(perturbation_chunks):
-            chunk_seed = base_seed + chunk_idx
-            z0, logw0, log_m0 = initialise_particles(
-                self.endpoint,
+        for chunk_pids in perturbation_chunks:
+            z0, logw0, log_m0 = self._initialise_particles_stable_by_pid(
                 chunk_pids,
                 n_particles=sc.n_particles,
-                device=self.device,
                 dtype=rollout_dtype,
-                seed=chunk_seed,
+                base_seed=base_seed,
             )
             state = {
                 "pids": chunk_pids,
@@ -834,11 +884,11 @@ class Trainer:
                             s=ctx_state.s,
                             growth_context=growth_context,
                         )
-                    noise = torch.randn(
-                        state["z"].shape,
-                        device=self.device,
-                        dtype=state["z"].dtype,
-                        generator=noise_generator,
+                    noise = self._sample_chunk_noise_stable_by_pid(
+                        state["pids"],
+                        state["z"],
+                        base_seed=base_seed,
+                        step_idx=step_idx,
                     )
                     z_next = state["z"] + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise
                     logw_next = state["logw"] + coeffs.growth * dtau
@@ -889,11 +939,11 @@ class Trainer:
                         q=global_context.q,
                         s=global_context.s,
                     )
-                noise = torch.randn(
-                    state["z"].shape,
-                    device=self.device,
-                    dtype=state["z"].dtype,
-                    generator=noise_generator,
+                noise = self._sample_chunk_noise_stable_by_pid(
+                    state["pids"],
+                    state["z"],
+                    base_seed=base_seed,
+                    step_idx=step_idx,
                 )
                 z_next = state["z"] + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise
                 logw_next = state["logw"] + coeffs.growth * dtau
@@ -921,6 +971,7 @@ class Trainer:
 
         loss_end = torch.tensor(0.0, device=self.device)
         loss_weak = torch.tensor(0.0, device=self.device)
+        loss_count = torch.tensor(0.0, device=self.device)
         loss_reg = torch.tensor(0.0, device=self.device)
 
         for state in chunk_states:
@@ -980,7 +1031,31 @@ class Trainer:
                 total_groups,
             )
 
-        loss = tc.lambda_end * loss_end + tc.lambda_weak * loss_weak + loss_reg
+        if tc.lambda_count > 0 and self.count_data is not None and perturbation_ids == self.supported_pids:
+            growth_all = torch.cat(
+                [torch.stack(state["growth_list"], dim=0) for state in chunk_states],
+                dim=1,
+            )
+            logw_all = torch.cat(
+                [torch.stack(state["logw_list"], dim=0) for state in chunk_states],
+                dim=1,
+            )
+            cd = self._get_count_tensors_for_device(self.device)
+            loss_count = self.count_lik(
+                growth_steps=growth_all.float(),
+                logw_steps=logw_all.float(),
+                tau_steps=tau_steps.float(),
+                exposures=cd["exposures"],
+                count_matrix=cd["counts"],
+                n_totals=cd["n_totals"],
+            )
+
+        loss = (
+            tc.lambda_end * loss_end
+            + tc.lambda_weak * loss_weak
+            + tc.lambda_count * loss_count
+            + loss_reg
+        )
 
         model_reg = self.model.regularization(lambda_embed=tc.lambda_reg_embed)
         model_reg = model_reg + self.model.growth_bias_regularization(
@@ -999,6 +1074,7 @@ class Trainer:
 
         metrics["loss_end"] = float(loss_end.item())
         metrics["loss_weak"] = float(loss_weak.item())
+        metrics["loss_count"] = float(loss_count.item())
         metrics["loss_reg"] = float((loss_reg + model_reg).item())
         metrics["loss_total"] = float((loss + model_reg).item())
         return metrics

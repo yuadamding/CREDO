@@ -4,7 +4,7 @@ Also exports helper to initialise particles from an EndpointProblem.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 from typing import Dict, List, Optional, Tuple
 
@@ -73,6 +73,7 @@ def initialise_particles(
     device: str = "cpu",
     dtype: torch.dtype = torch.float32,
     seed: Optional[int] = None,
+    sampling: str = "uniform",
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Sample initial particles from the endpoint initial measure.
 
@@ -81,6 +82,8 @@ def initialise_particles(
     helpers may use finite-measure weights, but legacy P4/P60 training keeps
     identical seeded starts.
     """
+    if sampling not in {"uniform", "measure_weights"}:
+        raise ValueError("sampling must be 'uniform' or 'measure_weights'.")
     generator = _make_generator(seed, torch.device(device))
 
     G = len(perturbation_ids)
@@ -93,7 +96,11 @@ def initialise_particles(
         mu: FiniteMeasure = endpoint.initial[pid]
         support = torch.tensor(mu.support, dtype=dtype, device=device)  # [n_atoms, d]
         n_atoms = len(support)
-        idx = torch.randint(0, n_atoms, (n_particles,), device=device, generator=generator)
+        if sampling == "measure_weights":
+            probs = torch.tensor(mu.normalized_weights, dtype=dtype, device=device)
+            idx = torch.multinomial(probs, n_particles, replacement=True, generator=generator)
+        else:
+            idx = torch.randint(0, n_atoms, (n_particles,), device=device, generator=generator)
         z0[g] = support[idx]
         total_mass = mu.total_mass
         logw0[g] = torch.full((n_particles,), -np.log(n_particles), dtype=dtype, device=device)
@@ -306,6 +313,7 @@ class CounterfactualResult:
     rollout_control: ParticleRollout
     rollout_clamped: Optional[ParticleRollout] = None  # factual dynamics with context clamped to control
     rollout_control_clamped: Optional[ParticleRollout] = None
+    metadata: Dict[str, object] = field(default_factory=dict)
 
     def terminal_log_mass_diff(self) -> float:
         """Terminal factual-reference log-mass contrast."""
@@ -369,6 +377,8 @@ class CounterfactualEngine:
         seed: int = 0,
         control_rollout_mode: str = "reference_consistent",
         common_noise: bool = True,
+        allow_partial_context: bool = False,
+        min_context_fraction: float = 0.95,
     ) -> List[CounterfactualResult]:
         """Run counterfactual simulations.
 
@@ -405,6 +415,8 @@ class CounterfactualEngine:
                 seed=seed,
                 control_rollout_mode=control_rollout_mode,
                 common_noise=common_noise,
+                allow_partial_context=allow_partial_context,
+                min_context_fraction=min_context_fraction,
             )
 
         for pid in perturbation_ids:
@@ -489,15 +501,44 @@ class CounterfactualEngine:
 
         return results
 
-    def _full_context_perturbation_ids(self, endpoint: EndpointProblem) -> List[str]:
-        pids = [pid for pid in self.model.perturbation_ids if pid in endpoint.initial]
-        if len(pids) < 2:
+    def _full_context_perturbation_ids(
+        self,
+        endpoint: EndpointProblem,
+        *,
+        allow_partial_context: bool = False,
+        min_context_fraction: float = 0.95,
+    ) -> Tuple[List[str], Dict[str, object]]:
+        model_pids = list(self.model.perturbation_ids)
+        available = [pid for pid in model_pids if pid in endpoint.initial]
+        missing = [pid for pid in model_pids if pid not in endpoint.initial]
+        n_model = max(1, len(model_pids))
+        context_fraction = len(available) / float(n_model)
+        if len(available) < 2:
             raise ValueError(
                 "Transformer counterfactuals require full-context rollout with at least "
                 "two perturbations, or an explicit clamped context trajectory. "
                 "Single-perturbation ecology is degenerate."
             )
-        return pids
+        if missing and not allow_partial_context:
+            raise ValueError(
+                "Transformer counterfactual context is partial: "
+                f"{len(available)}/{len(model_pids)} perturbations available. "
+                "Pass allow_partial_context=True only for an explicit diagnostic."
+            )
+        if context_fraction < float(min_context_fraction) and not allow_partial_context:
+            raise ValueError(
+                f"Transformer counterfactual context coverage {context_fraction:.3f} "
+                f"is below the required {float(min_context_fraction):.3f}."
+            )
+        metadata: Dict[str, object] = {
+            "context_n_available": len(available),
+            "context_n_model": len(model_pids),
+            "context_fraction": context_fraction,
+            "allow_partial_context": bool(allow_partial_context),
+            "min_context_fraction": float(min_context_fraction),
+            "context_missing_perturbations": missing,
+        }
+        return available, metadata
 
     def _run_transformer_full_context(
         self,
@@ -508,40 +549,46 @@ class CounterfactualEngine:
         seed: int,
         control_rollout_mode: str,
         common_noise: bool,
+        allow_partial_context: bool,
+        min_context_fraction: float,
     ) -> List[CounterfactualResult]:
         """Run transformer counterfactuals inside the full ecological context."""
-        all_pids = self._full_context_perturbation_ids(endpoint)
+        all_pids, context_metadata = self._full_context_perturbation_ids(
+            endpoint,
+            allow_partial_context=allow_partial_context,
+            min_context_fraction=min_context_fraction,
+        )
         results: List[CounterfactualResult] = []
+
+        z0_all, lw0_all, lm0_all = initialise_particles(
+            endpoint,
+            all_pids,
+            self.n_particles,
+            self.device,
+            seed=seed,
+        )
+        noise_seed = int(seed) + 10_000
+        noise_steps = None
+        if common_noise:
+            noise_steps = self.simulator.sample_noise_like(
+                z0_all,
+                self.simulator.n_steps,
+                seed=noise_seed,
+            )
+
+        rollout_p_all = self.simulator.rollout(
+            z0=z0_all,
+            logw0=lw0_all,
+            model=self.model,
+            log_m0=lm0_all,
+            perturbation_ids=all_pids,
+            noise_steps=noise_steps,
+            return_noise_used=common_noise,
+        )
 
         for pid in perturbation_ids:
             if pid not in endpoint.initial or pid not in all_pids:
                 continue
-
-            z0_all, lw0_all, lm0_all = initialise_particles(
-                endpoint,
-                all_pids,
-                self.n_particles,
-                self.device,
-                seed=seed,
-            )
-            branch_seed = int(seed) + 10_000 + _stable_seed_offset(pid)
-            noise_steps = None
-            if common_noise:
-                noise_steps = self.simulator.sample_noise_like(
-                    z0_all,
-                    self.simulator.n_steps,
-                    seed=branch_seed,
-                )
-
-            rollout_p_all = self.simulator.rollout(
-                z0=z0_all,
-                logw0=lw0_all,
-                model=self.model,
-                log_m0=lm0_all,
-                perturbation_ids=all_pids,
-                noise_steps=noise_steps,
-                return_noise_used=common_noise,
-            )
 
             with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
                 rollout_c_all = self.simulator.rollout(
@@ -602,6 +649,16 @@ class CounterfactualEngine:
                 rollout_control_clamped = rollout_control_clamped_all.slice_group(target_idx)
 
             target_idx = all_pids.index(pid)
+            metadata = dict(context_metadata)
+            metadata.update(
+                {
+                    "target_perturbation_id": pid,
+                    "counterfactual_seed_mode": "global_common" if common_noise else "global_initial_only",
+                    "initial_seed": int(seed),
+                    "noise_seed": noise_seed if common_noise else None,
+                    "factual_full_context_reused": True,
+                }
+            )
             results.append(
                 CounterfactualResult(
                     perturbation_id=pid,
@@ -609,6 +666,7 @@ class CounterfactualEngine:
                     rollout_control=rollout_c_all.slice_group(target_idx),
                     rollout_clamped=rollout_clamped,
                     rollout_control_clamped=rollout_control_clamped,
+                    metadata=metadata,
                 )
             )
 

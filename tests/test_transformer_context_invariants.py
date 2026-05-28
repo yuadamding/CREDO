@@ -7,7 +7,12 @@ import pytest
 from credo.config.schema import ModelConfig, RunConfig, SimulationConfig, TrainingConfig
 from credo.data.core import EndpointProblem, FiniteMeasure, TimeAxis
 from credo.models.full_model import FullDynamicsModel
-from credo.models.simulator import CounterfactualEngine, _control_embedding_context, rollout_with_clamped_context
+from credo.models.simulator import (
+    CounterfactualEngine,
+    _control_embedding_context,
+    initialise_particles,
+    rollout_with_clamped_context,
+)
 from credo.models.transformer_context import MassAwareTransformerContextAggregator
 from credo.models.weighted_sde import WeightedParticleSimulator
 from credo.training.trainer import Trainer
@@ -70,6 +75,21 @@ def test_transformer_context_uses_absolute_mass_reductions() -> None:
     assert torch.allclose(out.mass_g, expected_mass, atol=1e-6)
     assert torch.allclose(out.freq_g, expected_freq, atol=1e-6)
     assert torch.isclose(out.q.sum(), torch.tensor(1.0), atol=1e-6)
+
+
+def test_transformer_context_reports_exact_log_mass_when_mass_is_clamped() -> None:
+    agg = _aggregator()
+    z, logw, a, _ = _inputs()
+    log_m0 = torch.tensor([100.0, -100.0, 0.0])
+
+    out = agg(z, logw, a, log_m0)
+    expected_log_mass = log_m0.float() + torch.logsumexp(logw.float(), dim=1)
+
+    assert out.log_mass_g is not None
+    assert torch.allclose(out.log_mass_g, expected_log_mass, atol=1e-5)
+    assert torch.isclose(out.mass_g[0], torch.exp(torch.tensor(30.0)), rtol=1e-6)
+    assert torch.isclose(out.mass_g[1], torch.exp(torch.tensor(-30.0)), rtol=1e-6)
+    assert torch.isfinite(out.context.float()).all()
 
 
 def test_transformer_context_invariant_to_stabilized_logw_shift() -> None:
@@ -656,6 +676,211 @@ def test_chunked_transformer_training_uses_full_g_context(tmp_path) -> None:
     assert np.isfinite(metrics["group_attention_entropy"])
 
 
+def test_chunked_transformer_training_supports_count_loss_full_order(tmp_path) -> None:
+    support = np.asarray([[0.0, 0.0]], dtype=np.float32)
+    weights = np.ones(1, dtype=np.float32)
+    measure = FiniteMeasure(support=support, weights=weights, total_mass=1.0)
+    pids = ["ctrl", "gene_a", "gene_b"]
+    endpoint = EndpointProblem(
+        initial={pid: measure for pid in pids},
+        terminal={pid: measure for pid in pids},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=pids,
+    )
+
+    def _model() -> FullDynamicsModel:
+        torch.manual_seed(31)
+        return FullDynamicsModel(
+            perturbation_ids=pids,
+            control_ids=["ctrl"],
+            latent_dim=2,
+            embedding_dim=4,
+            n_programs=3,
+            mediator_dim=2,
+            hidden_dim=8,
+            depth=1,
+            ecological_growth=True,
+            control_mode="soft_ref",
+            context_kind="transformer",
+            transformer_token_dim=16,
+            transformer_heads=4,
+            transformer_within_layers=1,
+            transformer_cross_layers=1,
+            transformer_inducing=3,
+            transformer_dropout=0.0,
+            transformer_growth_only=True,
+        )
+
+    def _config(max_active: int) -> RunConfig:
+        return RunConfig(
+            run_id=f"chunked-count-{max_active}",
+            output_dir=str(tmp_path),
+            device="cpu",
+            model=ModelConfig(
+                context_kind="transformer",
+                transformer_token_dim=16,
+                transformer_heads=4,
+                transformer_within_layers=1,
+                transformer_cross_layers=1,
+                transformer_inducing=3,
+                transformer_dropout=0.0,
+                transformer_growth_only=True,
+            ),
+            simulation=SimulationConfig(n_particles=2, n_steps=1, store_history=True),
+            training=TrainingConfig(
+                epochs=1,
+                max_active_perturbations=max_active,
+                lambda_end=0.0,
+                lambda_count=0.3,
+                lambda_weak=0.0,
+                lambda_reg_net=0.0,
+                lambda_reg_diffusion=0.0,
+                lambda_reg_embed=0.0,
+                lambda_reg_growth_bias=0.0,
+                lr_net=0.0,
+                lr_embed=0.0,
+                lr_transformer=1e-4,
+            ),
+        )
+
+    count_data = {
+        "exposures": np.ones(3, dtype=np.float32),
+        "counts": np.asarray([[5.0, 7.0, 9.0]], dtype=np.float32),
+        "n_totals": np.asarray([21.0], dtype=np.float32),
+    }
+    full_trainer = Trainer(
+        model=_model(),
+        config=_config(0),
+        endpoint=endpoint,
+        supported_pids=pids,
+        count_data=count_data,
+        output_dir=str(tmp_path / "full"),
+        ema_decay=0.0,
+        warmup_epochs=1,
+    )
+    chunked_trainer = Trainer(
+        model=_model(),
+        config=_config(1),
+        endpoint=endpoint,
+        supported_pids=pids,
+        count_data=count_data,
+        output_dir=str(tmp_path / "chunked"),
+        ema_decay=0.0,
+        warmup_epochs=1,
+    )
+
+    full_metrics = full_trainer._one_epoch(
+        optimizer=full_trainer._build_optimizer(stage="all"),
+        epoch=0,
+        stage="all",
+        perturbation_ids=pids,
+    )
+    chunked_metrics = chunked_trainer._one_epoch(
+        optimizer=chunked_trainer._build_optimizer(stage="all"),
+        epoch=0,
+        stage="all",
+        perturbation_ids=pids,
+    )
+
+    assert np.isfinite(chunked_metrics["loss_count"])
+    assert chunked_metrics["loss_count"] > 0
+    assert np.isclose(chunked_metrics["loss_count"], full_metrics["loss_count"], rtol=1e-5, atol=1e-5)
+
+
+def test_chunk_layout_does_not_change_chunked_initial_particles_or_noise(tmp_path) -> None:
+    support = np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    measure = FiniteMeasure(support=support, weights=np.ones(3, dtype=np.float32), total_mass=3.0)
+    pids = ["ctrl", "gene_a", "gene_b", "gene_c"]
+    endpoint = EndpointProblem(
+        initial={pid: measure for pid in pids},
+        terminal={pid: measure for pid in pids},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=pids,
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=pids,
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    cfg = RunConfig(
+        run_id="chunk-layout-stability",
+        output_dir=str(tmp_path),
+        device="cpu",
+        simulation=SimulationConfig(n_particles=5, n_steps=2, store_history=True),
+        training=TrainingConfig(
+            max_active_perturbations=1,
+            lambda_count=0.0,
+            lambda_weak=0.0,
+            lambda_reg_net=0.0,
+            lambda_reg_diffusion=0.0,
+            lambda_reg_embed=0.0,
+            lambda_reg_growth_bias=0.0,
+        ),
+    )
+    trainer = Trainer(
+        model=model,
+        config=cfg,
+        endpoint=endpoint,
+        supported_pids=pids,
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+        warmup_epochs=1,
+    )
+    base_seed = 1234
+    z_all, logw_all, log_m0_all = trainer._initialise_particles_stable_by_pid(
+        pids,
+        n_particles=5,
+        dtype=torch.float32,
+        base_seed=base_seed,
+    )
+    chunks = [pids[:1], pids[1:3], pids[3:]]
+    z_chunks, logw_chunks, log_m0_chunks, noise_chunks = [], [], [], []
+    for chunk in chunks:
+        z_chunk, logw_chunk, log_m0_chunk = trainer._initialise_particles_stable_by_pid(
+            chunk,
+            n_particles=5,
+            dtype=torch.float32,
+            base_seed=base_seed,
+        )
+        z_chunks.append(z_chunk)
+        logw_chunks.append(logw_chunk)
+        log_m0_chunks.append(log_m0_chunk)
+        noise_chunks.append(
+            trainer._sample_chunk_noise_stable_by_pid(
+                chunk,
+                torch.zeros(len(chunk), 5, 2),
+                base_seed=base_seed,
+                step_idx=1,
+            )
+        )
+
+    noise_all = trainer._sample_chunk_noise_stable_by_pid(
+        pids,
+        torch.zeros(len(pids), 5, 2),
+        base_seed=base_seed,
+        step_idx=1,
+    )
+    assert torch.equal(torch.cat(z_chunks, dim=0), z_all)
+    assert torch.equal(torch.cat(logw_chunks, dim=0), logw_all)
+    assert torch.equal(torch.cat(log_m0_chunks, dim=0), log_m0_all)
+    assert torch.equal(torch.cat(noise_chunks, dim=0), noise_all)
+
+
 def test_transformer_chunked_rollout_matches_full_rollout_same_noise() -> None:
     torch.manual_seed(59)
     pids = ["ctrl", "gene_a", "gene_b"]
@@ -843,3 +1068,138 @@ def test_transformer_counterfactual_engine_uses_full_context_same_start_and_nois
     assert result.rollout_control.context_steps is not None
     assert result.rollout_control.base_context_steps is not None
     assert result.rollout_control.growth_context_steps is not None
+    assert result.metadata["context_n_available"] == 3
+    assert result.metadata["context_n_model"] == 3
+    assert result.metadata["context_fraction"] == 1.0
+    assert result.metadata["counterfactual_seed_mode"] == "global_common"
+
+
+class _CountingSimulator(WeightedParticleSimulator):
+    def __init__(self, n_steps: int = 2, store_history: bool = True) -> None:
+        super().__init__(n_steps=n_steps, store_history=store_history)
+        self.rollout_calls = 0
+
+    def rollout(self, *args, **kwargs):
+        self.rollout_calls += 1
+        return super().rollout(*args, **kwargs)
+
+
+def test_transformer_counterfactual_rejects_partial_context_by_default() -> None:
+    measure = FiniteMeasure(
+        support=np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        weights=np.ones(3, dtype=np.float32),
+        total_mass=3.0,
+    )
+    endpoint = EndpointProblem(
+        initial={"ctrl": measure, "gene_a": measure, "gene_b": measure},
+        terminal={"ctrl": measure, "gene_a": measure, "gene_b": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a", "gene_b", "gene_c"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    engine = CounterfactualEngine(
+        model=model,
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=5,
+    )
+
+    with pytest.raises(ValueError, match="partial"):
+        engine.run(endpoint, ["gene_a"], clamp_context=False)
+
+    result = engine.run(
+        endpoint,
+        ["gene_a"],
+        clamp_context=False,
+        allow_partial_context=True,
+    )[0]
+    assert result.metadata["context_n_available"] == 3
+    assert result.metadata["context_n_model"] == 4
+    assert np.isclose(result.metadata["context_fraction"], 0.75)
+    assert result.metadata["allow_partial_context"] is True
+
+
+def test_transformer_counterfactual_reuses_factual_full_context_rollout_for_batch() -> None:
+    measure = FiniteMeasure(
+        support=np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        weights=np.ones(3, dtype=np.float32),
+        total_mass=3.0,
+    )
+    endpoint = EndpointProblem(
+        initial={"ctrl": measure, "gene_a": measure, "gene_b": measure},
+        terminal={"ctrl": measure, "gene_a": measure, "gene_b": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    simulator = _CountingSimulator(n_steps=2, store_history=True)
+    engine = CounterfactualEngine(model=model, simulator=simulator, n_particles=5)
+
+    results = engine.run(endpoint, ["gene_a", "gene_b"], seed=17, common_noise=True)
+
+    assert simulator.rollout_calls == 3
+    assert len(results) == 2
+    assert {result.perturbation_id for result in results} == {"gene_a", "gene_b"}
+    assert all(result.metadata["factual_full_context_reused"] is True for result in results)
+    assert results[0].metadata["noise_seed"] == results[1].metadata["noise_seed"] == 10017
+    assert results[0].rollout_perturb.noise_steps is not None
+    assert results[1].rollout_perturb.noise_steps is not None
+
+
+def test_initialise_particles_measure_weighted_sampling_respects_atom_weights() -> None:
+    measure = FiniteMeasure(
+        support=np.asarray([[0.0], [10.0]], dtype=np.float32),
+        weights=np.asarray([0.99, 0.01], dtype=np.float32),
+        total_mass=1.0,
+    )
+    endpoint = EndpointProblem(
+        initial={"gene_a": measure},
+        terminal={"gene_a": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["gene_a"],
+    )
+
+    uniform_z, _, _ = initialise_particles(endpoint, ["gene_a"], 2000, seed=3, sampling="uniform")
+    weighted_z, _, _ = initialise_particles(endpoint, ["gene_a"], 2000, seed=3, sampling="measure_weights")
+
+    uniform_high_fraction = float((uniform_z[0, :, 0] == 10.0).float().mean().item())
+    weighted_high_fraction = float((weighted_z[0, :, 0] == 10.0).float().mean().item())
+    assert 0.4 < uniform_high_fraction < 0.6
+    assert weighted_high_fraction < 0.05

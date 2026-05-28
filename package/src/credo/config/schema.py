@@ -178,11 +178,6 @@ class TrainingConfig(BaseModel):
             raise ValueError("lr_transformer must be > 0.")
         if self.transformer_weight_decay < 0:
             raise ValueError("transformer_weight_decay must be >= 0.")
-        if self.lambda_count > 0 and self.max_active_perturbations > 0:
-            raise ValueError(
-                "lambda_count > 0 is incompatible with perturbation chunking "
-                "(max_active_perturbations > 0)."
-            )
         if self.divergence_factor <= 1:
             raise ValueError("divergence_factor must be > 1.")
         if self.divergence_patience < 1:
