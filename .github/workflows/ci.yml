@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "codex/**"
+
+jobs:
+  source-and-transformer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e package pytest
+
+      - name: Compile Python sources
+        run: |
+          python -m compileall -q package runners tests
+          python -m py_compile \
+            package/src/credo/models/transformer_blocks.py \
+            package/src/credo/models/transformer_context.py \
+            package/src/credo/models/full_model.py \
+            tests/test_transformer_context_invariants.py
+
+      - name: Check hidden Unicode controls
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          forbidden = {
+              "\u202a": "LRE",
+              "\u202b": "RLE",
+              "\u202c": "PDF",
+              "\u202d": "LRO",
+              "\u202e": "RLO",
+              "\u2066": "LRI",
+              "\u2067": "RLI",
+              "\u2068": "FSI",
+              "\u2069": "PDI",
+              "\u2028": "LINE_SEPARATOR",
+              "\u2029": "PARAGRAPH_SEPARATOR",
+          }
+          bad = []
+          paths = (
+              list(Path("package").rglob("*.py"))
+              + list(Path("tests").rglob("*.py"))
+              + list(Path("runners").rglob("*.py"))
+          )
+          for path in paths:
+              text = path.read_text(encoding="utf-8")
+              hits = [(name, text.count(ch)) for ch, name in forbidden.items() if ch in text]
+              if hits:
+                  bad.append((str(path), hits))
+          if bad:
+              for path, hits in bad:
+                  print(path, hits)
+              raise SystemExit("Hidden Unicode control characters found")
+          PY
+
+      - name: Run focused tests
+        run: |
+          python -m pytest -q \
+            tests/test_source_hygiene.py \
+            tests/test_transformer_context_invariants.py

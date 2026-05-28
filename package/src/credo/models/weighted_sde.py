@@ -9,7 +9,7 @@ All mass computations use absolute log-weights and log-space reductions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -30,6 +30,9 @@ class ParticleRollout:
     sigma_steps: Optional[torch.Tensor] = None      # [K, G, N, d]
     growth_steps: Optional[torch.Tensor] = None     # [K, G, N]
     context_steps: Optional[torch.Tensor] = None    # [K, C], context for tau_k -> tau_{k+1}
+    base_context_steps: Optional[torch.Tensor] = None  # [K, C], drift/sigma context
+    growth_context_steps: Optional[torch.Tensor] = None  # [K, C], growth context
+    context_diagnostics: Optional[Dict[str, torch.Tensor]] = None  # scalar diagnostics stacked over K
     noise_steps: Optional[torch.Tensor] = None      # [K, G, N, d] innovations used by rollout
 
     @property
@@ -51,6 +54,34 @@ class ParticleRollout:
     @property
     def terminal_logw(self) -> torch.Tensor:
         return self.logw_steps[-1]  # [G, N]
+
+    def slice_group(self, group_index: int) -> "ParticleRollout":
+        """Return a one-group view/copy preserving global context trajectories."""
+        idx = int(group_index)
+        if idx < 0 or idx >= self.G:
+            raise IndexError(f"group_index {idx} out of range for G={self.G}")
+
+        def _slice_optional(value: Optional[torch.Tensor], group_dim: int) -> Optional[torch.Tensor]:
+            if value is None:
+                return None
+            slicer = [slice(None)] * value.ndim
+            slicer[group_dim] = slice(idx, idx + 1)
+            return value[tuple(slicer)]
+
+        return ParticleRollout(
+            z_steps=self.z_steps[:, idx:idx + 1],
+            logw_steps=self.logw_steps[:, idx:idx + 1],
+            tau_steps=self.tau_steps,
+            log_m0=None if self.log_m0 is None else self.log_m0[idx:idx + 1],
+            drift_steps=_slice_optional(self.drift_steps, 1),
+            sigma_steps=_slice_optional(self.sigma_steps, 1),
+            growth_steps=_slice_optional(self.growth_steps, 1),
+            context_steps=self.context_steps,
+            base_context_steps=self.base_context_steps,
+            growth_context_steps=self.growth_context_steps,
+            context_diagnostics=self.context_diagnostics,
+            noise_steps=_slice_optional(self.noise_steps, 1),
+        )
 
 
 class WeightedParticleSimulator(nn.Module):
@@ -143,7 +174,9 @@ class WeightedParticleSimulator(nn.Module):
         # Storage
         z_list = [z0]
         logw_list = [logw0]
-        drift_list, sigma_list, growth_list, ctx_list = [], [], [], []
+        drift_list, sigma_list, growth_list = [], [], []
+        ctx_list, base_ctx_list, growth_ctx_list = [], [], []
+        diagnostics: dict[str, list[torch.Tensor]] = {}
         noise_used_list = []
 
         z = z0.clone()
@@ -174,6 +207,19 @@ class WeightedParticleSimulator(nn.Module):
                 sigma_list.append(sigma)
                 growth_list.append(r)
                 ctx_list.append(ctx.context.detach())
+                base_context = getattr(ctx, "base_context", None)
+                if base_context is None:
+                    base_context = ctx.context
+                growth_context = getattr(ctx, "growth_context", None)
+                if growth_context is None:
+                    growth_context = ctx.context
+                base_ctx_list.append(base_context.detach())
+                growth_ctx_list.append(growth_context.detach())
+                ctx_diagnostics = getattr(ctx, "diagnostics", None)
+                if ctx_diagnostics is not None:
+                    for name, value in ctx_diagnostics.__dict__.items():
+                        if value is not None:
+                            diagnostics.setdefault(name, []).append(value.detach())
 
             # Euler-Maruyama update
             if noise_steps is not None:
@@ -206,6 +252,14 @@ class WeightedParticleSimulator(nn.Module):
             result.sigma_steps = torch.stack(sigma_list, dim=0)
             result.growth_steps = torch.stack(growth_list, dim=0)
             result.context_steps = torch.stack(ctx_list, dim=0)
+            result.base_context_steps = torch.stack(base_ctx_list, dim=0)
+            result.growth_context_steps = torch.stack(growth_ctx_list, dim=0)
+            if diagnostics:
+                result.context_diagnostics = {
+                    name: torch.stack(values, dim=0)
+                    for name, values in diagnostics.items()
+                    if values
+                }
         if return_noise_used:
             result.noise_steps = torch.stack(noise_used_list, dim=0)
 

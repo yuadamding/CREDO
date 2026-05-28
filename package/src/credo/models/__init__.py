@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .coefficients import CoefficientNetworks, Coefficients
-from .context import ContextAggregator, ContextState, GroupStatistics, ProgramEncoder
+from .context import ContextAggregator, ContextDiagnostics, ContextState, GroupStatistics, ProgramEncoder
 from .ecology import EcologicalPayoff
 from .embeddings import PerturbationEmbedding, TimeEmbedding
 from .expression_vae import (
@@ -17,6 +17,8 @@ from .expression_vae import (
     standardize_latent,
 )
 from .full_model import FullDynamicsModel
+from .transformer_blocks import FeedForwardBlock, InducedSetAttentionBlock, MassBiasedCrossAttention
+from .transformer_context import MassAwareTransformerContextAggregator
 from .particles import (
     CounterfactualEngine,
     CounterfactualResult,
@@ -43,15 +45,20 @@ __all__ = [
     "CoefficientNetworks",
     "Coefficients",
     "ContextAggregator",
+    "ContextDiagnostics",
     "ContextState",
     "CounterfactualEngine",
     "CounterfactualResult",
     "EcologicalPayoff",
     "ExpressionVAE",
     "ExpressionVAETrainingSummary",
+    "FeedForwardBlock",
     "FullDynamicsModel",
     "GroupStatistics",
+    "InducedSetAttentionBlock",
     "LatentStandardization",
+    "MassAwareTransformerContextAggregator",
+    "MassBiasedCrossAttention",
     "ParticleRollout",
     "PerturbationEmbedding",
     "ProgramEncoder",

@@ -255,6 +255,27 @@ def _tensor_sha256(tensor: torch.Tensor) -> str:
     return hasher.hexdigest()
 
 
+def _counterfactual_context_metadata(
+    model: FullDynamicsModel,
+    endpoint,
+    *,
+    allow_partial_context: bool = False,
+    min_context_fraction: float = 0.95,
+) -> dict:
+    model_pids = list(model.perturbation_ids)
+    available = [pid for pid in model_pids if pid in endpoint.initial]
+    missing = [pid for pid in model_pids if pid not in endpoint.initial]
+    fraction = len(available) / float(max(1, len(model_pids)))
+    return {
+        "context_n_available": len(available),
+        "context_n_model": len(model_pids),
+        "context_fraction": fraction,
+        "allow_partial_context": bool(allow_partial_context),
+        "min_context_fraction": float(min_context_fraction),
+        "context_missing_perturbations": missing,
+    }
+
+
 def _select_counterfactual_pids(
     available: list[str],
     control_ids: set[str],
@@ -380,6 +401,11 @@ def main() -> None:
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     simulator = WeightedParticleSimulator(n_steps=args.n_steps, store_history=True)
+    context_metadata = _counterfactual_context_metadata(model, endpoint)
+    row_context_metadata = {
+        key: value for key, value in context_metadata.items()
+        if key != "context_missing_perturbations"
+    }
 
     state_labels = config.get("state_labels") if bool(config.get("use_state_centroids", False)) else None
     split_meta = config.get("split", {})
@@ -526,6 +552,7 @@ def main() -> None:
             "program_fraction_shift_abs": program_shift,
             "program_occupancy_tv_fact_vs_ref": program_occupancy_tv,
         }
+        row.update(row_context_metadata)
         for key, value in fact_actions.items():
             row[key] = value
             row[f"{key}_fact"] = value
@@ -613,6 +640,7 @@ def main() -> None:
             else None
         ),
         "n_counterfactual_rows": int(len(out)),
+        **context_metadata,
         "reference_protocol": "delta_zero_soft_ref_reference_consistent",
         "geometry_metric": "weighted_mean_l2",
         "geometry_metric_note": (

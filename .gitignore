@@ -2,6 +2,7 @@ runs/
 /outputs/
 /results/
 /models/
+comparison_reports/
 *.h5ad
 *.pt
 *.pth

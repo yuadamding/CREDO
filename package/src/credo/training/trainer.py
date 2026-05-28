@@ -38,7 +38,7 @@ from ..losses.regularizers import RolloutRegularizer
 from ..models.context import GroupStatistics
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import WeightedParticleSimulator
-from ..models.simulator import initialise_particles
+from ..models.simulator import _stable_seed_offset, initialise_particles
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,14 @@ class TrainingHistory:
     loss_weak: List[float] = field(default_factory=list)
     loss_count: List[float] = field(default_factory=list)
     loss_reg: List[float] = field(default_factory=list)
+    context_norm: List[float] = field(default_factory=list)
+    q_entropy: List[float] = field(default_factory=list)
+    freq_entropy: List[float] = field(default_factory=list)
+    within_attention_entropy: List[float] = field(default_factory=list)
+    group_attention_entropy: List[float] = field(default_factory=list)
+    within_effective_keys: List[float] = field(default_factory=list)
+    group_effective_keys: List[float] = field(default_factory=list)
+    mass_log_range: List[float] = field(default_factory=list)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame({
@@ -157,7 +165,61 @@ class TrainingHistory:
             "loss_weak": self.loss_weak,
             "loss_count": self.loss_count,
             "loss_reg": self.loss_reg,
+            "context_norm": self.context_norm,
+            "q_entropy": self.q_entropy,
+            "freq_entropy": self.freq_entropy,
+            "within_attention_entropy": self.within_attention_entropy,
+            "group_attention_entropy": self.group_attention_entropy,
+            "within_effective_keys": self.within_effective_keys,
+            "group_effective_keys": self.group_effective_keys,
+            "mass_log_range": self.mass_log_range,
         })
+
+
+_DIAGNOSTIC_KEYS = (
+    "context_norm",
+    "q_entropy",
+    "freq_entropy",
+    "within_attention_entropy",
+    "group_attention_entropy",
+    "within_effective_keys",
+    "group_effective_keys",
+    "mass_log_range",
+)
+
+
+def _nan_diagnostics() -> Dict[str, float]:
+    return {key: math.nan for key in _DIAGNOSTIC_KEYS}
+
+
+def _diagnostics_from_rollout(rollout) -> Dict[str, float]:
+    metrics = _nan_diagnostics()
+    diagnostics = getattr(rollout, "context_diagnostics", None)
+    if not diagnostics:
+        return metrics
+    for key in _DIAGNOSTIC_KEYS:
+        value = diagnostics.get(key)
+        if value is not None and value.numel() > 0:
+            metrics[key] = float(value.float().mean().item())
+    return metrics
+
+
+def _diagnostics_from_lists(values_by_key: Dict[str, list[float]]) -> Dict[str, float]:
+    metrics = _nan_diagnostics()
+    for key in _DIAGNOSTIC_KEYS:
+        values = values_by_key.get(key, [])
+        if values:
+            metrics[key] = float(np.mean(values))
+    return metrics
+
+
+def _append_context_diagnostics(values_by_key: Dict[str, list[float]], diagnostics) -> None:
+    if diagnostics is None:
+        return
+    for key in _DIAGNOSTIC_KEYS:
+        value = getattr(diagnostics, key, None)
+        if value is not None:
+            values_by_key.setdefault(key, []).append(float(value.float().mean().item()))
 
 
 def _build_target_dicts(
@@ -229,6 +291,7 @@ class Trainer:
         )
         self._needs_rollout_history = (
             (tc.lambda_weak > 0) or (tc.lambda_count > 0) or has_trajectory_reg
+            or getattr(model, "context_kind", "mlp") == "transformer"
         )
         self.precision = tc.precision
         self.autocast_enabled = self.device.startswith("cuda") and self.precision in {"fp16", "bf16"}
@@ -430,6 +493,64 @@ class Trainer:
         return generator
 
     @staticmethod
+    def _pid_seed(base_seed: int, pid: str, *, salt: int = 0) -> int:
+        return int(base_seed) + int(salt) + _stable_seed_offset(pid)
+
+    def _initialise_particles_stable_by_pid(
+        self,
+        perturbation_ids: List[str],
+        *,
+        n_particles: int,
+        dtype: torch.dtype,
+        base_seed: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        z_parts: list[torch.Tensor] = []
+        logw_parts: list[torch.Tensor] = []
+        log_m0_parts: list[torch.Tensor] = []
+        for pid in perturbation_ids:
+            z_pid, logw_pid, log_m0_pid = initialise_particles(
+                self.endpoint,
+                [pid],
+                n_particles=n_particles,
+                device=self.device,
+                dtype=dtype,
+                seed=self._pid_seed(base_seed, pid),
+            )
+            z_parts.append(z_pid)
+            logw_parts.append(logw_pid)
+            log_m0_parts.append(log_m0_pid)
+        return (
+            torch.cat(z_parts, dim=0),
+            torch.cat(logw_parts, dim=0),
+            torch.cat(log_m0_parts, dim=0),
+        )
+
+    def _sample_chunk_noise_stable_by_pid(
+        self,
+        perturbation_ids: List[str],
+        like: torch.Tensor,
+        *,
+        base_seed: int,
+        step_idx: int,
+    ) -> torch.Tensor:
+        parts: list[torch.Tensor] = []
+        shape_tail = tuple(like.shape[1:])
+        for pid in perturbation_ids:
+            generator = self._make_noise_generator(
+                self.device,
+                self._pid_seed(base_seed, pid, salt=10_000 + 1_000_003 * int(step_idx)),
+            )
+            parts.append(
+                torch.randn(
+                    (1,) + shape_tail,
+                    device=like.device,
+                    dtype=like.dtype,
+                    generator=generator,
+                )
+            )
+        return torch.cat(parts, dim=0)
+
+    @staticmethod
     def _weighted_shard_loss(loss_value: torch.Tensor, local_groups: int, total_groups: int) -> torch.Tensor:
         if total_groups <= 0:
             return loss_value
@@ -437,23 +558,47 @@ class Trainer:
 
     def _build_optimizer(self, stage: str) -> torch.optim.Optimizer:
         tc = self.config.training
-        # Separate learning rates for embedding vs network params
-        embed_params = []
-        net_params = []
-        for name, p in self.model.named_parameters():
-            if "embedding" in name:
-                embed_params.append(p)
-            else:
-                net_params.append(p)
-        # Also include count_lik params
-        net_params += list(self.count_lik.parameters())
+        def _no_decay(name: str) -> bool:
+            return name.endswith(".bias") or "norm" in name.lower() or "layernorm" in name.lower()
 
-        param_groups = [
-            {"params": net_params, "lr": tc.lr_net},
-            {"params": embed_params, "lr": tc.lr_embed},
-        ]
+        grouped: dict[tuple[str, bool], list[torch.nn.Parameter]] = {
+            ("net", False): [],
+            ("net", True): [],
+            ("embed", False): [],
+            ("embed", True): [],
+            ("transformer", False): [],
+            ("transformer", True): [],
+        }
+
+        for name, p in self.model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if getattr(self.model, "context_kind", "mlp") == "transformer" and name.startswith("context_agg."):
+                group = "transformer"
+            elif "embedding" in name:
+                group = "embed"
+            else:
+                group = "net"
+            grouped[(group, _no_decay(name))].append(p)
+
+        count_params = [p for p in self.count_lik.parameters() if p.requires_grad]
+        grouped[("net", False)].extend(count_params)
+
+        param_groups = []
+        specs = {
+            "net": (tc.lr_net, tc.weight_decay),
+            "embed": (tc.lr_embed, tc.weight_decay),
+            "transformer": (tc.lr_transformer, tc.transformer_weight_decay),
+        }
+        for group, (lr, decay) in specs.items():
+            decay_params = grouped[(group, False)]
+            no_decay_params = grouped[(group, True)]
+            if decay_params:
+                param_groups.append({"params": decay_params, "lr": lr, "weight_decay": decay})
+            if no_decay_params:
+                param_groups.append({"params": no_decay_params, "lr": lr, "weight_decay": 0.0})
         optimizer_cls = torch.optim.AdamW if tc.optimizer == "adamw" else torch.optim.Adam
-        return optimizer_cls(param_groups, weight_decay=tc.weight_decay)
+        return optimizer_cls(param_groups, weight_decay=0.0)
 
     def _one_epoch(
         self,
@@ -463,6 +608,11 @@ class Trainer:
         perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
+        if self._can_use_multi_gpu() and getattr(self.model, "context_kind", "mlp") == "transformer":
+            raise ValueError(
+                "Transformer ecological context is not supported with multi-GPU sharding yet. "
+                "Use a single training device so context is computed from the full perturbation set."
+            )
         if not self._can_use_multi_gpu():
             batch_size = self._perturbation_batch_size(perturbation_ids)
             if batch_size < len(perturbation_ids):
@@ -597,6 +747,7 @@ class Trainer:
             "loss_weak": float(loss_weak.item()),
             "loss_count": float(loss_count.item()),
             "loss_reg": float(loss_reg.item()),
+            **_diagnostics_from_rollout(rollout),
         }
 
     def _one_epoch_chunked(
@@ -609,10 +760,6 @@ class Trainer:
     ) -> Dict[str, float]:
         tc = self.config.training
         sc = self.config.simulation
-        if tc.lambda_count > 0:
-            raise NotImplementedError(
-                "Perturbation chunking is not implemented for count loss."
-            )
 
         self.model.train()
         torch.manual_seed(self.config.training.seed + seed_offset + epoch)
@@ -645,16 +792,12 @@ class Trainer:
 
         chunk_states: list[dict] = []
         base_seed = self.config.training.seed + seed_offset + epoch * 1000
-        noise_generator = self._make_noise_generator(self.device, base_seed + 17)
-        for chunk_idx, chunk_pids in enumerate(perturbation_chunks):
-            chunk_seed = base_seed + chunk_idx
-            z0, logw0, log_m0 = initialise_particles(
-                self.endpoint,
+        for chunk_pids in perturbation_chunks:
+            z0, logw0, log_m0 = self._initialise_particles_stable_by_pid(
                 chunk_pids,
                 n_particles=sc.n_particles,
-                device=self.device,
                 dtype=rollout_dtype,
-                seed=chunk_seed,
+                base_seed=base_seed,
             )
             state = {
                 "pids": chunk_pids,
@@ -682,9 +825,83 @@ class Trainer:
             dtype=rollout_dtype,
         )
         dtau = 1.0 / sc.n_steps
+        diagnostic_values: dict[str, list[float]] = {}
 
         for step_idx in range(sc.n_steps):
             tau_k = tau_steps[step_idx]
+
+            if getattr(self.model, "context_kind", "mlp") == "transformer":
+                pids_all: list[str] = []
+                group_slices: list[slice] = []
+                start = 0
+                for state in chunk_states:
+                    pids_all.extend(state["pids"])
+                    stop = start + len(state["pids"])
+                    group_slices.append(slice(start, stop))
+                    start = stop
+
+                with autocast_ctx:
+                    z_all = torch.cat([state["z"] for state in chunk_states], dim=0)
+                    logw_all = torch.cat([state["logw"] for state in chunk_states], dim=0)
+                    log_m0_all = torch.cat([state["log_m0"] for state in chunk_states], dim=0)
+                    a_all = self.model.embedding(pids_all)
+                    b_all = self.model.embedding.growth_intercepts(pids_all)
+                    ctx_state = self.model.context_agg(
+                        z_all,
+                        logw_all,
+                        a_all,
+                        log_m0_all,
+                        tau=tau_k,
+                    )
+                    _append_context_diagnostics(diagnostic_values, ctx_state.diagnostics)
+                    eta_all, _ = self.model.context_agg.encode_particles(z_all)
+                    base_context = ctx_state.context
+                    growth_context = None
+                    if (
+                        getattr(self.model, "transformer_growth_only", False)
+                        and getattr(self.model, "meanfield_context_agg", None) is not None
+                    ):
+                        base_state = self.model.meanfield_context_agg(
+                            z_all,
+                            logw_all,
+                            a_all,
+                            log_m0_all,
+                            tau=tau_k,
+                        )
+                        base_context = base_state.context
+                        growth_context = ctx_state.context
+
+                for state, group_slice in zip(chunk_states, group_slices):
+                    with autocast_ctx:
+                        coeffs = self.model.coeff_nets(
+                            z=state["z"],
+                            tau=tau_k,
+                            context=base_context,
+                            a=a_all[group_slice],
+                            growth_intercept=b_all[group_slice],
+                            eta_z=eta_all[group_slice],
+                            q=ctx_state.q,
+                            s=ctx_state.s,
+                            growth_context=growth_context,
+                        )
+                    noise = self._sample_chunk_noise_stable_by_pid(
+                        state["pids"],
+                        state["z"],
+                        base_seed=base_seed,
+                        step_idx=step_idx,
+                    )
+                    z_next = state["z"] + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise
+                    logw_next = state["logw"] + coeffs.growth * dtau
+                    if store_history:
+                        state["drift_list"].append(coeffs.drift)
+                        state["sigma_list"].append(coeffs.sigma_diag)
+                        state["growth_list"].append(coeffs.growth)
+                        state["z_list"].append(z_next)
+                        state["logw_list"].append(logw_next)
+                    state["z"] = z_next
+                    state["logw"] = logw_next
+                continue
+
             summary_parts: list[GroupStatistics] = []
             local_cache: list[dict[str, torch.Tensor]] = []
 
@@ -722,11 +939,11 @@ class Trainer:
                         q=global_context.q,
                         s=global_context.s,
                     )
-                noise = torch.randn(
-                    state["z"].shape,
-                    device=self.device,
-                    dtype=state["z"].dtype,
-                    generator=noise_generator,
+                noise = self._sample_chunk_noise_stable_by_pid(
+                    state["pids"],
+                    state["z"],
+                    base_seed=base_seed,
+                    step_idx=step_idx,
                 )
                 z_next = state["z"] + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise
                 logw_next = state["logw"] + coeffs.growth * dtau
@@ -747,12 +964,14 @@ class Trainer:
             "loss_weak": 0.0,
             "loss_count": 0.0,
             "loss_reg": 0.0,
+            **_diagnostics_from_lists(diagnostic_values),
         }
 
         optimizer.zero_grad()
 
         loss_end = torch.tensor(0.0, device=self.device)
         loss_weak = torch.tensor(0.0, device=self.device)
+        loss_count = torch.tensor(0.0, device=self.device)
         loss_reg = torch.tensor(0.0, device=self.device)
 
         for state in chunk_states:
@@ -812,7 +1031,31 @@ class Trainer:
                 total_groups,
             )
 
-        loss = tc.lambda_end * loss_end + tc.lambda_weak * loss_weak + loss_reg
+        if tc.lambda_count > 0 and self.count_data is not None and perturbation_ids == self.supported_pids:
+            growth_all = torch.cat(
+                [torch.stack(state["growth_list"], dim=0) for state in chunk_states],
+                dim=1,
+            )
+            logw_all = torch.cat(
+                [torch.stack(state["logw_list"], dim=0) for state in chunk_states],
+                dim=1,
+            )
+            cd = self._get_count_tensors_for_device(self.device)
+            loss_count = self.count_lik(
+                growth_steps=growth_all.float(),
+                logw_steps=logw_all.float(),
+                tau_steps=tau_steps.float(),
+                exposures=cd["exposures"],
+                count_matrix=cd["counts"],
+                n_totals=cd["n_totals"],
+            )
+
+        loss = (
+            tc.lambda_end * loss_end
+            + tc.lambda_weak * loss_weak
+            + tc.lambda_count * loss_count
+            + loss_reg
+        )
 
         model_reg = self.model.regularization(lambda_embed=tc.lambda_reg_embed)
         model_reg = model_reg + self.model.growth_bias_regularization(
@@ -831,6 +1074,7 @@ class Trainer:
 
         metrics["loss_end"] = float(loss_end.item())
         metrics["loss_weak"] = float(loss_weak.item())
+        metrics["loss_count"] = float(loss_count.item())
         metrics["loss_reg"] = float((loss_reg + model_reg).item())
         metrics["loss_total"] = float((loss + model_reg).item())
         return metrics
@@ -845,6 +1089,11 @@ class Trainer:
     ) -> Dict[str, float]:
         tc = self.config.training
         sc = self.config.simulation
+        if getattr(self.model, "context_kind", "mlp") == "transformer":
+            raise ValueError(
+                "Transformer ecological context is not supported with multi-GPU sharding yet. "
+                "Use a single training device so context is computed from the full perturbation set."
+            )
         if tc.lambda_count > 0:
             raise NotImplementedError("Multi-GPU single-model training does not yet support count loss.")
         if self.precision == "fp16":
@@ -1222,6 +1471,14 @@ class Trainer:
             self.history.loss_weak.append(metrics["loss_weak"])
             self.history.loss_count.append(metrics["loss_count"])
             self.history.loss_reg.append(metrics["loss_reg"])
+            self.history.context_norm.append(float(metrics.get("context_norm", math.nan)))
+            self.history.q_entropy.append(float(metrics.get("q_entropy", math.nan)))
+            self.history.freq_entropy.append(float(metrics.get("freq_entropy", math.nan)))
+            self.history.within_attention_entropy.append(float(metrics.get("within_attention_entropy", math.nan)))
+            self.history.group_attention_entropy.append(float(metrics.get("group_attention_entropy", math.nan)))
+            self.history.within_effective_keys.append(float(metrics.get("within_effective_keys", math.nan)))
+            self.history.group_effective_keys.append(float(metrics.get("group_effective_keys", math.nan)))
+            self.history.mass_log_range.append(float(metrics.get("mass_log_range", math.nan)))
 
             # Best checkpoint (training weights)
             if metrics["loss_total"] < self._best_loss:

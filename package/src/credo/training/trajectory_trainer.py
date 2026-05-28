@@ -22,7 +22,7 @@ from ..losses.uot import UOTLoss
 from ..losses.weak_form import WeakFormLoss
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import ParticleRollout, WeightedParticleSimulator
-from .trainer import EMA, WarmupCosineScheduler
+from .trainer import EMA, WarmupCosineScheduler, _DIAGNOSTIC_KEYS, _diagnostics_from_rollout
 from .trajectory_batch import initialise_particles_from_trajectory
 from .trajectory_eval import rollout_metrics_by_key_time
 
@@ -36,6 +36,14 @@ class TrajectoryTrainingHistory:
     loss_count: list[float] = field(default_factory=list)
     loss_reg: list[float] = field(default_factory=list)
     val_endpoint_loss: list[float] = field(default_factory=list)
+    context_norm: list[float] = field(default_factory=list)
+    q_entropy: list[float] = field(default_factory=list)
+    freq_entropy: list[float] = field(default_factory=list)
+    within_attention_entropy: list[float] = field(default_factory=list)
+    group_attention_entropy: list[float] = field(default_factory=list)
+    within_effective_keys: list[float] = field(default_factory=list)
+    group_effective_keys: list[float] = field(default_factory=list)
+    mass_log_range: list[float] = field(default_factory=list)
 
     def append(self, epoch: int, metrics: dict[str, float]) -> None:
         self.epochs.append(int(epoch))
@@ -45,6 +53,8 @@ class TrajectoryTrainingHistory:
         self.loss_count.append(float(metrics.get("loss_count", math.nan)))
         self.loss_reg.append(float(metrics.get("loss_reg", math.nan)))
         self.val_endpoint_loss.append(float(metrics.get("val_endpoint_loss", math.nan)))
+        for key in _DIAGNOSTIC_KEYS:
+            getattr(self, key).append(float(metrics.get(key, math.nan)))
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -56,6 +66,14 @@ class TrajectoryTrainingHistory:
                 "loss_count": self.loss_count,
                 "loss_reg": self.loss_reg,
                 "val_endpoint_loss": self.val_endpoint_loss,
+                "context_norm": self.context_norm,
+                "q_entropy": self.q_entropy,
+                "freq_entropy": self.freq_entropy,
+                "within_attention_entropy": self.within_attention_entropy,
+                "group_attention_entropy": self.group_attention_entropy,
+                "within_effective_keys": self.within_effective_keys,
+                "group_effective_keys": self.group_effective_keys,
+                "mass_log_range": self.mass_log_range,
             }
         )
 
@@ -114,17 +132,23 @@ class TrajectoryTrainer:
             measure_keys=supported_measure_keys,
             sparse_missing=trc.sparse_missing,
         )
-        self.val_view = (
-            TrajectoryView(
+        self.val_view = None
+        if validation_trajectory is not None:
+            model_embedding_ids = set(model.perturbation_ids)
+            validation_measure_keys = [
+                key
+                for key in validation_trajectory.measures[source_label]
+                if embedding_id_for_measure_key(key) in model_embedding_ids
+            ]
+            if not validation_measure_keys:
+                raise ValueError("Validation trajectory has no source keys with trained embeddings.")
+            self.val_view = TrajectoryView(
                 trajectory=validation_trajectory,
                 source_label=source_label,
                 target_labels=self.target_labels,
-                measure_keys=[key for key in self.view.source_keys if key in validation_trajectory.measures[source_label]],
+                measure_keys=validation_measure_keys,
                 sparse_missing=trc.sparse_missing,
             )
-            if validation_trajectory is not None
-            else None
-        )
         if self.val_view is not None:
             self._validate_view_time_axis(self.val_view)
         self.measure_keys = self.view.source_keys
@@ -162,6 +186,7 @@ class TrajectoryTrainer:
             or tc.lambda_count > 0
             or tc.lambda_reg_net > 0
             or tc.lambda_reg_diffusion > 0
+            or getattr(model, "context_kind", "mlp") == "transformer"
         )
         self.simulator = WeightedParticleSimulator(
             n_steps=max(1, len(self.tau_grid) - 1),
@@ -292,22 +317,44 @@ class TrajectoryTrainer:
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         tc = self.config.training
-        embed_params = []
-        net_params = []
+        def _no_decay(name: str) -> bool:
+            return name.endswith(".bias") or "norm" in name.lower() or "layernorm" in name.lower()
+
+        grouped: dict[tuple[str, bool], list[torch.nn.Parameter]] = {
+            ("net", False): [],
+            ("net", True): [],
+            ("embed", False): [],
+            ("embed", True): [],
+            ("transformer", False): [],
+            ("transformer", True): [],
+        }
         for name, param in self.model.named_parameters():
-            if "embedding" in name:
-                embed_params.append(param)
+            if not param.requires_grad:
+                continue
+            if getattr(self.model, "context_kind", "mlp") == "transformer" and name.startswith("context_agg."):
+                group = "transformer"
+            elif "embedding" in name:
+                group = "embed"
             else:
-                net_params.append(param)
-        net_params += list(self.count_lik.parameters())
+                group = "net"
+            grouped[(group, _no_decay(name))].append(param)
+        grouped[("net", False)].extend(p for p in self.count_lik.parameters() if p.requires_grad)
+
+        param_groups = []
+        specs = {
+            "net": (tc.lr_net, tc.weight_decay),
+            "embed": (tc.lr_embed, tc.weight_decay),
+            "transformer": (tc.lr_transformer, tc.transformer_weight_decay),
+        }
+        for group, (lr, decay) in specs.items():
+            decay_params = grouped[(group, False)]
+            no_decay_params = grouped[(group, True)]
+            if decay_params:
+                param_groups.append({"params": decay_params, "lr": lr, "weight_decay": decay})
+            if no_decay_params:
+                param_groups.append({"params": no_decay_params, "lr": lr, "weight_decay": 0.0})
         cls = torch.optim.AdamW if tc.optimizer == "adamw" else torch.optim.Adam
-        return cls(
-            [
-                {"params": net_params, "lr": tc.lr_net},
-                {"params": embed_params, "lr": tc.lr_embed},
-            ],
-            weight_decay=tc.weight_decay,
-        )
+        return cls(param_groups, weight_decay=0.0)
 
     def _autocast_context(self):
         if self.autocast_enabled:
@@ -433,6 +480,7 @@ class TrajectoryTrainer:
             "loss_weak": float(loss_weak.detach().cpu()),
             "loss_count": float(loss_count.detach().cpu()),
             "loss_reg": float(loss_reg.detach().cpu()),
+            **_diagnostics_from_rollout(rollout),
         }
         pred_df = rollout_metrics_by_key_time(
             view,
