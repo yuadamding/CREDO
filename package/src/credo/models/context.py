@@ -27,6 +27,8 @@ class ContextState:
     context: torch.Tensor  # [C]  context vector for coefficient networks
     mass_g: torch.Tensor    # [G]  per-perturbation absolute mass
     freq_g: torch.Tensor    # [G]  per-perturbation relative frequency
+    log_mass_g: Optional[torch.Tensor] = None  # [G] log-domain absolute mass
+    log_total_mass: Optional[torch.Tensor] = None  # [] log total finite-measure mass
 
 
 @dataclass
@@ -207,7 +209,7 @@ class ContextAggregator(nn.Module):
         log_n_total = torch.logsumexp(stats.log_n_g, dim=0)
         log_freq_g = stats.log_n_g - log_n_total
         freq_g = log_freq_g.exp()      # [G]
-        mass_g = stats.log_n_g.exp()   # [G]
+        mass_g = torch.exp(torch.clamp(stats.log_n_g, min=-30.0, max=30.0))   # [G]
 
         q = (freq_g.unsqueeze(-1) * stats.eta_g).sum(dim=0)   # [K]
         s = (freq_g.unsqueeze(-1) * stats.phi_g).sum(dim=0)   # [L]
@@ -218,4 +220,12 @@ class ContextAggregator(nn.Module):
         else:
             ctx = self.psi(qs)
 
-        return ContextState(q=q, s=s, context=ctx, mass_g=mass_g, freq_g=freq_g)
+        return ContextState(
+            q=q,
+            s=s,
+            context=ctx,
+            mass_g=mass_g,
+            freq_g=freq_g,
+            log_mass_g=stats.log_n_g,
+            log_total_mass=log_n_total,
+        )

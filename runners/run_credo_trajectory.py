@@ -176,7 +176,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mass-attention-temperature", type=float, default=1.0)
     parser.add_argument("--transformer-growth-only", dest="transformer_growth_only", action="store_true")
     parser.add_argument("--transformer-all-coefficients", dest="transformer_growth_only", action="store_false")
-    parser.set_defaults(transformer_growth_only=False)
+    parser.set_defaults(transformer_growth_only=True)
+    parser.add_argument("--lr-transformer", type=float, default=1e-4)
+    parser.add_argument("--transformer-weight-decay", type=float, default=1e-4)
     parser.add_argument("--control-mode", choices=["anchored", "free", "soft_ref"], default="soft_ref")
     parser.add_argument("--lambda-weak", type=float, default=0.1)
     parser.add_argument("--lambda-count", type=float, default=0.0)
@@ -628,6 +630,8 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.eval.n_eval_particles = args.eval_particles
     cfg.training.epochs = args.epochs
     cfg.training.seed = args.seed
+    cfg.training.lr_transformer = args.lr_transformer
+    cfg.training.transformer_weight_decay = args.transformer_weight_decay
     cfg.training.precision = args.precision
     cfg.training.lambda_weak = args.lambda_weak
     cfg.training.lambda_count = args.lambda_count

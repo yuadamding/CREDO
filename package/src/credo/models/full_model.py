@@ -68,7 +68,7 @@ class FullDynamicsModel(nn.Module):
         transformer_inducing: int = 16,
         transformer_dropout: float = 0.05,
         mass_attention_temperature: float = 1.0,
-        transformer_growth_only: bool = False,
+        transformer_growth_only: bool = True,
     ) -> None:
         super().__init__()
         self.perturbation_ids = perturbation_ids

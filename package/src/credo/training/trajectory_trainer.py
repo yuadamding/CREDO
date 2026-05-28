@@ -298,22 +298,44 @@ class TrajectoryTrainer:
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         tc = self.config.training
-        embed_params = []
-        net_params = []
+        def _no_decay(name: str) -> bool:
+            return name.endswith(".bias") or "norm" in name.lower() or "layernorm" in name.lower()
+
+        grouped: dict[tuple[str, bool], list[torch.nn.Parameter]] = {
+            ("net", False): [],
+            ("net", True): [],
+            ("embed", False): [],
+            ("embed", True): [],
+            ("transformer", False): [],
+            ("transformer", True): [],
+        }
         for name, param in self.model.named_parameters():
-            if "embedding" in name:
-                embed_params.append(param)
+            if not param.requires_grad:
+                continue
+            if getattr(self.model, "context_kind", "mlp") == "transformer" and name.startswith("context_agg."):
+                group = "transformer"
+            elif "embedding" in name:
+                group = "embed"
             else:
-                net_params.append(param)
-        net_params += list(self.count_lik.parameters())
+                group = "net"
+            grouped[(group, _no_decay(name))].append(param)
+        grouped[("net", False)].extend(p for p in self.count_lik.parameters() if p.requires_grad)
+
+        param_groups = []
+        specs = {
+            "net": (tc.lr_net, tc.weight_decay),
+            "embed": (tc.lr_embed, tc.weight_decay),
+            "transformer": (tc.lr_transformer, tc.transformer_weight_decay),
+        }
+        for group, (lr, decay) in specs.items():
+            decay_params = grouped[(group, False)]
+            no_decay_params = grouped[(group, True)]
+            if decay_params:
+                param_groups.append({"params": decay_params, "lr": lr, "weight_decay": decay})
+            if no_decay_params:
+                param_groups.append({"params": no_decay_params, "lr": lr, "weight_decay": 0.0})
         cls = torch.optim.AdamW if tc.optimizer == "adamw" else torch.optim.Adam
-        return cls(
-            [
-                {"params": net_params, "lr": tc.lr_net},
-                {"params": embed_params, "lr": tc.lr_embed},
-            ],
-            weight_decay=tc.weight_decay,
-        )
+        return cls(param_groups, weight_decay=0.0)
 
     def _autocast_context(self):
         if self.autocast_enabled:

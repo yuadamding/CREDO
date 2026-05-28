@@ -93,6 +93,36 @@ class FeedForwardBlock(nn.Module):
         return x + self.net(self.norm(x))
 
 
+class MassBiasedSelfAttentionBlock(nn.Module):
+    """Permutation-equivariant self-attention with additive key mass bias."""
+
+    def __init__(
+        self,
+        dim: int,
+        heads: int = 4,
+        dropout: float = 0.0,
+        mass_attention_temperature: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.attn = MassBiasedCrossAttention(
+            dim=dim,
+            heads=heads,
+            dropout=dropout,
+            mass_attention_temperature=mass_attention_temperature,
+        )
+        self.ff = FeedForwardBlock(dim, dropout=dropout)
+
+    def forward(self, x: torch.Tensor, key_log_weights: torch.Tensor | None = None) -> torch.Tensor:
+        x = x + self.attn(
+            self.norm(x),
+            x,
+            x,
+            key_log_weights=key_log_weights,
+        )
+        return self.ff(x)
+
+
 class InducedSetAttentionBlock(nn.Module):
     """Set Transformer-style particle block using learned inducing tokens.
 
@@ -163,4 +193,5 @@ __all__ = [
     "FeedForwardBlock",
     "InducedSetAttentionBlock",
     "MassBiasedCrossAttention",
+    "MassBiasedSelfAttentionBlock",
 ]

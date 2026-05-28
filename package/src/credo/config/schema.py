@@ -100,7 +100,7 @@ class ModelConfig(BaseModel):
     transformer_inducing: int = 16
     transformer_dropout: float = 0.05
     mass_attention_temperature: float = 1.0
-    transformer_growth_only: bool = False
+    transformer_growth_only: bool = True
 
     @model_validator(mode="after")
     def _validate_transformer_context(self) -> "ModelConfig":
@@ -134,7 +134,9 @@ class TrainingConfig(BaseModel):
     precision: Literal["fp32", "fp16", "bf16"] = "fp32"
     lr_net: float = 3e-4
     lr_embed: float = 1e-3
+    lr_transformer: float = 1e-4
     weight_decay: float = 1e-6
+    transformer_weight_decay: float = 1e-4
     grad_clip: float = 1.0
     lambda_end: float = 1.0
     lambda_count: float = 0.3
@@ -172,6 +174,10 @@ class TrainingConfig(BaseModel):
     def _validate_training_compatibility(self) -> "TrainingConfig":
         if self.max_active_perturbations < 0:
             raise ValueError("max_active_perturbations must be >= 0.")
+        if self.lr_transformer <= 0:
+            raise ValueError("lr_transformer must be > 0.")
+        if self.transformer_weight_decay < 0:
+            raise ValueError("transformer_weight_decay must be >= 0.")
         if self.lambda_count > 0 and self.max_active_perturbations > 0:
             raise ValueError(
                 "lambda_count > 0 is incompatible with perturbation chunking "

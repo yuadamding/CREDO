@@ -437,23 +437,47 @@ class Trainer:
 
     def _build_optimizer(self, stage: str) -> torch.optim.Optimizer:
         tc = self.config.training
-        # Separate learning rates for embedding vs network params
-        embed_params = []
-        net_params = []
-        for name, p in self.model.named_parameters():
-            if "embedding" in name:
-                embed_params.append(p)
-            else:
-                net_params.append(p)
-        # Also include count_lik params
-        net_params += list(self.count_lik.parameters())
+        def _no_decay(name: str) -> bool:
+            return name.endswith(".bias") or "norm" in name.lower() or "layernorm" in name.lower()
 
-        param_groups = [
-            {"params": net_params, "lr": tc.lr_net},
-            {"params": embed_params, "lr": tc.lr_embed},
-        ]
+        grouped: dict[tuple[str, bool], list[torch.nn.Parameter]] = {
+            ("net", False): [],
+            ("net", True): [],
+            ("embed", False): [],
+            ("embed", True): [],
+            ("transformer", False): [],
+            ("transformer", True): [],
+        }
+
+        for name, p in self.model.named_parameters():
+            if not p.requires_grad:
+                continue
+            if getattr(self.model, "context_kind", "mlp") == "transformer" and name.startswith("context_agg."):
+                group = "transformer"
+            elif "embedding" in name:
+                group = "embed"
+            else:
+                group = "net"
+            grouped[(group, _no_decay(name))].append(p)
+
+        count_params = [p for p in self.count_lik.parameters() if p.requires_grad]
+        grouped[("net", False)].extend(count_params)
+
+        param_groups = []
+        specs = {
+            "net": (tc.lr_net, tc.weight_decay),
+            "embed": (tc.lr_embed, tc.weight_decay),
+            "transformer": (tc.lr_transformer, tc.transformer_weight_decay),
+        }
+        for group, (lr, decay) in specs.items():
+            decay_params = grouped[(group, False)]
+            no_decay_params = grouped[(group, True)]
+            if decay_params:
+                param_groups.append({"params": decay_params, "lr": lr, "weight_decay": decay})
+            if no_decay_params:
+                param_groups.append({"params": no_decay_params, "lr": lr, "weight_decay": 0.0})
         optimizer_cls = torch.optim.AdamW if tc.optimizer == "adamw" else torch.optim.Adam
-        return optimizer_cls(param_groups, weight_decay=tc.weight_decay)
+        return optimizer_cls(param_groups, weight_decay=0.0)
 
     def _one_epoch(
         self,
@@ -463,6 +487,11 @@ class Trainer:
         perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
+        if self._can_use_multi_gpu() and getattr(self.model, "context_kind", "mlp") == "transformer":
+            raise ValueError(
+                "Transformer ecological context is not supported with multi-GPU sharding yet. "
+                "Use a single training device so context is computed from the full perturbation set."
+            )
         if not self._can_use_multi_gpu():
             batch_size = self._perturbation_batch_size(perturbation_ids)
             if batch_size < len(perturbation_ids):
@@ -685,6 +714,78 @@ class Trainer:
 
         for step_idx in range(sc.n_steps):
             tau_k = tau_steps[step_idx]
+
+            if getattr(self.model, "context_kind", "mlp") == "transformer":
+                pids_all: list[str] = []
+                group_slices: list[slice] = []
+                start = 0
+                for state in chunk_states:
+                    pids_all.extend(state["pids"])
+                    stop = start + len(state["pids"])
+                    group_slices.append(slice(start, stop))
+                    start = stop
+
+                with autocast_ctx:
+                    z_all = torch.cat([state["z"] for state in chunk_states], dim=0)
+                    logw_all = torch.cat([state["logw"] for state in chunk_states], dim=0)
+                    log_m0_all = torch.cat([state["log_m0"] for state in chunk_states], dim=0)
+                    a_all = self.model.embedding(pids_all)
+                    b_all = self.model.embedding.growth_intercepts(pids_all)
+                    ctx_state = self.model.context_agg(
+                        z_all,
+                        logw_all,
+                        a_all,
+                        log_m0_all,
+                        tau=tau_k,
+                    )
+                    eta_all, _ = self.model.context_agg.encode_particles(z_all)
+                    base_context = ctx_state.context
+                    growth_context = None
+                    if (
+                        getattr(self.model, "transformer_growth_only", False)
+                        and getattr(self.model, "meanfield_context_agg", None) is not None
+                    ):
+                        base_state = self.model.meanfield_context_agg(
+                            z_all,
+                            logw_all,
+                            a_all,
+                            log_m0_all,
+                            tau=tau_k,
+                        )
+                        base_context = base_state.context
+                        growth_context = ctx_state.context
+
+                for state, group_slice in zip(chunk_states, group_slices):
+                    with autocast_ctx:
+                        coeffs = self.model.coeff_nets(
+                            z=state["z"],
+                            tau=tau_k,
+                            context=base_context,
+                            a=a_all[group_slice],
+                            growth_intercept=b_all[group_slice],
+                            eta_z=eta_all[group_slice],
+                            q=ctx_state.q,
+                            s=ctx_state.s,
+                            growth_context=growth_context,
+                        )
+                    noise = torch.randn(
+                        state["z"].shape,
+                        device=self.device,
+                        dtype=state["z"].dtype,
+                        generator=noise_generator,
+                    )
+                    z_next = state["z"] + coeffs.drift * dtau + coeffs.sigma_diag * (dtau ** 0.5) * noise
+                    logw_next = state["logw"] + coeffs.growth * dtau
+                    if store_history:
+                        state["drift_list"].append(coeffs.drift)
+                        state["sigma_list"].append(coeffs.sigma_diag)
+                        state["growth_list"].append(coeffs.growth)
+                        state["z_list"].append(z_next)
+                        state["logw_list"].append(logw_next)
+                    state["z"] = z_next
+                    state["logw"] = logw_next
+                continue
+
             summary_parts: list[GroupStatistics] = []
             local_cache: list[dict[str, torch.Tensor]] = []
 
@@ -845,6 +946,11 @@ class Trainer:
     ) -> Dict[str, float]:
         tc = self.config.training
         sc = self.config.simulation
+        if getattr(self.model, "context_kind", "mlp") == "transformer":
+            raise ValueError(
+                "Transformer ecological context is not supported with multi-GPU sharding yet. "
+                "Use a single training device so context is computed from the full perturbation set."
+            )
         if tc.lambda_count > 0:
             raise NotImplementedError("Multi-GPU single-model training does not yet support count loss.")
         if self.precision == "fp16":

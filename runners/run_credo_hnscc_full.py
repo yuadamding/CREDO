@@ -151,7 +151,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mass-attention-temperature", type=float, default=1.0)
     parser.add_argument("--transformer-growth-only", dest="transformer_growth_only", action="store_true")
     parser.add_argument("--transformer-all-coefficients", dest="transformer_growth_only", action="store_false")
-    parser.set_defaults(transformer_growth_only=False)
+    parser.set_defaults(transformer_growth_only=True)
+    parser.add_argument("--lr-transformer", type=float, default=1e-4)
+    parser.add_argument("--transformer-weight-decay", type=float, default=1e-4)
     parser.add_argument("--n-particles", type=int, default=128)
     parser.add_argument("--n-steps", type=int, default=16)
     parser.add_argument("--eval-particles", type=int, default=384)
@@ -910,6 +912,7 @@ def main() -> None:
             epochs=args.epochs,
             lr_net=3e-4,
             lr_embed=1e-3,
+            lr_transformer=args.lr_transformer,
             lambda_end=1.0,
             lambda_weak=args.lambda_weak,
             lambda_count=0.0,
@@ -917,6 +920,7 @@ def main() -> None:
             lambda_reg_growth_bias=args.lambda_reg_growth_bias,
             lambda_reg_net=1e-4,
             lambda_reg_diffusion=1e-4,
+            transformer_weight_decay=args.transformer_weight_decay,
             training_schedule=args.training_schedule,
             stage_c_epochs=args.stage_c_epochs,
             stage_d_epochs=args.stage_d_epochs,

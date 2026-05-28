@@ -5,9 +5,10 @@ from typing import Optional
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from .context import ContextState, ProgramEncoder
-from .transformer_blocks import InducedSetAttentionBlock
+from .transformer_blocks import InducedSetAttentionBlock, MassBiasedSelfAttentionBlock
 
 
 class MassAwareTransformerContextAggregator(nn.Module):
@@ -80,22 +81,29 @@ class MassAwareTransformerContextAggregator(nn.Module):
             dropout=dropout,
             mass_attention_temperature=mass_attention_temperature,
         )
-        cross_layer = nn.TransformerEncoderLayer(
-            d_model=token_dim,
-            nhead=n_heads,
-            dim_feedforward=4 * token_dim,
-            dropout=dropout,
-            activation="gelu",
-            batch_first=True,
-            norm_first=True,
+        self.cross_blocks = nn.ModuleList(
+            [
+                MassBiasedSelfAttentionBlock(
+                    dim=token_dim,
+                    heads=n_heads,
+                    dropout=dropout,
+                    mass_attention_temperature=mass_attention_temperature,
+                )
+                for _ in range(n_cross_layers)
+            ]
         )
-        self.cross = nn.TransformerEncoder(cross_layer, num_layers=n_cross_layers)
         self.group_to_particle = nn.Linear(token_dim, token_dim)
         self.phi_head = nn.Sequential(
             nn.LayerNorm(token_dim),
             nn.Linear(token_dim, mediator_dim),
             nn.Tanh(),
         )
+        self.phi_state_gate = nn.Parameter(torch.tensor(0.1))
+
+    def _maybe_checkpoint(self, function, *args):
+        if self.activation_checkpointing and self.training and torch.is_grad_enabled():
+            return checkpoint(function, *args, use_reentrant=False)
+        return function(*args)
 
     def encode_particles(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode particles into state programs and mediator features."""
@@ -125,15 +133,22 @@ class MassAwareTransformerContextAggregator(nn.Module):
         G, N, _ = z.shape
         logw_abs = log_m0[:, None] + logw
         log_m_g = torch.logsumexp(logw_abs, dim=1)
-        freq_g = torch.softmax(log_m_g, dim=0)
-        mass_g = torch.exp(log_m_g)
+        log_total_mass = torch.logsumexp(log_m_g, dim=0)
+        freq_g = torch.exp(log_m_g - log_total_mass)
+        mass_g = torch.exp(torch.clamp(log_m_g, min=-30.0, max=30.0))
         alpha_gi = torch.softmax(logw_abs, dim=1)
 
         eta = self.program_encoder.eta(z)
+        phi_state = self.program_encoder.phi(z)
 
         a_tok = a[:, None, :].expand(G, N, -1)
         logw_centered = (logw_abs - log_m_g[:, None])[:, :, None]
-        logm_centered = (log_m_g - log_m_g.mean()).view(G, 1, 1).expand(G, N, 1)
+        freq_detached = freq_g.detach()
+        logm_detached = log_m_g.detach()
+        logm_mean = (freq_detached * logm_detached).sum()
+        logm_var = (freq_detached * (logm_detached - logm_mean).square()).sum()
+        logm_std = torch.sqrt(logm_var).clamp_min(1e-4)
+        logm_z = ((log_m_g - logm_mean) / logm_std).view(G, 1, 1).expand(G, N, 1)
         freq_tok = freq_g.view(G, 1, 1).expand(G, N, 1)
         if tau is None:
             tau_tensor = torch.zeros((), dtype=z.dtype, device=z.device)
@@ -141,22 +156,42 @@ class MassAwareTransformerContextAggregator(nn.Module):
             tau_tensor = torch.as_tensor(tau, dtype=z.dtype, device=z.device).reshape(())
         tau_tok = tau_tensor.expand(G, N).unsqueeze(-1)
 
-        tokens = torch.cat([z, a_tok, logw_centered, logm_centered, freq_tok, tau_tok], dim=-1)
-        h_particles = self.token_in(tokens)
-        h_particles = self.within(h_particles, key_log_weights=logw_abs)
+        tokens = torch.cat([z, a_tok, logw_centered, logm_z, freq_tok, tau_tok], dim=-1)
+        h_particles = self._maybe_checkpoint(self.token_in, tokens)
+        h_particles = self._maybe_checkpoint(
+            lambda h, weights: self.within(h, key_log_weights=weights),
+            h_particles,
+            logw_abs,
+        )
 
         h_g = (alpha_gi[..., None] * h_particles).sum(dim=1)
-        h_g_cross = self.cross(h_g.unsqueeze(0)).squeeze(0)
+        h_g_cross = h_g.unsqueeze(0)
+        group_log_weights = log_m_g.unsqueeze(0)
+        for block in self.cross_blocks:
+            h_g_cross = self._maybe_checkpoint(
+                lambda h, weights, layer=block: layer(h, key_log_weights=weights),
+                h_g_cross,
+                group_log_weights,
+            )
+        h_g_cross = h_g_cross.squeeze(0)
         h_particles = h_particles + self.group_to_particle(h_g_cross)[:, None, :]
 
-        phi = self.phi_head(h_particles)
+        phi = self.phi_head(h_particles) + self.phi_state_gate * phi_state
         q_g = (alpha_gi[..., None] * eta).sum(dim=1)
         s_g = (alpha_gi[..., None] * phi).sum(dim=1)
         q = (freq_g[:, None] * q_g).sum(dim=0)
         s = (freq_g[:, None] * s_g).sum(dim=0)
         context = torch.cat([q, s], dim=-1)
 
-        return ContextState(q=q, s=s, context=context, mass_g=mass_g, freq_g=freq_g)
+        return ContextState(
+            q=q,
+            s=s,
+            context=context,
+            mass_g=mass_g,
+            freq_g=freq_g,
+            log_mass_g=log_m_g,
+            log_total_mass=log_total_mass,
+        )
 
 
 __all__ = ["MassAwareTransformerContextAggregator"]
