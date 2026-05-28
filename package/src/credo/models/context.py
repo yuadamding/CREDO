@@ -29,6 +29,21 @@ class ContextState:
     freq_g: torch.Tensor    # [G]  per-perturbation relative frequency
     log_mass_g: Optional[torch.Tensor] = None  # [G] log-domain absolute mass
     log_total_mass: Optional[torch.Tensor] = None  # [] log total finite-measure mass
+    diagnostics: Optional["ContextDiagnostics"] = None
+
+
+@dataclass
+class ContextDiagnostics:
+    """Optional context diagnostics for monitoring transformer ecology."""
+    within_attention_entropy: Optional[torch.Tensor] = None
+    group_attention_entropy: Optional[torch.Tensor] = None
+    within_effective_keys: Optional[torch.Tensor] = None
+    group_effective_keys: Optional[torch.Tensor] = None
+    mass_attention_temperature: Optional[torch.Tensor] = None
+    context_norm: Optional[torch.Tensor] = None
+    q_entropy: Optional[torch.Tensor] = None
+    freq_entropy: Optional[torch.Tensor] = None
+    mass_log_range: Optional[torch.Tensor] = None
 
 
 @dataclass

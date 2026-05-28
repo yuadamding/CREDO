@@ -29,6 +29,8 @@ class MassBiasedCrossAttention(nn.Module):
         self.v_proj = nn.Linear(dim, dim)
         self.out_proj = nn.Linear(dim, dim)
         self.dropout = nn.Dropout(dropout)
+        self.last_attention_entropy: torch.Tensor | None = None
+        self.last_effective_keys: torch.Tensor | None = None
 
     def forward(
         self,
@@ -68,6 +70,9 @@ class MassBiasedCrossAttention(nn.Module):
             logits = logits + self.mass_attention_temperature * stable[:, None, None, :]
 
         weights = torch.softmax(logits, dim=-1)
+        entropy = -(weights.clamp_min(1e-30) * weights.clamp_min(1e-30).log()).sum(dim=-1)
+        self.last_attention_entropy = entropy.mean().detach()
+        self.last_effective_keys = entropy.exp().mean().detach()
         weights = self.dropout(weights)
         out = torch.matmul(weights, v)
         out = out.transpose(1, 2).contiguous().view(B, Tq, self.dim)

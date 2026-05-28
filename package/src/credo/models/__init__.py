@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from .coefficients import CoefficientNetworks, Coefficients
-from .context import ContextAggregator, ContextState, GroupStatistics, ProgramEncoder
+from .context import ContextAggregator, ContextDiagnostics, ContextState, GroupStatistics, ProgramEncoder
 from .ecology import EcologicalPayoff
 from .embeddings import PerturbationEmbedding, TimeEmbedding
 from .expression_vae import (
@@ -45,6 +45,7 @@ __all__ = [
     "CoefficientNetworks",
     "Coefficients",
     "ContextAggregator",
+    "ContextDiagnostics",
     "ContextState",
     "CounterfactualEngine",
     "CounterfactualResult",

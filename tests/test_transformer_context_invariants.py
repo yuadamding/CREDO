@@ -202,6 +202,23 @@ def test_all_transformer_context_parameters_get_gradients() -> None:
     assert all(torch.isfinite(param.grad).all() for param in agg.parameters())
 
 
+def test_transformer_context_exposes_attention_diagnostics() -> None:
+    agg = _aggregator()
+    z, logw, a, log_m0 = _inputs()
+
+    out = agg(z, logw, a, log_m0)
+
+    assert out.diagnostics is not None
+    assert out.diagnostics.within_attention_entropy is not None
+    assert out.diagnostics.group_attention_entropy is not None
+    assert out.diagnostics.within_effective_keys is not None
+    assert out.diagnostics.group_effective_keys is not None
+    assert torch.isfinite(out.diagnostics.context_norm)
+    assert torch.isfinite(out.diagnostics.q_entropy)
+    assert torch.isfinite(out.diagnostics.freq_entropy)
+    assert torch.isfinite(out.diagnostics.mass_log_range)
+
+
 def test_model_config_rejects_invalid_transformer_attention_shape() -> None:
     with pytest.raises(ValueError, match="divisible"):
         ModelConfig(context_kind="transformer", transformer_token_dim=10, transformer_heads=4)

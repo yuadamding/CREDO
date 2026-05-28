@@ -7,8 +7,12 @@ import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from .context import ContextState, ProgramEncoder
-from .transformer_blocks import InducedSetAttentionBlock, MassBiasedSelfAttentionBlock
+from .context import ContextDiagnostics, ContextState, ProgramEncoder
+from .transformer_blocks import (
+    InducedSetAttentionBlock,
+    MassBiasedCrossAttention,
+    MassBiasedSelfAttentionBlock,
+)
 
 
 class MassAwareTransformerContextAggregator(nn.Module):
@@ -54,6 +58,7 @@ class MassAwareTransformerContextAggregator(nn.Module):
         self.mediator_dim = int(mediator_dim)
         self.context_dim = int(context_dim)
         self.activation_checkpointing = bool(activation_checkpointing)
+        self.mass_attention_temperature = float(mass_attention_temperature)
 
         self.program_encoder = ProgramEncoder(
             latent_dim=latent_dim,
@@ -104,6 +109,61 @@ class MassAwareTransformerContextAggregator(nn.Module):
         if self.activation_checkpointing and self.training and torch.is_grad_enabled():
             return checkpoint(function, *args, use_reentrant=False)
         return function(*args)
+
+    @staticmethod
+    def _mean_attention_attr(
+        modules: list[MassBiasedCrossAttention],
+        attr: str,
+    ) -> torch.Tensor | None:
+        values = [
+            value
+            for module in modules
+            if (value := getattr(module, attr, None)) is not None
+        ]
+        if not values:
+            return None
+        return torch.stack(values).mean()
+
+    def _diagnostics(
+        self,
+        context: torch.Tensor,
+        q: torch.Tensor,
+        freq_g: torch.Tensor,
+        log_m_g: torch.Tensor,
+    ) -> ContextDiagnostics:
+        within_attention_modules: list[MassBiasedCrossAttention] = []
+        for layer in self.within.layers:
+            within_attention_modules.extend([layer["ind_attn"], layer["x_attn"]])
+        group_attention_modules = [block.attn for block in self.cross_blocks]
+        q_prob = q.clamp_min(1e-30)
+        freq_prob = freq_g.clamp_min(1e-30)
+        return ContextDiagnostics(
+            within_attention_entropy=self._mean_attention_attr(
+                within_attention_modules,
+                "last_attention_entropy",
+            ),
+            group_attention_entropy=self._mean_attention_attr(
+                group_attention_modules,
+                "last_attention_entropy",
+            ),
+            within_effective_keys=self._mean_attention_attr(
+                within_attention_modules,
+                "last_effective_keys",
+            ),
+            group_effective_keys=self._mean_attention_attr(
+                group_attention_modules,
+                "last_effective_keys",
+            ),
+            mass_attention_temperature=torch.tensor(
+                self.mass_attention_temperature,
+                dtype=context.dtype,
+                device=context.device,
+            ),
+            context_norm=context.norm().detach(),
+            q_entropy=-(q_prob * q_prob.log()).sum().detach(),
+            freq_entropy=-(freq_prob * freq_prob.log()).sum().detach(),
+            mass_log_range=(log_m_g.max() - log_m_g.min()).detach(),
+        )
 
     def encode_particles(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode particles into state programs and mediator features."""
@@ -191,6 +251,7 @@ class MassAwareTransformerContextAggregator(nn.Module):
             freq_g=freq_g,
             log_mass_g=log_m_g,
             log_total_mass=log_total_mass,
+            diagnostics=self._diagnostics(context, q, freq_g, log_m_g),
         )
 
 
