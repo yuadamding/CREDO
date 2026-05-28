@@ -134,6 +134,8 @@ def rollout_with_clamped_context(
     perturbation_ids: List[str],
     context_steps: torch.Tensor,
     *,
+    base_context_steps: Optional[torch.Tensor] = None,
+    growth_context_steps: Optional[torch.Tensor] = None,
     n_steps: Optional[int] = None,
     tau_start: float = 0.0,
     tau_end: float = 1.0,
@@ -183,10 +185,29 @@ def rollout_with_clamped_context(
             f"Clamped context has {context_steps.shape[0]} steps, but rollout requested {K} steps."
         )
     expected_context_width = model.context_agg.context_dim
-    if context_steps.ndim != 2 or context_steps.shape[1] != expected_context_width:
+
+    def _validate_context_steps(name: str, value: torch.Tensor) -> None:
+        if value.shape[0] < K:
+            raise ValueError(f"{name} has {value.shape[0]} steps, but rollout requested {K} steps.")
+        if value.ndim != 2 or value.shape[1] != expected_context_width:
+            raise ValueError(
+                f"{name} must have shape [K, context_dim] with "
+                f"context_dim={expected_context_width}; got {tuple(value.shape)}"
+            )
+
+    _validate_context_steps("context_steps", context_steps)
+    if base_context_steps is not None:
+        _validate_context_steps("base_context_steps", base_context_steps)
+    if growth_context_steps is not None:
+        _validate_context_steps("growth_context_steps", growth_context_steps)
+    if (
+        getattr(model, "transformer_growth_only", False)
+        and getattr(model, "meanfield_context_agg", None) is not None
+        and (base_context_steps is None or growth_context_steps is None)
+    ):
         raise ValueError(
-            "context_steps must have shape [K, context_dim] with "
-            f"context_dim={expected_context_width}; got {tuple(context_steps.shape)}"
+            "transformer_growth_only clamped rollouts require both "
+            "base_context_steps and growth_context_steps."
         )
     if noise_steps is not None:
         expected_noise_shape = (K,) + tuple(z0.shape)
@@ -204,6 +225,8 @@ def rollout_with_clamped_context(
     sigma_list = []
     growth_list = []
     used_context = []
+    used_base_context = []
+    used_growth_context = []
     noise_used_list = []
 
     n_programs = model.context_agg.n_programs
@@ -211,17 +234,21 @@ def rollout_with_clamped_context(
         tau_k = tau_steps[k]
         dtau = tau_steps[k + 1] - tau_steps[k]
         context = context_steps[k].to(device=device, dtype=dtype)
+        base_context = (
+            base_context_steps[k].to(device=device, dtype=dtype)
+            if base_context_steps is not None
+            else context
+        )
+        growth_context = (
+            growth_context_steps[k].to(device=device, dtype=dtype)
+            if growth_context_steps is not None
+            else context
+        )
         q = context[:n_programs]
         s = context[n_programs:]
         a = model.embedding(perturbation_ids)
         b = model.embedding.growth_intercepts(perturbation_ids)
         eta_z, _ = model.context_agg.encode_particles(z)
-        base_context = context
-        growth_context = None
-        if getattr(model, "transformer_growth_only", False) and getattr(model, "meanfield_context_agg", None) is not None:
-            base_state = model.meanfield_context_agg(z, logw, a, log_m0, tau=tau_k)
-            base_context = base_state.context
-            growth_context = context
         coeffs = model.coeff_nets(
             z=z,
             tau=tau_k,
@@ -238,6 +265,8 @@ def rollout_with_clamped_context(
         sigma_list.append(coeffs.sigma_diag)
         growth_list.append(coeffs.growth)
         used_context.append(context.detach())
+        used_base_context.append(base_context.detach())
+        used_growth_context.append(growth_context.detach())
 
         if noise_steps is not None:
             noise = noise_steps[k]
@@ -261,6 +290,8 @@ def rollout_with_clamped_context(
         sigma_steps=torch.stack(sigma_list, dim=0),
         growth_steps=torch.stack(growth_list, dim=0),
         context_steps=torch.stack(used_context, dim=0),
+        base_context_steps=torch.stack(used_base_context, dim=0),
+        growth_context_steps=torch.stack(used_growth_context, dim=0),
     )
     if return_noise_used:
         rollout.noise_steps = torch.stack(noise_used_list, dim=0)
@@ -366,6 +397,16 @@ class CounterfactualEngine:
         if clamp_context and not self.simulator.store_history:
             raise ValueError("clamp_context=True requires a simulator with store_history=True.")
 
+        if getattr(self.model, "context_kind", "mlp") == "transformer":
+            return self._run_transformer_full_context(
+                endpoint=endpoint,
+                perturbation_ids=perturbation_ids,
+                clamp_context=clamp_context,
+                seed=seed,
+                control_rollout_mode=control_rollout_mode,
+                common_noise=common_noise,
+            )
+
         for pid in perturbation_ids:
             if pid not in endpoint.initial:
                 continue
@@ -445,6 +486,131 @@ class CounterfactualEngine:
                 rollout_control_clamped=rollout_control_clamped,
             )
             results.append(result)
+
+        return results
+
+    def _full_context_perturbation_ids(self, endpoint: EndpointProblem) -> List[str]:
+        pids = [pid for pid in self.model.perturbation_ids if pid in endpoint.initial]
+        if len(pids) < 2:
+            raise ValueError(
+                "Transformer counterfactuals require full-context rollout with at least "
+                "two perturbations, or an explicit clamped context trajectory. "
+                "Single-perturbation ecology is degenerate."
+            )
+        return pids
+
+    def _run_transformer_full_context(
+        self,
+        *,
+        endpoint: EndpointProblem,
+        perturbation_ids: List[str],
+        clamp_context: bool,
+        seed: int,
+        control_rollout_mode: str,
+        common_noise: bool,
+    ) -> List[CounterfactualResult]:
+        """Run transformer counterfactuals inside the full ecological context."""
+        all_pids = self._full_context_perturbation_ids(endpoint)
+        results: List[CounterfactualResult] = []
+
+        for pid in perturbation_ids:
+            if pid not in endpoint.initial or pid not in all_pids:
+                continue
+
+            z0_all, lw0_all, lm0_all = initialise_particles(
+                endpoint,
+                all_pids,
+                self.n_particles,
+                self.device,
+                seed=seed,
+            )
+            branch_seed = int(seed) + 10_000 + _stable_seed_offset(pid)
+            noise_steps = None
+            if common_noise:
+                noise_steps = self.simulator.sample_noise_like(
+                    z0_all,
+                    self.simulator.n_steps,
+                    seed=branch_seed,
+                )
+
+            rollout_p_all = self.simulator.rollout(
+                z0=z0_all,
+                logw0=lw0_all,
+                model=self.model,
+                log_m0=lm0_all,
+                perturbation_ids=all_pids,
+                noise_steps=noise_steps,
+                return_noise_used=common_noise,
+            )
+
+            with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+                rollout_c_all = self.simulator.rollout(
+                    z0=z0_all.clone(),
+                    logw0=lw0_all.clone(),
+                    model=self.model,
+                    log_m0=lm0_all.clone(),
+                    perturbation_ids=all_pids,
+                    noise_steps=noise_steps.clone() if noise_steps is not None else None,
+                    return_noise_used=common_noise,
+                )
+
+            rollout_clamped = None
+            rollout_control_clamped = None
+            if clamp_context:
+                if (
+                    rollout_c_all.context_steps is None
+                    or rollout_c_all.base_context_steps is None
+                    or rollout_c_all.growth_context_steps is None
+                ):
+                    raise ValueError("Control rollout did not store all context_steps for clamped context.")
+                tau_grid = rollout_c_all.tau_steps.detach()
+                tau_start = float(tau_grid[0].item())
+                tau_end = float(tau_grid[-1].item())
+                rollout_clamped_all = rollout_with_clamped_context(
+                    model=self.model,
+                    z0=z0_all,
+                    logw0=lw0_all,
+                    log_m0=lm0_all,
+                    perturbation_ids=all_pids,
+                    context_steps=rollout_c_all.context_steps,
+                    base_context_steps=rollout_c_all.base_context_steps,
+                    growth_context_steps=rollout_c_all.growth_context_steps,
+                    tau_start=tau_start,
+                    tau_end=tau_end,
+                    tau_grid=tau_grid,
+                    noise_steps=noise_steps,
+                    return_noise_used=common_noise,
+                )
+                with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+                    rollout_control_clamped_all = rollout_with_clamped_context(
+                        model=self.model,
+                        z0=z0_all.clone(),
+                        logw0=lw0_all.clone(),
+                        log_m0=lm0_all.clone(),
+                        perturbation_ids=all_pids,
+                        context_steps=rollout_c_all.context_steps,
+                        base_context_steps=rollout_c_all.base_context_steps,
+                        growth_context_steps=rollout_c_all.growth_context_steps,
+                        tau_start=tau_start,
+                        tau_end=tau_end,
+                        tau_grid=tau_grid,
+                        noise_steps=noise_steps.clone() if noise_steps is not None else None,
+                        return_noise_used=common_noise,
+                    )
+                target_idx = all_pids.index(pid)
+                rollout_clamped = rollout_clamped_all.slice_group(target_idx)
+                rollout_control_clamped = rollout_control_clamped_all.slice_group(target_idx)
+
+            target_idx = all_pids.index(pid)
+            results.append(
+                CounterfactualResult(
+                    perturbation_id=pid,
+                    rollout_perturb=rollout_p_all.slice_group(target_idx),
+                    rollout_control=rollout_c_all.slice_group(target_idx),
+                    rollout_clamped=rollout_clamped,
+                    rollout_control_clamped=rollout_control_clamped,
+                )
+            )
 
         return results
 

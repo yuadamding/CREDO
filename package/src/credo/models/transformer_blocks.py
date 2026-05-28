@@ -66,8 +66,9 @@ class MassBiasedCrossAttention(nn.Module):
                 raise ValueError(
                     f"key_log_weights must have shape {(B, Tk)}, got {tuple(key_log_weights.shape)}"
                 )
-            stable = key_log_weights - torch.logsumexp(key_log_weights, dim=-1, keepdim=True)
-            logits = logits + self.mass_attention_temperature * stable[:, None, None, :]
+            key_log_weights32 = key_log_weights.float()
+            stable = key_log_weights32 - torch.logsumexp(key_log_weights32, dim=-1, keepdim=True)
+            logits = logits + self.mass_attention_temperature * stable.to(logits.dtype)[:, None, None, :]
 
         weights = torch.softmax(logits, dim=-1)
         entropy = -(weights.clamp_min(1e-30) * weights.clamp_min(1e-30).log()).sum(dim=-1)

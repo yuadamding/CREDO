@@ -145,6 +145,14 @@ class TrainingHistory:
     loss_weak: List[float] = field(default_factory=list)
     loss_count: List[float] = field(default_factory=list)
     loss_reg: List[float] = field(default_factory=list)
+    context_norm: List[float] = field(default_factory=list)
+    q_entropy: List[float] = field(default_factory=list)
+    freq_entropy: List[float] = field(default_factory=list)
+    within_attention_entropy: List[float] = field(default_factory=list)
+    group_attention_entropy: List[float] = field(default_factory=list)
+    within_effective_keys: List[float] = field(default_factory=list)
+    group_effective_keys: List[float] = field(default_factory=list)
+    mass_log_range: List[float] = field(default_factory=list)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame({
@@ -157,7 +165,61 @@ class TrainingHistory:
             "loss_weak": self.loss_weak,
             "loss_count": self.loss_count,
             "loss_reg": self.loss_reg,
+            "context_norm": self.context_norm,
+            "q_entropy": self.q_entropy,
+            "freq_entropy": self.freq_entropy,
+            "within_attention_entropy": self.within_attention_entropy,
+            "group_attention_entropy": self.group_attention_entropy,
+            "within_effective_keys": self.within_effective_keys,
+            "group_effective_keys": self.group_effective_keys,
+            "mass_log_range": self.mass_log_range,
         })
+
+
+_DIAGNOSTIC_KEYS = (
+    "context_norm",
+    "q_entropy",
+    "freq_entropy",
+    "within_attention_entropy",
+    "group_attention_entropy",
+    "within_effective_keys",
+    "group_effective_keys",
+    "mass_log_range",
+)
+
+
+def _nan_diagnostics() -> Dict[str, float]:
+    return {key: math.nan for key in _DIAGNOSTIC_KEYS}
+
+
+def _diagnostics_from_rollout(rollout) -> Dict[str, float]:
+    metrics = _nan_diagnostics()
+    diagnostics = getattr(rollout, "context_diagnostics", None)
+    if not diagnostics:
+        return metrics
+    for key in _DIAGNOSTIC_KEYS:
+        value = diagnostics.get(key)
+        if value is not None and value.numel() > 0:
+            metrics[key] = float(value.float().mean().item())
+    return metrics
+
+
+def _diagnostics_from_lists(values_by_key: Dict[str, list[float]]) -> Dict[str, float]:
+    metrics = _nan_diagnostics()
+    for key in _DIAGNOSTIC_KEYS:
+        values = values_by_key.get(key, [])
+        if values:
+            metrics[key] = float(np.mean(values))
+    return metrics
+
+
+def _append_context_diagnostics(values_by_key: Dict[str, list[float]], diagnostics) -> None:
+    if diagnostics is None:
+        return
+    for key in _DIAGNOSTIC_KEYS:
+        value = getattr(diagnostics, key, None)
+        if value is not None:
+            values_by_key.setdefault(key, []).append(float(value.float().mean().item()))
 
 
 def _build_target_dicts(
@@ -229,6 +291,7 @@ class Trainer:
         )
         self._needs_rollout_history = (
             (tc.lambda_weak > 0) or (tc.lambda_count > 0) or has_trajectory_reg
+            or getattr(model, "context_kind", "mlp") == "transformer"
         )
         self.precision = tc.precision
         self.autocast_enabled = self.device.startswith("cuda") and self.precision in {"fp16", "bf16"}
@@ -626,6 +689,7 @@ class Trainer:
             "loss_weak": float(loss_weak.item()),
             "loss_count": float(loss_count.item()),
             "loss_reg": float(loss_reg.item()),
+            **_diagnostics_from_rollout(rollout),
         }
 
     def _one_epoch_chunked(
@@ -711,6 +775,7 @@ class Trainer:
             dtype=rollout_dtype,
         )
         dtau = 1.0 / sc.n_steps
+        diagnostic_values: dict[str, list[float]] = {}
 
         for step_idx in range(sc.n_steps):
             tau_k = tau_steps[step_idx]
@@ -738,6 +803,7 @@ class Trainer:
                         log_m0_all,
                         tau=tau_k,
                     )
+                    _append_context_diagnostics(diagnostic_values, ctx_state.diagnostics)
                     eta_all, _ = self.model.context_agg.encode_particles(z_all)
                     base_context = ctx_state.context
                     growth_context = None
@@ -848,6 +914,7 @@ class Trainer:
             "loss_weak": 0.0,
             "loss_count": 0.0,
             "loss_reg": 0.0,
+            **_diagnostics_from_lists(diagnostic_values),
         }
 
         optimizer.zero_grad()
@@ -1328,6 +1395,14 @@ class Trainer:
             self.history.loss_weak.append(metrics["loss_weak"])
             self.history.loss_count.append(metrics["loss_count"])
             self.history.loss_reg.append(metrics["loss_reg"])
+            self.history.context_norm.append(float(metrics.get("context_norm", math.nan)))
+            self.history.q_entropy.append(float(metrics.get("q_entropy", math.nan)))
+            self.history.freq_entropy.append(float(metrics.get("freq_entropy", math.nan)))
+            self.history.within_attention_entropy.append(float(metrics.get("within_attention_entropy", math.nan)))
+            self.history.group_attention_entropy.append(float(metrics.get("group_attention_entropy", math.nan)))
+            self.history.within_effective_keys.append(float(metrics.get("within_effective_keys", math.nan)))
+            self.history.group_effective_keys.append(float(metrics.get("group_effective_keys", math.nan)))
+            self.history.mass_log_range.append(float(metrics.get("mass_log_range", math.nan)))
 
             # Best checkpoint (training weights)
             if metrics["loss_total"] < self._best_loss:

@@ -191,24 +191,26 @@ class MassAwareTransformerContextAggregator(nn.Module):
             raise ValueError("log_m0 must have shape [G]")
 
         G, N, _ = z.shape
-        logw_abs = log_m0[:, None] + logw
-        log_m_g = torch.logsumexp(logw_abs, dim=1)
+        logw_abs32 = log_m0.float()[:, None] + logw.float()
+        log_m_g = torch.logsumexp(logw_abs32, dim=1)
         log_total_mass = torch.logsumexp(log_m_g, dim=0)
-        freq_g = torch.exp(log_m_g - log_total_mass)
+        freq_g32 = torch.exp(log_m_g - log_total_mass)
         mass_g = torch.exp(torch.clamp(log_m_g, min=-30.0, max=30.0))
-        alpha_gi = torch.softmax(logw_abs, dim=1)
+        alpha_gi32 = torch.softmax(logw_abs32, dim=1)
+        freq_g = freq_g32.to(dtype=z.dtype)
+        alpha_gi = alpha_gi32.to(dtype=z.dtype)
 
         eta = self.program_encoder.eta(z)
         phi_state = self.program_encoder.phi(z)
 
         a_tok = a[:, None, :].expand(G, N, -1)
-        logw_centered = (logw_abs - log_m_g[:, None])[:, :, None]
-        freq_detached = freq_g.detach()
+        logw_centered = (logw_abs32 - log_m_g[:, None]).to(dtype=z.dtype)[:, :, None]
+        freq_detached = freq_g32.detach()
         logm_detached = log_m_g.detach()
         logm_mean = (freq_detached * logm_detached).sum()
         logm_var = (freq_detached * (logm_detached - logm_mean).square()).sum()
         logm_std = torch.sqrt(logm_var).clamp_min(1e-4)
-        logm_z = ((log_m_g - logm_mean) / logm_std).view(G, 1, 1).expand(G, N, 1)
+        logm_z = ((log_m_g - logm_mean) / logm_std).to(dtype=z.dtype).view(G, 1, 1).expand(G, N, 1)
         freq_tok = freq_g.view(G, 1, 1).expand(G, N, 1)
         if tau is None:
             tau_tensor = torch.zeros((), dtype=z.dtype, device=z.device)
@@ -221,7 +223,7 @@ class MassAwareTransformerContextAggregator(nn.Module):
         h_particles = self._maybe_checkpoint(
             lambda h, weights: self.within(h, key_log_weights=weights),
             h_particles,
-            logw_abs,
+            logw_abs32,
         )
 
         h_g = (alpha_gi[..., None] * h_particles).sum(dim=1)
@@ -237,8 +239,8 @@ class MassAwareTransformerContextAggregator(nn.Module):
         h_particles = h_particles + self.group_to_particle(h_g_cross)[:, None, :]
 
         phi = self.phi_head(h_particles) + self.phi_state_gate * phi_state
-        q_g = (alpha_gi[..., None] * eta).sum(dim=1)
-        s_g = (alpha_gi[..., None] * phi).sum(dim=1)
+        q_g = (alpha_gi[..., None].to(dtype=eta.dtype) * eta).sum(dim=1)
+        s_g = (alpha_gi[..., None].to(dtype=phi.dtype) * phi).sum(dim=1)
         q = (freq_g[:, None] * q_g).sum(dim=0)
         s = (freq_g[:, None] * s_g).sum(dim=0)
         context = torch.cat([q, s], dim=-1)

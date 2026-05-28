@@ -7,7 +7,7 @@ import pytest
 from credo.config.schema import ModelConfig, RunConfig, SimulationConfig, TrainingConfig
 from credo.data.core import EndpointProblem, FiniteMeasure, TimeAxis
 from credo.models.full_model import FullDynamicsModel
-from credo.models.simulator import _control_embedding_context, rollout_with_clamped_context
+from credo.models.simulator import CounterfactualEngine, _control_embedding_context, rollout_with_clamped_context
 from credo.models.transformer_context import MassAwareTransformerContextAggregator
 from credo.models.weighted_sde import WeightedParticleSimulator
 from credo.training.trainer import Trainer
@@ -147,6 +147,9 @@ def test_global_mass_shift_does_not_change_transformer_context() -> None:
     assert torch.allclose(out.q, shifted.q, atol=1e-5)
     assert torch.allclose(out.s, shifted.s, atol=1e-5)
     assert torch.allclose(out.freq_g, shifted.freq_g, atol=1e-6)
+    assert out.log_mass_g is not None
+    assert shifted.log_mass_g is not None
+    assert torch.allclose(shifted.log_mass_g, out.log_mass_g + 7.0, atol=1e-6)
     assert torch.allclose(
         shifted.mass_g,
         out.mass_g * torch.exp(torch.tensor(7.0)),
@@ -217,6 +220,26 @@ def test_transformer_context_exposes_attention_diagnostics() -> None:
     assert torch.isfinite(out.diagnostics.q_entropy)
     assert torch.isfinite(out.diagnostics.freq_entropy)
     assert torch.isfinite(out.diagnostics.mass_log_range)
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_transformer_context_mass_reductions_stay_fp32_under_amp_dtype(dtype: torch.dtype) -> None:
+    agg = _aggregator().to(dtype=dtype)
+    z, logw, a, log_m0 = _inputs()
+    z = z.to(dtype=dtype)
+    logw = logw.to(dtype=dtype)
+    a = a.to(dtype=dtype)
+    log_m0 = log_m0.to(dtype=dtype)
+
+    out = agg(z, logw, a, log_m0)
+    expected_log_mass = log_m0.float() + torch.logsumexp(logw.float(), dim=1)
+
+    assert out.log_mass_g is not None
+    assert out.log_total_mass is not None
+    assert out.log_mass_g.dtype == torch.float32
+    assert out.log_total_mass.dtype == torch.float32
+    assert torch.allclose(out.log_mass_g, expected_log_mass, atol=1e-5)
+    assert torch.isfinite(out.context.float()).all()
 
 
 def test_model_config_rejects_invalid_transformer_attention_shape() -> None:
@@ -342,6 +365,9 @@ def test_transformer_growth_only_clamped_rollout_smoke() -> None:
         log_m0=log_m0,
         perturbation_ids=["gene_a"],
     )
+    assert rollout.base_context_steps is not None
+    assert rollout.growth_context_steps is not None
+    assert not torch.allclose(rollout.base_context_steps, rollout.growth_context_steps)
 
     clamped = rollout_with_clamped_context(
         model=model,
@@ -350,6 +376,8 @@ def test_transformer_growth_only_clamped_rollout_smoke() -> None:
         log_m0=log_m0,
         perturbation_ids=["gene_a"],
         context_steps=rollout.context_steps,
+        base_context_steps=rollout.base_context_steps,
+        growth_context_steps=rollout.growth_context_steps,
         n_steps=2,
     )
 
@@ -357,6 +385,71 @@ def test_transformer_growth_only_clamped_rollout_smoke() -> None:
     assert clamped.terminal_logw.shape == (1, 4)
     assert torch.isfinite(clamped.terminal_z).all()
     assert torch.isfinite(clamped.terminal_logw).all()
+    assert clamped.base_context_steps is not None
+    assert clamped.growth_context_steps is not None
+
+
+def test_transformer_growth_only_clamped_rollout_requires_both_context_roles() -> None:
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    z0 = torch.randn(1, 4, 2)
+    logw0 = torch.full((1, 4), -torch.log(torch.tensor(4.0)))
+    log_m0 = torch.tensor([0.3])
+
+    with pytest.raises(ValueError, match="base_context_steps and growth_context_steps"):
+        rollout_with_clamped_context(
+            model=model,
+            z0=z0,
+            logw0=logw0,
+            log_m0=log_m0,
+            perturbation_ids=["gene_a"],
+            context_steps=torch.zeros(2, 5),
+            n_steps=2,
+        )
+
+
+def test_transformer_growth_only_shares_program_encoder_with_meanfield_context() -> None:
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+
+    assert model.meanfield_context_agg is not None
+    assert model.meanfield_context_agg.encoder is model.context_agg.program_encoder
 
 
 def test_growth_only_transformer_does_not_route_transformer_context_to_drift_sigma() -> None:
@@ -403,8 +496,9 @@ def test_growth_only_transformer_does_not_route_transformer_context_to_drift_sig
     )
     model_b.load_state_dict(model_a.state_dict())
     with torch.no_grad():
-        for param in model_b.context_agg.parameters():
-            param.add_(0.5 * torch.randn_like(param))
+        for name, param in model_b.context_agg.named_parameters():
+            if not name.startswith("program_encoder."):
+                param.add_(0.5 * torch.randn_like(param))
 
     z = torch.randn(2, 4, 2)
     logw = torch.full((2, 4), -torch.log(torch.tensor(4.0)))
@@ -558,3 +652,194 @@ def test_chunked_transformer_training_uses_full_g_context(tmp_path) -> None:
     assert cfg.training.lr_transformer in lrs
     assert metrics["perturbation_batch_size"] == 1
     assert np.isfinite(metrics["loss_total"])
+    assert np.isfinite(metrics["context_norm"])
+    assert np.isfinite(metrics["group_attention_entropy"])
+
+
+def test_transformer_chunked_rollout_matches_full_rollout_same_noise() -> None:
+    torch.manual_seed(59)
+    pids = ["ctrl", "gene_a", "gene_b"]
+    model = FullDynamicsModel(
+        perturbation_ids=pids,
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    model.eval()
+    z_full = torch.randn(3, 4, 2)
+    logw_full = torch.full((3, 4), -torch.log(torch.tensor(4.0)))
+    log_m0_full = torch.tensor([0.0, 0.3, -0.2])
+    noise_steps = torch.randn(2, 3, 4, 2)
+
+    simulator = WeightedParticleSimulator(n_steps=2, store_history=True)
+    full = simulator.rollout(
+        z0=z_full,
+        logw0=logw_full,
+        model=model,
+        log_m0=log_m0_full,
+        perturbation_ids=pids,
+        noise_steps=noise_steps,
+    )
+
+    chunks = [
+        {
+            "pids": pids[:1],
+            "z": z_full[:1].clone(),
+            "logw": logw_full[:1].clone(),
+            "log_m0": log_m0_full[:1].clone(),
+        },
+        {
+            "pids": pids[1:],
+            "z": z_full[1:].clone(),
+            "logw": logw_full[1:].clone(),
+            "log_m0": log_m0_full[1:].clone(),
+        },
+    ]
+    tau_steps = torch.linspace(0.0, 1.0, 3)
+    for step_idx in range(2):
+        tau_k = tau_steps[step_idx]
+        dtau = tau_steps[step_idx + 1] - tau_steps[step_idx]
+        z_all = torch.cat([chunk["z"] for chunk in chunks], dim=0)
+        logw_all = torch.cat([chunk["logw"] for chunk in chunks], dim=0)
+        log_m0_all = torch.cat([chunk["log_m0"] for chunk in chunks], dim=0)
+        a_all = model.embedding(pids)
+        b_all = model.embedding.growth_intercepts(pids)
+        ctx_state = model.context_agg(z_all, logw_all, a_all, log_m0_all, tau=tau_k)
+        base_state = model.meanfield_context_agg(z_all, logw_all, a_all, log_m0_all, tau=tau_k)
+        eta_all, _ = model.context_agg.encode_particles(z_all)
+
+        start = 0
+        for chunk in chunks:
+            stop = start + len(chunk["pids"])
+            coeffs = model.coeff_nets(
+                z=chunk["z"],
+                tau=tau_k,
+                context=base_state.context,
+                a=a_all[start:stop],
+                growth_intercept=b_all[start:stop],
+                eta_z=eta_all[start:stop],
+                q=ctx_state.q,
+                s=ctx_state.s,
+                growth_context=ctx_state.context,
+            )
+            chunk_noise = noise_steps[step_idx, start:stop]
+            chunk["z"] = chunk["z"] + coeffs.drift * dtau + coeffs.sigma_diag * torch.sqrt(dtau) * chunk_noise
+            chunk["logw"] = chunk["logw"] + coeffs.growth * dtau
+            start = stop
+
+    z_chunked = torch.cat([chunk["z"] for chunk in chunks], dim=0)
+    logw_chunked = torch.cat([chunk["logw"] for chunk in chunks], dim=0)
+
+    assert torch.allclose(z_chunked, full.terminal_z, atol=1e-6)
+    assert torch.allclose(logw_chunked, full.terminal_logw, atol=1e-6)
+
+
+def test_transformer_counterfactual_requires_full_context_if_endpoint_is_degenerate() -> None:
+    measure = FiniteMeasure(
+        support=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
+        weights=np.ones(2, dtype=np.float32),
+        total_mass=2.0,
+    )
+    endpoint = EndpointProblem(
+        initial={"gene_a": measure},
+        terminal={"gene_a": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["gene_a"],
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=["gene_a"],
+        control_ids=[],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    engine = CounterfactualEngine(
+        model=model,
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=4,
+    )
+
+    with pytest.raises(ValueError, match="full-context"):
+        engine.run(endpoint, ["gene_a"], clamp_context=False)
+
+
+def test_transformer_counterfactual_engine_uses_full_context_same_start_and_noise() -> None:
+    measure = FiniteMeasure(
+        support=np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        weights=np.ones(3, dtype=np.float32),
+        total_mass=3.0,
+    )
+    endpoint = EndpointProblem(
+        initial={"ctrl": measure, "gene_a": measure, "gene_b": measure},
+        terminal={"ctrl": measure, "gene_a": measure, "gene_b": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    engine = CounterfactualEngine(
+        model=model,
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=5,
+    )
+
+    result = engine.run(endpoint, ["gene_a"], clamp_context=True, seed=11, common_noise=True)[0]
+
+    assert result.rollout_perturb.G == 1
+    assert result.rollout_control.G == 1
+    assert result.rollout_clamped is not None
+    assert result.rollout_control_clamped is not None
+    assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
+    assert torch.equal(result.rollout_perturb.logw_steps[0], result.rollout_control.logw_steps[0])
+    assert torch.equal(result.rollout_perturb.log_m0, result.rollout_control.log_m0)
+    assert result.rollout_perturb.noise_steps is not None
+    assert result.rollout_control.noise_steps is not None
+    assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
+    assert result.rollout_control.context_steps is not None
+    assert result.rollout_control.base_context_steps is not None
+    assert result.rollout_control.growth_context_steps is not None

@@ -163,7 +163,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-test-functions", type=int, default=12)
     parser.add_argument("--lambda-weak", type=float, default=0.1)
     parser.add_argument("--lambda-reg-growth-bias", type=float, default=1e-4)
-    parser.add_argument("--max-active-perturbations", type=int, default=0)
+    parser.add_argument(
+        "--max-active-perturbations",
+        type=int,
+        default=0,
+        help=(
+            "Limit coefficient-head perturbation chunks. For transformer context, "
+            "ecological context is still computed over the full active perturbation set."
+        ),
+    )
     parser.add_argument("--budget-headroom", type=float, default=VRAM_COMPLEXITY_HEADROOM)
     parser.add_argument("--auto-scale-budget", dest="auto_scale_budget", action="store_true")
     parser.add_argument("--no-auto-scale-budget", dest="auto_scale_budget", action="store_false")

@@ -30,6 +30,8 @@ class ContextState:
     log_mass_g: Optional[torch.Tensor] = None  # [G] log-domain absolute mass
     log_total_mass: Optional[torch.Tensor] = None  # [] log total finite-measure mass
     diagnostics: Optional["ContextDiagnostics"] = None
+    base_context: Optional[torch.Tensor] = None
+    growth_context: Optional[torch.Tensor] = None
 
 
 @dataclass

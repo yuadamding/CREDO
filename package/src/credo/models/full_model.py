@@ -147,6 +147,7 @@ class FullDynamicsModel(nn.Module):
                     program_assignment_scale=program_assignment_scale,
                     activation_checkpointing=activation_checkpointing,
                 )
+                self.meanfield_context_agg.encoder = self.context_agg.program_encoder
             else:
                 self.meanfield_context_agg = None
         else:
@@ -192,6 +193,8 @@ class FullDynamicsModel(nn.Module):
             base_state = self.meanfield_context_agg(z, logw, a, log_m0, tau=tau)
             base_context = base_state.context
             growth_context = ctx
+        ctx_state.base_context = base_context
+        ctx_state.growth_context = growth_context if growth_context is not None else base_context
 
         # Get program scores for ecology (if enabled)
         eta_z, _ = self.context_agg.encode_particles(z)   # [G, N, K]
