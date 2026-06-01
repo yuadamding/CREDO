@@ -30,12 +30,20 @@ from .regularizers import (
     drift_action_penalty,
     growth_action_penalty,
 )
-from .uot import UOTLoss, sinkhorn_divergence, sinkhorn_divergence_normalized
+from .uot import (
+    EndpointGeometryMassLoss,
+    UOTLoss,
+    endpoint_geometry_mass_components,
+    endpoint_geometry_mass_loss,
+    sinkhorn_divergence,
+    sinkhorn_divergence_normalized,
+)
 from .weak_form import GaussianRBFTestFunctions, WeakFormLoss
 
 __all__ = [
     "CountLikelihood",
     "DirichletMultinomialLikelihood",
+    "EndpointGeometryMassLoss",
     "MultiTimeCountLikelihood",
     "MultiTimeEndpointLoss",
     "RolloutRegularizer",
@@ -58,6 +66,8 @@ __all__ = [
     "integrated_fitness_curve",
     "make_observed_tau_grid",
     "mediator_orthogonality_loss",
+    "endpoint_geometry_mass_components",
+    "endpoint_geometry_mass_loss",
     "sinkhorn_divergence",
     "sinkhorn_divergence_normalized",
 ]

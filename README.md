@@ -97,6 +97,9 @@ Compatibility facades such as `credo.data.problems`,
   the perturbation residual instead of swapping in control initial cells.
 - Ecological context is computed from absolute particle weights, including
   source mass offsets.
+- The default endpoint loss is a finite-measure geometry-plus-log-mass proxy:
+  debiased Sinkhorn geometry on normalized measures plus a log-mass penalty,
+  not a full dynamic unbalanced-OT path objective.
 - Multi-time training consumes `TrajectoryProblem` or `SparseTrajectoryProblem`,
   keeps sample-aware `measure_key`s separate from perturbation `embedding_id`s,
   rolls out one continuous global-time trajectory, and evaluates downstream

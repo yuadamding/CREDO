@@ -8,6 +8,7 @@ from credo.models.context import ContextAggregator
 from credo.models.embeddings import PerturbationEmbedding
 from credo.models.full_model import FullDynamicsModel
 from credo.models.simulator import _control_embedding_context
+from credo.training.trainer import _uses_global_ecological_context
 from credo.training.trajectory_batch import initialise_particles_from_trajectory
 
 
@@ -28,6 +29,24 @@ def test_soft_ref_effective_embeddings_are_reference_plus_residual() -> None:
     assert torch.allclose(out[1], torch.tensor([1.0, 2.0]))
     assert torch.allclose(out[2], torch.tensor([4.0, 6.0]))
     assert torch.allclose(out[0], out[1])
+    emb.assert_soft_ref_invariants()
+
+
+def test_soft_ref_invariant_assertion_catches_shared_guide_bypass() -> None:
+    emb = PerturbationEmbedding(
+        perturbation_ids=["ctrl", "gene_x"],
+        control_ids=["ctrl"],
+        embedding_dim=2,
+        control_mode="soft_ref",
+        shared_guide_embedding=True,
+    )
+
+    try:
+        emb.assert_soft_ref_invariants()
+    except AssertionError as exc:
+        assert "shared_guide_embedding" in str(exc)
+    else:
+        raise AssertionError("Expected soft-ref invariant assertion to fail")
 
 
 def test_context_uses_absolute_log_m0_mass() -> None:
@@ -120,6 +139,36 @@ def test_reference_counterfactual_context_keeps_soft_reference_embedding() -> No
     assert torch.allclose(reference, torch.tensor([1.0, 2.0]))
     assert not torch.allclose(reference, torch.zeros_like(reference))
     assert torch.allclose(restored, factual)
+
+
+def test_ecological_growth_requires_global_context_under_sharding() -> None:
+    ecological = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_x"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=2,
+        n_programs=2,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        context_kind="mlp",
+    )
+    non_ecological = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_x"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=2,
+        n_programs=2,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=False,
+        context_kind="mlp",
+    )
+
+    assert _uses_global_ecological_context(ecological)
+    assert not _uses_global_ecological_context(non_ecological)
 
 
 def test_particle_initialization_respects_nonuniform_measure_weights() -> None:

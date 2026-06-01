@@ -41,6 +41,10 @@ class ParticleRollout:
     causal_growth_context_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C]
     causal_delta_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C]
     noise_steps: Optional[torch.Tensor] = None      # [K, G, N, d] innovations used by rollout
+    ess_steps: Optional[torch.Tensor] = None  # [K+1, G]
+    ess_frac_steps: Optional[torch.Tensor] = None  # [K+1, G]
+    logw_range_steps: Optional[torch.Tensor] = None  # [K+1, G]
+    max_weight_frac_steps: Optional[torch.Tensor] = None  # [K+1, G]
 
     @property
     def n_steps(self) -> int:
@@ -102,6 +106,10 @@ class ParticleRollout:
             causal_growth_context_steps=_slice_context_optional(self.causal_growth_context_steps),
             causal_delta_steps=_slice_context_optional(self.causal_delta_steps),
             noise_steps=_slice_optional(self.noise_steps, 1),
+            ess_steps=_slice_optional(self.ess_steps, 1),
+            ess_frac_steps=_slice_optional(self.ess_frac_steps, 1),
+            logw_range_steps=_slice_optional(self.logw_range_steps, 1),
+            max_weight_frac_steps=_slice_optional(self.max_weight_frac_steps, 1),
         )
 
 
@@ -210,6 +218,10 @@ class WeightedParticleSimulator(nn.Module):
 
         z = z0.clone()
         logw = logw0.clone()
+        ess_list = [self.effective_sample_size(logw).detach()]
+        ess_frac_list = [self.ess_fraction(logw).detach()]
+        logw_range_list = [self.log_weight_range(logw).detach()]
+        max_weight_frac_list = [self.max_weight_fraction(logw).detach()]
 
         for k in range(K):
             tau_k = tau_steps[k]
@@ -286,6 +298,10 @@ class WeightedParticleSimulator(nn.Module):
 
             z_list.append(z)
             logw_list.append(logw)
+            ess_list.append(self.effective_sample_size(logw).detach())
+            ess_frac_list.append(self.ess_fraction(logw).detach())
+            logw_range_list.append(self.log_weight_range(logw).detach())
+            max_weight_frac_list.append(self.max_weight_fraction(logw).detach())
 
         z_steps = torch.stack(z_list, dim=0)     # [K+1, G, N, d]
         logw_steps = torch.stack(logw_list, dim=0)  # [K+1, G, N]
@@ -295,6 +311,10 @@ class WeightedParticleSimulator(nn.Module):
             logw_steps=logw_steps,
             tau_steps=tau_steps,
             log_m0=log_m0.detach().clone(),
+            ess_steps=torch.stack(ess_list, dim=0),
+            ess_frac_steps=torch.stack(ess_frac_list, dim=0),
+            logw_range_steps=torch.stack(logw_range_list, dim=0),
+            max_weight_frac_steps=torch.stack(max_weight_frac_list, dim=0),
         )
         if self.store_history and drift_list:
             result.drift_steps = torch.stack(drift_list, dim=0)
@@ -377,6 +397,28 @@ class WeightedParticleSimulator(nn.Module):
     @staticmethod
     def effective_sample_size(logw: torch.Tensor) -> torch.Tensor:
         """ESS per perturbation. logw: [G, N] -> [G]."""
-        log_norm = logw - torch.logsumexp(logw, dim=-1, keepdim=True)
-        log_ess = -torch.logsumexp(2 * log_norm, dim=-1)
-        return log_ess.exp()
+        return WeightedParticleSimulator.log_effective_sample_size(logw).exp()
+
+    @staticmethod
+    def log_effective_sample_size(logw: torch.Tensor) -> torch.Tensor:
+        """Log effective sample size per perturbation. logw: [G, N] -> [G]."""
+        logw32 = logw.float()
+        log_norm = logw32 - torch.logsumexp(logw32, dim=-1, keepdim=True)
+        return -torch.logsumexp(2 * log_norm, dim=-1)
+
+    @staticmethod
+    def ess_fraction(logw: torch.Tensor) -> torch.Tensor:
+        """ESS divided by particle count per perturbation. logw: [G, N] -> [G]."""
+        return WeightedParticleSimulator.effective_sample_size(logw) / float(logw.shape[-1])
+
+    @staticmethod
+    def max_weight_fraction(logw: torch.Tensor) -> torch.Tensor:
+        """Largest normalised particle weight per perturbation. logw: [G, N] -> [G]."""
+        logw32 = logw.float()
+        return torch.exp(logw32.max(dim=-1).values - torch.logsumexp(logw32, dim=-1))
+
+    @staticmethod
+    def log_weight_range(logw: torch.Tensor) -> torch.Tensor:
+        """Range of relative log-weights per perturbation. logw: [G, N] -> [G]."""
+        logw32 = logw.float()
+        return logw32.max(dim=-1).values - logw32.min(dim=-1).values

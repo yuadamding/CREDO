@@ -171,3 +171,43 @@ def test_sample_noise_for_tau_grid_uses_grid_step_count_without_global_rng() -> 
 
     assert noise.shape == (len(tau_grid) - 1, 1, 4, 2)
     assert torch.equal(rng_before, rng_after)
+
+
+def test_effective_sample_size_detects_weight_degeneracy() -> None:
+    logw_uniform = torch.zeros(1, 5)
+    logw_degenerate = torch.tensor([[0.0, -20.0, -20.0, -20.0, -20.0]])
+
+    assert torch.allclose(
+        WeightedParticleSimulator.ess_fraction(logw_uniform),
+        torch.ones(1),
+    )
+    assert float(WeightedParticleSimulator.ess_fraction(logw_degenerate)) < 0.21
+    assert float(WeightedParticleSimulator.max_weight_fraction(logw_degenerate)) > 0.999
+    assert float(WeightedParticleSimulator.log_weight_range(logw_degenerate)) == 20.0
+
+
+def test_rollout_records_weight_diagnostics_for_every_step() -> None:
+    simulator = WeightedParticleSimulator(n_steps=3, store_history=False)
+    z0 = torch.zeros(1, 4, 2)
+    logw0 = torch.zeros(1, 4)
+    log_m0 = torch.zeros(1)
+
+    rollout = simulator.rollout(
+        z0=z0,
+        logw0=logw0,
+        model=_ConstantDynamics(),
+        log_m0=log_m0,
+        noise_steps=torch.zeros(3, 1, 4, 2),
+    )
+
+    assert rollout.ess_steps is not None
+    assert rollout.ess_frac_steps is not None
+    assert rollout.logw_range_steps is not None
+    assert rollout.max_weight_frac_steps is not None
+    assert rollout.ess_steps.shape == (4, 1)
+    assert torch.allclose(rollout.ess_frac_steps, torch.ones_like(rollout.ess_frac_steps))
+    assert torch.allclose(rollout.logw_range_steps, torch.zeros_like(rollout.logw_range_steps))
+    assert torch.allclose(
+        rollout.max_weight_frac_steps,
+        torch.full_like(rollout.max_weight_frac_steps, 0.25),
+    )

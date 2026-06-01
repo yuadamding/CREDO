@@ -1,20 +1,22 @@
-"""Unbalanced optimal transport divergence loss.
+"""Endpoint geometry-plus-mass finite-measure loss.
 
 Weight convention
 -----------------
-All tensors passed to UOTLoss must be *absolute* log-weights:
+All tensors passed to :class:`EndpointGeometryMassLoss` must be *absolute*
+log-weights:
     log_a[i] = log(actual_weight_i),  sum_i exp(log_a) = total_mass.
 
 The trainer adds log_m0 to the relative rollout log-weights before calling.
 
 Implementation
 --------------
-Decomposes UOT into two terms:
+This endpoint proxy decomposes finite-measure matching into two terms:
   (1) geometry  : debiased Sinkhorn divergence on normalised probability measures
   (2) mass      : tau * (log|mu| - log|nu|)^2
 
 Uses geomloss.SamplesLoss for (1) when available; falls back to a correct
-log-domain balanced Sinkhorn otherwise.
+log-domain balanced Sinkhorn otherwise.  This is intentionally not a full
+dynamic unbalanced-OT objective over paths.
 """
 from __future__ import annotations
 
@@ -86,14 +88,14 @@ def sinkhorn_divergence_normalized(
     return (ot_xy - 0.5 * ot_xx - 0.5 * ot_yy).clamp(min=0)
 
 
-def sinkhorn_divergence(
+def endpoint_geometry_mass_loss(
     x: torch.Tensor, log_a: torch.Tensor,   # [n, d], [n] absolute log-weights
     y: torch.Tensor, log_b: torch.Tensor,   # [m, d], [m] absolute log-weights
     eps: float = 0.1,
     tau: float = 1.0,
     max_iter: int = 200,
 ) -> torch.Tensor:
-    """UOT proxy: debiased geometry on normalised measures + squared log-mass penalty."""
+    """Endpoint proxy: normalised Sinkhorn geometry plus squared log-mass penalty."""
     a_norm = torch.softmax(log_a, dim=0)  # [n]  probability weights
     b_norm = torch.softmax(log_b, dim=0)  # [m]
     geom = sinkhorn_divergence_normalized(x, a_norm, y, b_norm, eps=eps, max_iter=max_iter)
@@ -103,6 +105,40 @@ def sinkhorn_divergence(
     return geom + mass_pen
 
 
+def endpoint_geometry_mass_components(
+    x: torch.Tensor, log_a: torch.Tensor,
+    y: torch.Tensor, log_b: torch.Tensor,
+    eps: float = 0.1,
+    tau: float = 1.0,
+    max_iter: int = 200,
+) -> Dict[str, torch.Tensor]:
+    """Return geometry, log-mass penalty, raw log-masses, and total components."""
+    a_norm = torch.softmax(log_a, dim=0)
+    b_norm = torch.softmax(log_b, dim=0)
+    geom = sinkhorn_divergence_normalized(x, a_norm, y, b_norm, eps=eps, max_iter=max_iter)
+    log_mass_pred = torch.logsumexp(log_a, dim=0)
+    log_mass_tgt = torch.logsumexp(log_b, dim=0)
+    mass = tau * (log_mass_pred - log_mass_tgt) ** 2
+    return {
+        "geom": geom,
+        "mass": mass,
+        "log_mass_pred": log_mass_pred,
+        "log_mass_target": log_mass_tgt,
+        "total": geom + mass,
+    }
+
+
+def sinkhorn_divergence(
+    x: torch.Tensor, log_a: torch.Tensor,
+    y: torch.Tensor, log_b: torch.Tensor,
+    eps: float = 0.1,
+    tau: float = 1.0,
+    max_iter: int = 200,
+) -> torch.Tensor:
+    """Compatibility alias for :func:`endpoint_geometry_mass_loss`."""
+    return endpoint_geometry_mass_loss(x, log_a, y, log_b, eps=eps, tau=tau, max_iter=max_iter)
+
+
 def sinkhorn_divergence_components(
     x: torch.Tensor, log_a: torch.Tensor,
     y: torch.Tensor, log_b: torch.Tensor,
@@ -110,25 +146,23 @@ def sinkhorn_divergence_components(
     tau: float = 1.0,
     max_iter: int = 200,
 ) -> Dict[str, torch.Tensor]:
-    """Return geometry, log-mass penalty, and total UOT-proxy components."""
-    a_norm = torch.softmax(log_a, dim=0)
-    b_norm = torch.softmax(log_b, dim=0)
-    geom = sinkhorn_divergence_normalized(x, a_norm, y, b_norm, eps=eps, max_iter=max_iter)
-    log_mass_pred = torch.logsumexp(log_a, dim=0)
-    log_mass_tgt = torch.logsumexp(log_b, dim=0)
-    mass = tau * (log_mass_pred - log_mass_tgt) ** 2
-    return {"geom": geom, "mass": mass, "total": geom + mass}
+    """Compatibility alias for :func:`endpoint_geometry_mass_components`."""
+    return endpoint_geometry_mass_components(
+        x, log_a, y, log_b, eps=eps, tau=tau, max_iter=max_iter
+    )
 
 
 # ---------------------------------------------------------------------------
-# UOTLoss module
+# Endpoint loss module
 # ---------------------------------------------------------------------------
 
-class UOTLoss(nn.Module):
-    """Endpoint UOT loss over absolute finite measures.
+class EndpointGeometryMassLoss(nn.Module):
+    """Endpoint finite-measure loss over absolute log-weights.
 
     Decomposes as geometry (Sinkhorn divergence on normalised measures) +
-    mass discrepancy penalty.  Uses geomloss when available.
+    mass discrepancy penalty.  Uses geomloss when available.  Despite the
+    historical ``UOTLoss`` alias, this class is not a dynamic unbalanced-OT
+    path loss.
     """
 
     def __init__(
@@ -223,7 +257,17 @@ class UOTLoss(nn.Module):
 
             div = geom + mass_pen
             w = weights[pid] if weights else 1.0
-            per_pid[pid] = {"geom": geom, "mass": mass_pen, "total": div}
+            per_pid[pid] = {
+                "geom": geom,
+                "mass": mass_pen,
+                "log_mass_pred": log_mass_pred,
+                "log_mass_target": log_mass_tgt,
+                "total": div,
+            }
             total = total + w * div
 
         return total, per_pid
+
+
+class UOTLoss(EndpointGeometryMassLoss):
+    """Backward-compatible name for :class:`EndpointGeometryMassLoss`."""

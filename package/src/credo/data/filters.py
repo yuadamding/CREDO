@@ -1,8 +1,8 @@
 """Sparse support filtering for state endpoint problems.
 
 Only perturbations with sufficient cells at both endpoints enter the
-state-transport UOT loss. Low-support perturbations may still enter
-the count model.
+endpoint geometry/mass loss. Low-support perturbations may still enter the
+count model.
 """
 from __future__ import annotations
 

@@ -18,7 +18,7 @@ from ..data.trajectory_view import TrajectoryView, embedding_id_for_measure_key
 from ..losses.counts import MultiTimeCountLikelihood
 from ..losses.multitime import MultiTimeEndpointLoss, checkpoint_indices_for_taus, make_observed_tau_grid
 from ..losses.regularizers import RolloutRegularizer
-from ..losses.uot import UOTLoss
+from ..losses.uot import EndpointGeometryMassLoss
 from ..losses.weak_form import WeakFormLoss
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import ParticleRollout, WeightedParticleSimulator
@@ -65,6 +65,11 @@ class TrajectoryTrainingHistory:
     mediator_usage_entropy: list[float] = field(default_factory=list)
     mediator_usage_min: list[float] = field(default_factory=list)
     mediator_usage_max: list[float] = field(default_factory=list)
+    terminal_ess_frac_mean: list[float] = field(default_factory=list)
+    terminal_ess_frac_min: list[float] = field(default_factory=list)
+    min_ess_frac_mean: list[float] = field(default_factory=list)
+    max_weight_frac_mean: list[float] = field(default_factory=list)
+    logw_range_max: list[float] = field(default_factory=list)
 
     def append(self, epoch: int, metrics: dict[str, float]) -> None:
         self.epochs.append(int(epoch))
@@ -76,6 +81,11 @@ class TrajectoryTrainingHistory:
         self.val_endpoint_loss.append(float(metrics.get("val_endpoint_loss", math.nan)))
         for key in _DIAGNOSTIC_KEYS:
             getattr(self, key).append(float(metrics.get(key, math.nan)))
+        self.terminal_ess_frac_mean.append(float(metrics.get("terminal_ess_frac_mean", math.nan)))
+        self.terminal_ess_frac_min.append(float(metrics.get("terminal_ess_frac_min", math.nan)))
+        self.min_ess_frac_mean.append(float(metrics.get("min_ess_frac_mean", math.nan)))
+        self.max_weight_frac_mean.append(float(metrics.get("max_weight_frac_mean", math.nan)))
+        self.logw_range_max.append(float(metrics.get("logw_range_max", math.nan)))
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -110,6 +120,11 @@ class TrajectoryTrainingHistory:
                 "mediator_usage_entropy": self.mediator_usage_entropy,
                 "mediator_usage_min": self.mediator_usage_min,
                 "mediator_usage_max": self.mediator_usage_max,
+                "terminal_ess_frac_mean": self.terminal_ess_frac_mean,
+                "terminal_ess_frac_min": self.terminal_ess_frac_min,
+                "min_ess_frac_mean": self.min_ess_frac_mean,
+                "max_weight_frac_mean": self.max_weight_frac_mean,
+                "logw_range_max": self.logw_range_max,
             }
         )
 
@@ -233,7 +248,7 @@ class TrajectoryTrainer:
             store_history=needs_history,
         )
         self.endpoint_loss = MultiTimeEndpointLoss(
-            UOTLoss(
+            EndpointGeometryMassLoss(
                 eps=tc.sinkhorn_epsilon,
                 tau=tc.sinkhorn_tau,
                 max_iter=tc.sinkhorn_max_iter,

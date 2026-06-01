@@ -31,7 +31,7 @@ import torch.nn as nn
 
 from ..config.schema import RunConfig
 from ..data.core import EndpointProblem, FiniteMeasure
-from ..losses.uot import UOTLoss
+from ..losses.uot import EndpointGeometryMassLoss
 from ..losses.weak_form import WeakFormLoss
 from ..losses.counts import CountLikelihood
 from ..losses.causal_attention import (
@@ -176,6 +176,11 @@ class TrainingHistory:
     mediator_usage_entropy: List[float] = field(default_factory=list)
     mediator_usage_min: List[float] = field(default_factory=list)
     mediator_usage_max: List[float] = field(default_factory=list)
+    terminal_ess_frac_mean: List[float] = field(default_factory=list)
+    terminal_ess_frac_min: List[float] = field(default_factory=list)
+    min_ess_frac_mean: List[float] = field(default_factory=list)
+    max_weight_frac_mean: List[float] = field(default_factory=list)
+    logw_range_max: List[float] = field(default_factory=list)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame({
@@ -212,6 +217,11 @@ class TrainingHistory:
             "mediator_usage_entropy": self.mediator_usage_entropy,
             "mediator_usage_min": self.mediator_usage_min,
             "mediator_usage_max": self.mediator_usage_max,
+            "terminal_ess_frac_mean": self.terminal_ess_frac_mean,
+            "terminal_ess_frac_min": self.terminal_ess_frac_min,
+            "min_ess_frac_mean": self.min_ess_frac_mean,
+            "max_weight_frac_mean": self.max_weight_frac_mean,
+            "logw_range_max": self.logw_range_max,
         })
 
 
@@ -249,6 +259,14 @@ def _uses_global_context_backend(model: FullDynamicsModel) -> bool:
     return getattr(model, "context_kind", "mlp") in _GLOBAL_CONTEXT_BACKENDS
 
 
+def _uses_global_ecological_context(model: FullDynamicsModel) -> bool:
+    """Return true when sharding perturbations would alter ecology semantics."""
+    if _uses_global_context_backend(model):
+        return True
+    coeff_nets = getattr(model, "coeff_nets", None)
+    return bool(getattr(coeff_nets, "ecological_growth", False))
+
+
 def _nan_diagnostics() -> Dict[str, float]:
     return {key: math.nan for key in _DIAGNOSTIC_KEYS}
 
@@ -257,11 +275,50 @@ def _diagnostics_from_rollout(rollout) -> Dict[str, float]:
     metrics = _nan_diagnostics()
     diagnostics = getattr(rollout, "context_diagnostics", None)
     if not diagnostics:
+        metrics.update(_weight_diagnostics_from_rollout(rollout))
         return metrics
     for key in _DIAGNOSTIC_KEYS:
         value = diagnostics.get(key)
         if value is not None and value.numel() > 0:
             metrics[key] = float(value.float().mean().item())
+    metrics.update(_weight_diagnostics_from_rollout(rollout))
+    return metrics
+
+
+def _weight_diagnostics_from_rollout(rollout) -> Dict[str, float]:
+    ess_frac = getattr(rollout, "ess_frac_steps", None)
+    max_weight_frac = getattr(rollout, "max_weight_frac_steps", None)
+    logw_range = getattr(rollout, "logw_range_steps", None)
+    return _weight_diagnostics_from_tensors(
+        ess_frac_steps=ess_frac,
+        max_weight_frac_steps=max_weight_frac,
+        logw_range_steps=logw_range,
+    )
+
+
+def _weight_diagnostics_from_tensors(
+    *,
+    ess_frac_steps: Optional[torch.Tensor],
+    max_weight_frac_steps: Optional[torch.Tensor],
+    logw_range_steps: Optional[torch.Tensor],
+) -> Dict[str, float]:
+    metrics = {
+        "terminal_ess_frac_mean": math.nan,
+        "terminal_ess_frac_min": math.nan,
+        "min_ess_frac_mean": math.nan,
+        "max_weight_frac_mean": math.nan,
+        "logw_range_max": math.nan,
+    }
+    if ess_frac_steps is not None and ess_frac_steps.numel() > 0:
+        ess = ess_frac_steps.float()
+        terminal = ess[-1]
+        metrics["terminal_ess_frac_mean"] = float(terminal.mean().item())
+        metrics["terminal_ess_frac_min"] = float(terminal.min().item())
+        metrics["min_ess_frac_mean"] = float(ess.min(dim=0).values.mean().item())
+    if max_weight_frac_steps is not None and max_weight_frac_steps.numel() > 0:
+        metrics["max_weight_frac_mean"] = float(max_weight_frac_steps.float().max(dim=0).values.mean().item())
+    if logw_range_steps is not None and logw_range_steps.numel() > 0:
+        metrics["logw_range_max"] = float(logw_range_steps.float().max().item())
     return metrics
 
 
@@ -289,7 +346,7 @@ def _build_target_dicts(
     device: str,
     dtype: torch.dtype,
 ) -> Tuple[Dict, Dict]:
-    """Build target support and log-weight dicts for UOT loss."""
+    """Build target support and log-weight dicts for endpoint finite-measure loss."""
     target_support, target_logw = {}, {}
     for pid in perturbation_ids:
         if pid not in endpoint.terminal:
@@ -371,7 +428,7 @@ class Trainer:
             n_steps=sc.n_steps,
             store_history=self._needs_rollout_history,
         )
-        self.uot_loss = UOTLoss(
+        self.uot_loss = EndpointGeometryMassLoss(
             eps=tc.sinkhorn_epsilon,
             tau=tc.sinkhorn_tau,
             max_iter=tc.sinkhorn_max_iter,
@@ -844,9 +901,9 @@ class Trainer:
         perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
-        if self._can_use_multi_gpu() and _uses_global_context_backend(self.model):
+        if self._can_use_multi_gpu() and _uses_global_ecological_context(self.model):
             raise ValueError(
-                "Global ecological context backends are not supported with multi-GPU sharding yet. "
+                "Global ecological context is not supported with multi-GPU sharding yet. "
                 "Use a single training device so context is computed from the full perturbation set."
             )
         if not self._can_use_multi_gpu():
@@ -902,8 +959,8 @@ class Trainer:
                 perturbation_ids=perturbation_ids,
             )
 
-        # --- Endpoint UOT loss (absolute log-weights) ---
-        # Keep OT and mass terms in fp32 for numerical stability even when rollout used AMP.
+        # --- Endpoint geometry-plus-log-mass loss (absolute log-weights) ---
+        # Keep geometry and mass terms in fp32 for numerical stability even when rollout used AMP.
         pred_logw_abs = rollout.terminal_logw.float() + log_m0.float().unsqueeze(-1)  # [G, N]
         loss_end, _ = self.uot_loss(
             pred_z=rollout.terminal_z.float(),
@@ -1044,6 +1101,9 @@ class Trainer:
                 "z": z0,
                 "logw": logw0,
                 "log_m0": log_m0,
+                "ess_frac_list": [WeightedParticleSimulator.ess_fraction(logw0).detach()],
+                "max_weight_frac_list": [WeightedParticleSimulator.max_weight_fraction(logw0).detach()],
+                "logw_range_list": [WeightedParticleSimulator.log_weight_range(logw0).detach()],
             }
             if store_history:
                 state.update(
@@ -1198,6 +1258,11 @@ class Trainer:
                         state["logw_list"].append(logw_next)
                     state["z"] = z_next
                     state["logw"] = logw_next
+                    state["ess_frac_list"].append(WeightedParticleSimulator.ess_fraction(logw_next).detach())
+                    state["max_weight_frac_list"].append(
+                        WeightedParticleSimulator.max_weight_fraction(logw_next).detach()
+                    )
+                    state["logw_range_list"].append(WeightedParticleSimulator.log_weight_range(logw_next).detach())
                 continue
 
             summary_parts: list[GroupStatistics] = []
@@ -1253,6 +1318,11 @@ class Trainer:
                     state["logw_list"].append(logw_next)
                 state["z"] = z_next
                 state["logw"] = logw_next
+                state["ess_frac_list"].append(WeightedParticleSimulator.ess_fraction(logw_next).detach())
+                state["max_weight_frac_list"].append(
+                    WeightedParticleSimulator.max_weight_fraction(logw_next).detach()
+                )
+                state["logw_range_list"].append(WeightedParticleSimulator.log_weight_range(logw_next).detach())
 
         metrics = {
             "n_active_perturbations": len(perturbation_ids),
@@ -1264,6 +1334,20 @@ class Trainer:
             "loss_reg": 0.0,
             "loss_causal": 0.0,
             **_diagnostics_from_lists(diagnostic_values),
+            **_weight_diagnostics_from_tensors(
+                ess_frac_steps=torch.cat(
+                    [torch.stack(state["ess_frac_list"], dim=0) for state in chunk_states],
+                    dim=1,
+                ),
+                max_weight_frac_steps=torch.cat(
+                    [torch.stack(state["max_weight_frac_list"], dim=0) for state in chunk_states],
+                    dim=1,
+                ),
+                logw_range_steps=torch.cat(
+                    [torch.stack(state["logw_range_list"], dim=0) for state in chunk_states],
+                    dim=1,
+                ),
+            ),
         }
 
         optimizer.zero_grad()
@@ -1429,9 +1513,9 @@ class Trainer:
     ) -> Dict[str, float]:
         tc = self.config.training
         sc = self.config.simulation
-        if _uses_global_context_backend(self.model):
+        if _uses_global_ecological_context(self.model):
             raise ValueError(
-                "Global ecological context backends are not supported with multi-GPU sharding yet. "
+                "Global ecological context is not supported with multi-GPU sharding yet. "
                 "Use a single training device so context is computed from the full perturbation set."
             )
         if tc.lambda_count > 0:
@@ -1844,6 +1928,11 @@ class Trainer:
             self.history.mediator_usage_entropy.append(float(metrics.get("mediator_usage_entropy", math.nan)))
             self.history.mediator_usage_min.append(float(metrics.get("mediator_usage_min", math.nan)))
             self.history.mediator_usage_max.append(float(metrics.get("mediator_usage_max", math.nan)))
+            self.history.terminal_ess_frac_mean.append(float(metrics.get("terminal_ess_frac_mean", math.nan)))
+            self.history.terminal_ess_frac_min.append(float(metrics.get("terminal_ess_frac_min", math.nan)))
+            self.history.min_ess_frac_mean.append(float(metrics.get("min_ess_frac_mean", math.nan)))
+            self.history.max_weight_frac_mean.append(float(metrics.get("max_weight_frac_mean", math.nan)))
+            self.history.logw_range_max.append(float(metrics.get("logw_range_max", math.nan)))
 
             # Best checkpoint (training weights)
             if metrics["loss_total"] < self._best_loss:

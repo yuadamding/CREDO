@@ -5,7 +5,7 @@ TimeAxis, PerturbationCatalog, CellStateTable, MassTable, and optional
 ExposureTable / ReplicateCountTable.
 
 All measure construction keeps total_mass distinct from normalized weights
-to preserve the unbalanced OT semantics.
+to preserve finite-measure mass semantics.
 """
 from __future__ import annotations
 

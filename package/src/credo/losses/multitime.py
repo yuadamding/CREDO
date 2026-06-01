@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from ..data.core import MeasureKey, SparseTrajectoryProblem, TrajectoryProblem
 from ..models.weighted_sde import ParticleRollout
-from .uot import UOTLoss
+from .uot import EndpointGeometryMassLoss
 
 
 def make_observed_tau_grid(
@@ -84,7 +84,7 @@ def build_target_tensors_by_time(
     device: str | torch.device = "cpu",
     dtype: torch.dtype = torch.float32,
 ) -> Tuple[Dict[str, Dict[MeasureKey, torch.Tensor]], Dict[str, Dict[MeasureKey, torch.Tensor]]]:
-    """Convert trajectory measures into UOT target dictionaries.
+    """Convert trajectory measures into endpoint-loss target dictionaries.
 
     Pooled trajectories use perturbation-id keys.  Sample-aware trajectories use
     ``(sample_id, perturbation_id)`` keys and should pass the same key ordering
@@ -125,11 +125,11 @@ def build_target_tensors_by_time(
 
 
 class MultiTimeEndpointLoss(nn.Module):
-    """Apply the existing endpoint UOT proxy at multiple rollout checkpoints."""
+    """Apply endpoint geometry-plus-log-mass loss at rollout checkpoints."""
 
     def __init__(
         self,
-        uot_loss: UOTLoss,
+        uot_loss: EndpointGeometryMassLoss,
         time_weights: Dict[str, float] | None = None,
         reduction: Literal["sum", "mean"] = "sum",
         fail_on_empty: bool = True,

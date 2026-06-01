@@ -195,7 +195,7 @@ class TrainingConfig(BaseModel):
     divergence_min_epochs: int = 25
     stage: Literal["A", "B", "C", "D", "E", "F", "all"] = "all"
 
-    # UOT parameters
+    # Endpoint geometry-plus-log-mass loss parameters
     sinkhorn_epsilon: float = 0.1
     sinkhorn_tau: float = 1.0
     sinkhorn_max_iter: int = 100

@@ -139,6 +139,43 @@ class PerturbationEmbedding(nn.Module):
                 out[i] = self.embeddings[self._nc_to_local[pid]]
         return out
 
+    def assert_soft_ref_invariants(self, atol: float = 0.0) -> None:
+        """Assert exact soft-reference control semantics.
+
+        In ``soft_ref`` mode controls must have zero residuals, all controls
+        must share the same effective embedding, and non-controls must satisfy
+        ``effective = reference + residual``.
+        """
+        if self.control_mode != "soft_ref":
+            raise ValueError("assert_soft_ref_invariants requires control_mode='soft_ref'.")
+        if self.shared_guide_embedding:
+            raise AssertionError("shared_guide_embedding bypasses soft-reference residual semantics.")
+        if self.reference_embedding is None:
+            raise AssertionError("soft_ref mode requires a learned reference_embedding.")
+
+        controls = [pid for pid in self.perturbation_ids if pid in self.control_ids]
+        if controls:
+            control_residuals = self.residuals(controls)
+            if not torch.allclose(control_residuals, torch.zeros_like(control_residuals), atol=atol, rtol=0.0):
+                raise AssertionError("soft_ref controls must have exactly zero residuals.")
+            control_effective = self(controls)
+            reference = self.reference_embedding.to(
+                device=control_effective.device,
+                dtype=control_effective.dtype,
+            )
+            expected = reference.unsqueeze(0).expand_as(control_effective)
+            if not torch.allclose(control_effective, expected, atol=atol, rtol=0.0):
+                raise AssertionError("soft_ref controls must share the learned reference embedding.")
+
+        non_controls = [pid for pid in self.perturbation_ids if pid not in self.control_ids]
+        if non_controls:
+            effective = self(non_controls)
+            residual = self.residuals(non_controls)
+            reference = self.reference_embedding.to(device=effective.device, dtype=effective.dtype)
+            expected = residual + reference.unsqueeze(0)
+            if not torch.allclose(effective, expected, atol=atol, rtol=0.0):
+                raise AssertionError("soft_ref non-controls must equal reference plus residual.")
+
     def control_anchor_is_exact(self) -> bool:
         """Verify that anchored-mode control residuals are exactly zero."""
         if self.shared_guide_embedding:
