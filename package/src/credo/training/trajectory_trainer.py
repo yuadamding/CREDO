@@ -50,6 +50,13 @@ class TrajectoryTrainingHistory:
     within_effective_keys: list[float] = field(default_factory=list)
     group_effective_keys: list[float] = field(default_factory=list)
     mass_log_range: list[float] = field(default_factory=list)
+    state_to_mediator_effective_keys: list[float] = field(default_factory=list)
+    local_to_global_mediator_effective_keys: list[float] = field(default_factory=list)
+    mediator_to_group_effective_keys: list[float] = field(default_factory=list)
+    edge_sparsity: list[float] = field(default_factory=list)
+    edge_entropy: list[float] = field(default_factory=list)
+    control_edge_norm: list[float] = field(default_factory=list)
+    mediator_orthogonality: list[float] = field(default_factory=list)
 
     def append(self, epoch: int, metrics: dict[str, float]) -> None:
         self.epochs.append(int(epoch))
@@ -80,6 +87,13 @@ class TrajectoryTrainingHistory:
                 "within_effective_keys": self.within_effective_keys,
                 "group_effective_keys": self.group_effective_keys,
                 "mass_log_range": self.mass_log_range,
+                "state_to_mediator_effective_keys": self.state_to_mediator_effective_keys,
+                "local_to_global_mediator_effective_keys": self.local_to_global_mediator_effective_keys,
+                "mediator_to_group_effective_keys": self.mediator_to_group_effective_keys,
+                "edge_sparsity": self.edge_sparsity,
+                "edge_entropy": self.edge_entropy,
+                "control_edge_norm": self.control_edge_norm,
+                "mediator_orthogonality": self.mediator_orthogonality,
             }
         )
 

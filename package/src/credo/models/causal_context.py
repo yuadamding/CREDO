@@ -25,9 +25,11 @@ class CausalAttentionDiagnostics(ContextDiagnostics):
     mediator_to_group_effective_keys: Optional[torch.Tensor] = None
     mediator_usage: Optional[torch.Tensor] = None
     edge_sparsity: Optional[torch.Tensor] = None
+    edge_entropy: Optional[torch.Tensor] = None
     control_edge_norm: Optional[torch.Tensor] = None
     mediator_orthogonality: Optional[torch.Tensor] = None
     edge_scores_gm: Optional[torch.Tensor] = None
+    baseline_to_mediator_gm: Optional[torch.Tensor] = None
     residual_to_mediator_gm: Optional[torch.Tensor] = None
     mediator_to_growth_gm: Optional[torch.Tensor] = None
 
@@ -39,6 +41,8 @@ class CausalContextState(ContextState):
     causal_context_g: Optional[torch.Tensor] = None
     mediator_tokens: Optional[torch.Tensor] = None
     edge_scores_gm: Optional[torch.Tensor] = None
+    baseline_edge_scores_gm: Optional[torch.Tensor] = None
+    residual_edge_scores_gm: Optional[torch.Tensor] = None
 
 
 class CausalEcologicalAttentionContext(nn.Module):
@@ -139,12 +143,15 @@ class CausalEcologicalAttentionContext(nn.Module):
             mass_attention_temperature=0.0,
         )
 
-        edge_in_dim = 2 * embedding_dim + token_dim + self.n_programs + 2
-        self.edge_score = nn.Sequential(
-            nn.Linear(edge_in_dim, hidden_dim),
+        baseline_edge_in_dim = token_dim + self.n_programs + 2
+        self.baseline_edge_score = nn.Sequential(
+            nn.Linear(baseline_edge_in_dim, hidden_dim),
             nn.GELU(),
             nn.Linear(hidden_dim, n_mediators),
         )
+        self.residual_edge_score = nn.Linear(embedding_dim, n_mediators, bias=False)
+        nn.init.constant_(self.baseline_edge_score[-1].bias, -2.0)
+        nn.init.zeros_(self.residual_edge_score.weight)
         self.phi_head = nn.Sequential(
             nn.LayerNorm(token_dim),
             nn.Linear(token_dim, mediator_dim),
@@ -152,7 +159,7 @@ class CausalEcologicalAttentionContext(nn.Module):
         )
         self.group_context_project = nn.Sequential(
             nn.LayerNorm(token_dim),
-            nn.Linear(token_dim, context_dim),
+            nn.Linear(token_dim, context_dim, bias=False),
             nn.Tanh(),
         )
         self.phi_state_gate = nn.Parameter(torch.tensor(0.1))
@@ -305,26 +312,35 @@ class CausalEcologicalAttentionContext(nn.Module):
         )
         global_med = global_med.squeeze(0)
 
-        edge_input = torch.cat(
-            [a, residual, h_group, q_g, log_mass_z[:, None], freq_g[:, None]],
+        baseline_edge_input = torch.cat(
+            [h_group, q_g, log_mass_z[:, None], freq_g[:, None]],
             dim=-1,
         )
-        edge_logits = self.edge_score(edge_input)
+        baseline_logits = self.baseline_edge_score(baseline_edge_input)
+        residual_logits = self.residual_edge_score(residual)
+        edge_logits = baseline_logits + residual_logits
         if intervention is not None:
             edge_logits = intervention.apply_edge_logits(edge_logits)
         edge_scores = torch.sigmoid(edge_logits)
+        baseline_edge_scores = torch.sigmoid(baseline_logits)
+        residual_gate = residual.norm(dim=-1, keepdim=True).div(
+            1.0 + residual.norm(dim=-1, keepdim=True)
+        )
+        residual_edge_scores = torch.sigmoid(residual_logits) * residual_gate
         med_keys = global_med[None, :, :].expand(G, -1, -1)
         if self.use_sparse_edges:
             med_values = med_keys * edge_scores[:, :, None].to(dtype=dtype)
+            edge_gate = edge_scores.max(dim=-1).values[:, None].to(dtype=dtype)
         else:
             med_values = med_keys
+            edge_gate = torch.ones(G, 1, device=device, dtype=dtype)
         group_context, attn_med = self.global_med_to_group(
             h_group[:, None, :],
             med_keys,
             med_values,
             return_attention=True,
         )
-        group_context = group_context.squeeze(1)
+        group_context = edge_gate * group_context.squeeze(1)
 
         h_particle_causal = h_particle + group_context[:, None, :]
         phi_causal = self.phi_head(h_particle_causal)
@@ -340,6 +356,14 @@ class CausalEcologicalAttentionContext(nn.Module):
         med_norm = torch.nn.functional.normalize(mediator_tokens, dim=-1)
         gram = med_norm @ med_norm.T
         eye = torch.eye(gram.shape[0], device=gram.device, dtype=gram.dtype)
+        edge_prob = edge_scores.float().clamp_min(1e-30)
+        edge_dist = edge_prob / edge_prob.sum(dim=-1, keepdim=True).clamp_min(1e-30)
+        zero_residual_mask = residual.abs().sum(dim=-1).eq(0)
+        control_edge_norm = (
+            residual_edge_scores[zero_residual_mask].square().mean().sqrt().detach()
+            if zero_residual_mask.any()
+            else torch.zeros((), device=device, dtype=dtype)
+        )
         diagnostics = CausalAttentionDiagnostics(
             within_attention_entropy=self._entropy(attn_state),
             group_attention_entropy=self._entropy(attn_group),
@@ -362,10 +386,12 @@ class CausalEcologicalAttentionContext(nn.Module):
             mediator_to_group_effective_keys=self._effective_keys(attn_med),
             mediator_usage=edge_scores.mean(dim=0).detach(),
             edge_sparsity=edge_scores.mean().detach(),
-            control_edge_norm=None,
+            edge_entropy=-(edge_dist * edge_dist.log()).sum(dim=-1).mean().detach(),
+            control_edge_norm=control_edge_norm,
             mediator_orthogonality=(gram - eye).square().mean().detach(),
             edge_scores_gm=edge_scores.detach(),
-            residual_to_mediator_gm=edge_scores.detach(),
+            baseline_to_mediator_gm=baseline_edge_scores.detach(),
+            residual_to_mediator_gm=residual_edge_scores.detach(),
             mediator_to_growth_gm=attn_med.mean(dim=(1, 2)).detach(),
         )
 
@@ -383,6 +409,8 @@ class CausalEcologicalAttentionContext(nn.Module):
             causal_context_g=growth_context_g,
             mediator_tokens=mediator_tokens,
             edge_scores_gm=edge_scores,
+            baseline_edge_scores_gm=baseline_edge_scores,
+            residual_edge_scores_gm=residual_edge_scores,
         )
 
 

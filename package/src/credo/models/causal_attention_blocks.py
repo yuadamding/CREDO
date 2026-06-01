@@ -79,27 +79,34 @@ class MassGraphMaskedCrossAttention(nn.Module):
             stable = lw - torch.logsumexp(lw, dim=-1, keepdim=True)
             logits = logits + self.mass_attention_temperature * stable.to(logits.dtype)[:, None, None, :]
 
+        allowed = torch.ones(B, Q, K, dtype=torch.bool, device=query.device)
+
         if graph_mask is not None:
             if graph_mask.shape != (B, Q, K):
                 raise ValueError(f"graph_mask must have shape {(B, Q, K)}, got {tuple(graph_mask.shape)}")
+            allowed &= graph_mask
             logits = logits.masked_fill(~graph_mask[:, None, :, :], torch.finfo(logits.dtype).min)
 
         if do_mask is not None:
             if do_mask.shape != (B, Q, K):
                 raise ValueError(f"do_mask must have shape {(B, Q, K)}, got {tuple(do_mask.shape)}")
+            allowed &= ~do_mask
             logits = logits.masked_fill(do_mask[:, None, :, :], torch.finfo(logits.dtype).min)
 
-        attn = torch.softmax(logits.float(), dim=-1).to(logits.dtype)
-        entropy = -(attn.clamp_min(1e-30) * attn.clamp_min(1e-30).log()).sum(dim=-1)
+        if not allowed.any(dim=-1).all():
+            raise ValueError("At least one key must remain available for every attention query.")
+
+        attn_prob = torch.softmax(logits.float(), dim=-1).to(logits.dtype)
+        entropy = -(attn_prob.clamp_min(1e-30) * attn_prob.clamp_min(1e-30).log()).sum(dim=-1)
         self.last_attention_entropy = entropy.mean().detach()
         self.last_effective_keys = entropy.exp().mean().detach()
 
-        attn = self.dropout(attn)
-        out = torch.matmul(attn, v)
+        attn_used = self.dropout(attn_prob)
+        out = torch.matmul(attn_used, v)
         out = out.transpose(1, 2).contiguous().view(B, Q, H)
         out = self.out_proj(out)
         if return_attention:
-            return out, attn
+            return out, attn_prob
         return out
 
 

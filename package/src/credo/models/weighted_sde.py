@@ -33,6 +33,11 @@ class ParticleRollout:
     base_context_steps: Optional[torch.Tensor] = None  # [K, C], drift/sigma context
     growth_context_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C], growth context
     context_diagnostics: Optional[Dict[str, torch.Tensor]] = None  # scalar diagnostics stacked over K
+    causal_edge_scores_steps: Optional[torch.Tensor] = None  # [K, G, M]
+    causal_baseline_edge_scores_steps: Optional[torch.Tensor] = None  # [K, G, M]
+    causal_residual_edge_scores_steps: Optional[torch.Tensor] = None  # [K, G, M]
+    causal_mediator_tokens_steps: Optional[torch.Tensor] = None  # [K, M, H]
+    causal_growth_context_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C]
     noise_steps: Optional[torch.Tensor] = None      # [K, G, N, d] innovations used by rollout
 
     @property
@@ -68,6 +73,13 @@ class ParticleRollout:
             slicer[group_dim] = slice(idx, idx + 1)
             return value[tuple(slicer)]
 
+        def _slice_context_optional(value: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+            if value is None:
+                return None
+            if value.ndim == 3:
+                return value[:, idx:idx + 1, :]
+            return value
+
         return ParticleRollout(
             z_steps=self.z_steps[:, idx:idx + 1],
             logw_steps=self.logw_steps[:, idx:idx + 1],
@@ -77,9 +89,14 @@ class ParticleRollout:
             sigma_steps=_slice_optional(self.sigma_steps, 1),
             growth_steps=_slice_optional(self.growth_steps, 1),
             context_steps=self.context_steps,
-            base_context_steps=self.base_context_steps,
-            growth_context_steps=self.growth_context_steps,
+            base_context_steps=_slice_context_optional(self.base_context_steps),
+            growth_context_steps=_slice_context_optional(self.growth_context_steps),
             context_diagnostics=self.context_diagnostics,
+            causal_edge_scores_steps=_slice_optional(self.causal_edge_scores_steps, 1),
+            causal_baseline_edge_scores_steps=_slice_optional(self.causal_baseline_edge_scores_steps, 1),
+            causal_residual_edge_scores_steps=_slice_optional(self.causal_residual_edge_scores_steps, 1),
+            causal_mediator_tokens_steps=self.causal_mediator_tokens_steps,
+            causal_growth_context_steps=_slice_context_optional(self.causal_growth_context_steps),
             noise_steps=_slice_optional(self.noise_steps, 1),
         )
 
@@ -177,6 +194,11 @@ class WeightedParticleSimulator(nn.Module):
         logw_list = [logw0]
         drift_list, sigma_list, growth_list = [], [], []
         ctx_list, base_ctx_list, growth_ctx_list = [], [], []
+        causal_edge_scores_list = []
+        causal_baseline_edge_scores_list = []
+        causal_residual_edge_scores_list = []
+        causal_mediator_tokens_list = []
+        causal_growth_context_list = []
         diagnostics: dict[str, list[torch.Tensor]] = {}
         noise_used_list = []
 
@@ -219,6 +241,19 @@ class WeightedParticleSimulator(nn.Module):
                     growth_context = ctx.context
                 base_ctx_list.append(base_context.detach())
                 growth_ctx_list.append(growth_context.detach())
+                edge_scores = getattr(ctx, "edge_scores_gm", None)
+                if edge_scores is not None:
+                    causal_edge_scores_list.append(edge_scores)
+                    causal_growth_context_list.append(growth_context)
+                baseline_edge_scores = getattr(ctx, "baseline_edge_scores_gm", None)
+                if baseline_edge_scores is not None:
+                    causal_baseline_edge_scores_list.append(baseline_edge_scores)
+                residual_edge_scores = getattr(ctx, "residual_edge_scores_gm", None)
+                if residual_edge_scores is not None:
+                    causal_residual_edge_scores_list.append(residual_edge_scores)
+                mediator_tokens = getattr(ctx, "mediator_tokens", None)
+                if mediator_tokens is not None:
+                    causal_mediator_tokens_list.append(mediator_tokens)
                 ctx_diagnostics = getattr(ctx, "diagnostics", None)
                 if ctx_diagnostics is not None:
                     for name, value in ctx_diagnostics.__dict__.items():
@@ -264,6 +299,16 @@ class WeightedParticleSimulator(nn.Module):
                     for name, values in diagnostics.items()
                     if values
                 }
+            if causal_edge_scores_list:
+                result.causal_edge_scores_steps = torch.stack(causal_edge_scores_list, dim=0)
+            if causal_baseline_edge_scores_list:
+                result.causal_baseline_edge_scores_steps = torch.stack(causal_baseline_edge_scores_list, dim=0)
+            if causal_residual_edge_scores_list:
+                result.causal_residual_edge_scores_steps = torch.stack(causal_residual_edge_scores_list, dim=0)
+            if causal_mediator_tokens_list:
+                result.causal_mediator_tokens_steps = torch.stack(causal_mediator_tokens_list, dim=0)
+            if causal_growth_context_list:
+                result.causal_growth_context_steps = torch.stack(causal_growth_context_list, dim=0)
         if return_noise_used:
             result.noise_steps = torch.stack(noise_used_list, dim=0)
 

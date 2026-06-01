@@ -34,6 +34,13 @@ from ..data.core import EndpointProblem, FiniteMeasure
 from ..losses.uot import UOTLoss
 from ..losses.weak_form import WeakFormLoss
 from ..losses.counts import CountLikelihood
+from ..losses.causal_attention import (
+    context_smoothness_loss,
+    control_edge_null_loss,
+    edge_sparsity_loss,
+    guide_concordance_loss,
+    mediator_orthogonality_loss,
+)
 from ..losses.regularizers import RolloutRegularizer
 from ..models.context import GroupStatistics
 from ..models.full_model import FullDynamicsModel
@@ -145,6 +152,7 @@ class TrainingHistory:
     loss_weak: List[float] = field(default_factory=list)
     loss_count: List[float] = field(default_factory=list)
     loss_reg: List[float] = field(default_factory=list)
+    loss_causal: List[float] = field(default_factory=list)
     context_norm: List[float] = field(default_factory=list)
     q_entropy: List[float] = field(default_factory=list)
     freq_entropy: List[float] = field(default_factory=list)
@@ -153,6 +161,13 @@ class TrainingHistory:
     within_effective_keys: List[float] = field(default_factory=list)
     group_effective_keys: List[float] = field(default_factory=list)
     mass_log_range: List[float] = field(default_factory=list)
+    state_to_mediator_effective_keys: List[float] = field(default_factory=list)
+    local_to_global_mediator_effective_keys: List[float] = field(default_factory=list)
+    mediator_to_group_effective_keys: List[float] = field(default_factory=list)
+    edge_sparsity: List[float] = field(default_factory=list)
+    edge_entropy: List[float] = field(default_factory=list)
+    control_edge_norm: List[float] = field(default_factory=list)
+    mediator_orthogonality: List[float] = field(default_factory=list)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame({
@@ -165,6 +180,7 @@ class TrainingHistory:
             "loss_weak": self.loss_weak,
             "loss_count": self.loss_count,
             "loss_reg": self.loss_reg,
+            "loss_causal": self.loss_causal,
             "context_norm": self.context_norm,
             "q_entropy": self.q_entropy,
             "freq_entropy": self.freq_entropy,
@@ -173,6 +189,13 @@ class TrainingHistory:
             "within_effective_keys": self.within_effective_keys,
             "group_effective_keys": self.group_effective_keys,
             "mass_log_range": self.mass_log_range,
+            "state_to_mediator_effective_keys": self.state_to_mediator_effective_keys,
+            "local_to_global_mediator_effective_keys": self.local_to_global_mediator_effective_keys,
+            "mediator_to_group_effective_keys": self.mediator_to_group_effective_keys,
+            "edge_sparsity": self.edge_sparsity,
+            "edge_entropy": self.edge_entropy,
+            "control_edge_norm": self.control_edge_norm,
+            "mediator_orthogonality": self.mediator_orthogonality,
         })
 
 
@@ -185,6 +208,13 @@ _DIAGNOSTIC_KEYS = (
     "within_effective_keys",
     "group_effective_keys",
     "mass_log_range",
+    "state_to_mediator_effective_keys",
+    "local_to_global_mediator_effective_keys",
+    "mediator_to_group_effective_keys",
+    "edge_sparsity",
+    "edge_entropy",
+    "control_edge_norm",
+    "mediator_orthogonality",
 )
 
 
@@ -557,6 +587,109 @@ class Trainer:
             )
         return torch.cat(parts, dim=0)
 
+    def _uses_causal_attention_loss(self) -> bool:
+        if getattr(self.model, "context_kind", "mlp") != "causal_attention":
+            return False
+        tc = self.config.training
+        return any(
+            weight > 0
+            for weight in (
+                tc.lambda_causal_ctrl_edge,
+                tc.lambda_causal_guide,
+                tc.lambda_causal_sparse,
+                tc.lambda_causal_orth,
+                tc.lambda_causal_ctx_smooth,
+            )
+        )
+
+    def _control_mask_for_pids(self, perturbation_ids: List[str], device: torch.device | str) -> torch.Tensor:
+        control_ids = set(getattr(self.model, "control_ids", set()))
+        return torch.tensor(
+            [pid in control_ids for pid in perturbation_ids],
+            device=device,
+            dtype=torch.bool,
+        )
+
+    def _target_ids_for_guides(self, perturbation_ids: List[str]) -> List[str]:
+        if self.count_data is not None:
+            mapping = self.count_data.get("target_ids_by_pid")
+            if isinstance(mapping, dict):
+                return [str(mapping.get(pid, pid)) for pid in perturbation_ids]
+            target_ids = self.count_data.get("target_ids")
+            if target_ids is not None and len(target_ids) == len(self.supported_pids):
+                target_by_pid = {
+                    pid: str(target)
+                    for pid, target in zip(self.supported_pids, target_ids)
+                }
+                return [target_by_pid.get(pid, pid) for pid in perturbation_ids]
+        return list(perturbation_ids)
+
+    def _causal_attention_loss_from_tensors(
+        self,
+        *,
+        edge_scores_steps: Optional[torch.Tensor],
+        residual_edge_scores_steps: Optional[torch.Tensor],
+        mediator_tokens_steps: Optional[torch.Tensor],
+        growth_context_steps: Optional[torch.Tensor],
+        tau_steps: Optional[torch.Tensor],
+        perturbation_ids: List[str],
+    ) -> torch.Tensor:
+        device = next(self.model.parameters()).device
+        loss = torch.tensor(0.0, device=device)
+        if not self._uses_causal_attention_loss():
+            return loss
+
+        tc = self.config.training
+        edges = None if edge_scores_steps is None else edge_scores_steps.float().mean(dim=0)
+        residual_edges = (
+            None
+            if residual_edge_scores_steps is None
+            else residual_edge_scores_steps.float().mean(dim=0)
+        )
+
+        if residual_edges is not None and tc.lambda_causal_ctrl_edge > 0:
+            control_mask = self._control_mask_for_pids(perturbation_ids, residual_edges.device)
+            loss = loss + tc.lambda_causal_ctrl_edge * control_edge_null_loss(
+                residual_edges,
+                control_mask,
+            )
+        if residual_edges is not None and tc.lambda_causal_guide > 0:
+            target_ids = self._target_ids_for_guides(perturbation_ids)
+            loss = loss + tc.lambda_causal_guide * guide_concordance_loss(
+                residual_edges,
+                target_ids,
+            )
+        if edges is not None and tc.lambda_causal_sparse > 0:
+            loss = loss + tc.lambda_causal_sparse * edge_sparsity_loss(edges)
+        if mediator_tokens_steps is not None and tc.lambda_causal_orth > 0:
+            loss = loss + tc.lambda_causal_orth * mediator_orthogonality_loss(
+                mediator_tokens_steps[-1].float()
+            )
+        if (
+            growth_context_steps is not None
+            and tau_steps is not None
+            and tc.lambda_causal_ctx_smooth > 0
+        ):
+            loss = loss + tc.lambda_causal_ctx_smooth * context_smoothness_loss(
+                growth_context_steps.float(),
+                tau_steps.float(),
+            )
+        return loss
+
+    def _causal_attention_loss_from_rollout(
+        self,
+        rollout,
+        perturbation_ids: List[str],
+    ) -> torch.Tensor:
+        return self._causal_attention_loss_from_tensors(
+            edge_scores_steps=getattr(rollout, "causal_edge_scores_steps", None),
+            residual_edge_scores_steps=getattr(rollout, "causal_residual_edge_scores_steps", None),
+            mediator_tokens_steps=getattr(rollout, "causal_mediator_tokens_steps", None),
+            growth_context_steps=getattr(rollout, "causal_growth_context_steps", None),
+            tau_steps=rollout.tau_steps,
+            perturbation_ids=perturbation_ids,
+        )
+
     @staticmethod
     def _weighted_shard_loss(loss_value: torch.Tensor, local_groups: int, total_groups: int) -> torch.Tensor:
         if total_groups <= 0:
@@ -725,6 +858,7 @@ class Trainer:
         loss_reg = loss_reg + self.model.growth_bias_regularization(
             lambda_growth_bias=tc.lambda_reg_growth_bias
         )
+        loss_causal = self._causal_attention_loss_from_rollout(rollout, perturbation_ids)
 
         # --- Total ---
         loss = (
@@ -732,6 +866,7 @@ class Trainer:
             + tc.lambda_weak * loss_weak
             + tc.lambda_count * loss_count
             + loss_reg
+            + loss_causal
         )
 
         optimizer.zero_grad()
@@ -754,6 +889,7 @@ class Trainer:
             "loss_weak": float(loss_weak.item()),
             "loss_count": float(loss_count.item()),
             "loss_reg": float(loss_reg.item()),
+            "loss_causal": float(loss_causal.item()),
             **_diagnostics_from_rollout(rollout),
         }
 
@@ -833,6 +969,10 @@ class Trainer:
         )
         dtau = 1.0 / sc.n_steps
         diagnostic_values: dict[str, list[float]] = {}
+        causal_edge_scores_list: list[torch.Tensor] = []
+        causal_residual_edge_scores_list: list[torch.Tensor] = []
+        causal_mediator_tokens_list: list[torch.Tensor] = []
+        causal_growth_context_list: list[torch.Tensor] = []
 
         for step_idx in range(sc.n_steps):
             tau_k = tau_steps[step_idx]
@@ -873,6 +1013,19 @@ class Trainer:
                             tau=tau_k,
                         )
                     _append_context_diagnostics(diagnostic_values, ctx_state.diagnostics)
+                    if context_kind == "causal_attention":
+                        edge_scores = getattr(ctx_state, "edge_scores_gm", None)
+                        if edge_scores is not None:
+                            causal_edge_scores_list.append(edge_scores)
+                        residual_edge_scores = getattr(ctx_state, "residual_edge_scores_gm", None)
+                        if residual_edge_scores is not None:
+                            causal_residual_edge_scores_list.append(residual_edge_scores)
+                        mediator_tokens = getattr(ctx_state, "mediator_tokens", None)
+                        if mediator_tokens is not None:
+                            causal_mediator_tokens_list.append(mediator_tokens)
+                        ctx_growth_context = getattr(ctx_state, "growth_context", None)
+                        if ctx_growth_context is not None:
+                            causal_growth_context_list.append(ctx_growth_context)
                     eta_all, _ = self.model.context_agg.encode_particles(z_all)
                     base_context = ctx_state.context
                     growth_context = getattr(ctx_state, "growth_context", None)
@@ -1003,6 +1156,7 @@ class Trainer:
             "loss_weak": 0.0,
             "loss_count": 0.0,
             "loss_reg": 0.0,
+            "loss_causal": 0.0,
             **_diagnostics_from_lists(diagnostic_values),
         }
 
@@ -1012,6 +1166,7 @@ class Trainer:
         loss_weak = torch.tensor(0.0, device=self.device)
         loss_count = torch.tensor(0.0, device=self.device)
         loss_reg = torch.tensor(0.0, device=self.device)
+        loss_causal = torch.tensor(0.0, device=self.device)
 
         for state in chunk_states:
             local_groups = len(state["pids"])
@@ -1089,11 +1244,38 @@ class Trainer:
                 n_totals=cd["n_totals"],
             )
 
+        if causal_edge_scores_list or causal_mediator_tokens_list or causal_growth_context_list:
+            loss_causal = self._causal_attention_loss_from_tensors(
+                edge_scores_steps=(
+                    torch.stack(causal_edge_scores_list, dim=0)
+                    if causal_edge_scores_list
+                    else None
+                ),
+                residual_edge_scores_steps=(
+                    torch.stack(causal_residual_edge_scores_list, dim=0)
+                    if causal_residual_edge_scores_list
+                    else None
+                ),
+                mediator_tokens_steps=(
+                    torch.stack(causal_mediator_tokens_list, dim=0)
+                    if causal_mediator_tokens_list
+                    else None
+                ),
+                growth_context_steps=(
+                    torch.stack(causal_growth_context_list, dim=0)
+                    if causal_growth_context_list
+                    else None
+                ),
+                tau_steps=tau_steps,
+                perturbation_ids=perturbation_ids,
+            )
+
         loss = (
             tc.lambda_end * loss_end
             + tc.lambda_weak * loss_weak
             + tc.lambda_count * loss_count
             + loss_reg
+            + loss_causal
         )
 
         model_reg = self.model.regularization(lambda_embed=tc.lambda_reg_embed)
@@ -1115,6 +1297,7 @@ class Trainer:
         metrics["loss_weak"] = float(loss_weak.item())
         metrics["loss_count"] = float(loss_count.item())
         metrics["loss_reg"] = float((loss_reg + model_reg).item())
+        metrics["loss_causal"] = float(loss_causal.item())
         metrics["loss_total"] = float((loss + model_reg).item())
         return metrics
 
@@ -1381,6 +1564,7 @@ class Trainer:
             "loss_weak": float(loss_weak.item()),
             "loss_count": float(loss_count.item()),
             "loss_reg": float(loss_reg.item()),
+            "loss_causal": 0.0,
         }
 
     def _active_perturbation_ids(self, stage: str) -> List[str]:
@@ -1510,6 +1694,7 @@ class Trainer:
             self.history.loss_weak.append(metrics["loss_weak"])
             self.history.loss_count.append(metrics["loss_count"])
             self.history.loss_reg.append(metrics["loss_reg"])
+            self.history.loss_causal.append(float(metrics.get("loss_causal", 0.0)))
             self.history.context_norm.append(float(metrics.get("context_norm", math.nan)))
             self.history.q_entropy.append(float(metrics.get("q_entropy", math.nan)))
             self.history.freq_entropy.append(float(metrics.get("freq_entropy", math.nan)))
@@ -1518,6 +1703,19 @@ class Trainer:
             self.history.within_effective_keys.append(float(metrics.get("within_effective_keys", math.nan)))
             self.history.group_effective_keys.append(float(metrics.get("group_effective_keys", math.nan)))
             self.history.mass_log_range.append(float(metrics.get("mass_log_range", math.nan)))
+            self.history.state_to_mediator_effective_keys.append(
+                float(metrics.get("state_to_mediator_effective_keys", math.nan))
+            )
+            self.history.local_to_global_mediator_effective_keys.append(
+                float(metrics.get("local_to_global_mediator_effective_keys", math.nan))
+            )
+            self.history.mediator_to_group_effective_keys.append(
+                float(metrics.get("mediator_to_group_effective_keys", math.nan))
+            )
+            self.history.edge_sparsity.append(float(metrics.get("edge_sparsity", math.nan)))
+            self.history.edge_entropy.append(float(metrics.get("edge_entropy", math.nan)))
+            self.history.control_edge_norm.append(float(metrics.get("control_edge_norm", math.nan)))
+            self.history.mediator_orthogonality.append(float(metrics.get("mediator_orthogonality", math.nan)))
 
             # Best checkpoint (training weights)
             if metrics["loss_total"] < self._best_loss:
@@ -1568,7 +1766,8 @@ class Trainer:
                     f"end={metrics['loss_end']:.4f} "
                     f"weak={metrics['loss_weak']:.4f} "
                     f"count={metrics['loss_count']:.4f} "
-                    f"reg={metrics['loss_reg']:.4f} | "
+                    f"reg={metrics['loss_reg']:.4f} "
+                    f"causal={float(metrics.get('loss_causal', 0.0)):.4f} | "
                     f"lr={cur_lr:.2e} t={elapsed:.1f}s"
                 )
 

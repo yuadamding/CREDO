@@ -11,7 +11,17 @@ from credo.models import (
     CausalEcologicalAttentionContext,
     CounterfactualEngine,
     FullDynamicsModel,
+    MassGraphMaskedCrossAttention,
+    ParticleRollout,
+    PerturbationEmbedding,
     WeightedParticleSimulator,
+)
+from credo.losses.causal_attention import (
+    context_smoothness_loss,
+    control_edge_null_loss,
+    edge_sparsity_loss,
+    guide_concordance_loss,
+    mediator_orthogonality_loss,
 )
 from credo.training.trainer import Trainer
 
@@ -90,6 +100,18 @@ def _model(*, causal_growth_only: bool = True) -> FullDynamicsModel:
     return model
 
 
+def test_all_masked_attention_rows_fail_loudly() -> None:
+    attn = MassGraphMaskedCrossAttention(dim=8, heads=2, dropout=0.0)
+    query = torch.randn(1, 2, 8)
+    key = torch.randn(1, 3, 8)
+    value = torch.randn(1, 3, 8)
+    graph_mask = torch.ones(1, 2, 3, dtype=torch.bool)
+    graph_mask[:, 1, :] = False
+
+    with pytest.raises(ValueError, match="At least one key"):
+        attn(query, key, value, graph_mask=graph_mask)
+
+
 def test_causal_attention_context_uses_absolute_mass_reductions() -> None:
     agg = _aggregator()
     z, logw, a, residual, log_m0 = _inputs()
@@ -154,6 +176,48 @@ def test_causal_attention_intervention_can_ablate_single_edge() -> None:
     assert torch.isfinite(out.context).all()
 
 
+def test_all_edges_ablated_gives_zero_causal_delta() -> None:
+    agg = _aggregator()
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(
+        z,
+        logw,
+        a,
+        log_m0,
+        tau=0.5,
+        residual=residual,
+        intervention=CausalAttentionIntervention(
+            protocol="ablate_mediators",
+            ablate_mediator_ids=list(range(agg.n_mediators)),
+        ),
+    )
+
+    assert torch.allclose(out.edge_scores_gm, torch.zeros_like(out.edge_scores_gm))
+    assert torch.allclose(
+        out.growth_context,
+        out.context.unsqueeze(0).expand_as(out.growth_context),
+        atol=1e-6,
+    )
+
+
+def test_causal_attention_splits_baseline_and_residual_edges() -> None:
+    agg = _aggregator()
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(z, logw, a, log_m0, tau=0.5, residual=residual)
+
+    assert out.baseline_edge_scores_gm.shape == out.edge_scores_gm.shape
+    assert out.residual_edge_scores_gm.shape == out.edge_scores_gm.shape
+    assert torch.allclose(
+        out.residual_edge_scores_gm[0],
+        torch.zeros_like(out.residual_edge_scores_gm[0]),
+        atol=1e-8,
+    )
+    assert torch.isfinite(out.baseline_edge_scores_gm).all()
+    assert torch.isfinite(out.edge_scores_gm).all()
+
+
 def test_all_causal_attention_context_parameters_receive_gradients() -> None:
     agg = _aggregator()
     agg.train()
@@ -198,6 +262,48 @@ def test_soft_reference_residuals_are_zero_for_controls() -> None:
     assert torch.allclose(residual[0], torch.zeros_like(residual[0]))
     assert torch.allclose(effective[0], model.embedding.reference_embedding)
     assert torch.allclose(effective[1], model.embedding.reference_embedding + residual[1])
+
+
+def test_shared_guide_residuals_are_zero_for_controls() -> None:
+    embedding = PerturbationEmbedding(
+        perturbation_ids=["ctrl", "guide_a"],
+        control_ids=["ctrl"],
+        embedding_dim=3,
+        control_mode="soft_ref",
+        shared_guide_embedding=True,
+    )
+    with torch.no_grad():
+        embedding.shared_embedding.fill_(0.5)
+
+    residual = embedding.residuals(["ctrl", "guide_a"])
+
+    assert torch.allclose(residual[0], torch.zeros_like(residual[0]))
+    assert torch.allclose(residual[1], torch.full_like(residual[1], 0.5))
+
+
+def test_slice_group_slices_group_specific_context_and_causal_edges() -> None:
+    rollout = ParticleRollout(
+        z_steps=torch.zeros(3, 3, 2, 2),
+        logw_steps=torch.zeros(3, 3, 2),
+        tau_steps=torch.linspace(0.0, 1.0, 3),
+        context_steps=torch.zeros(2, 5),
+        base_context_steps=torch.randn(2, 3, 5),
+        growth_context_steps=torch.randn(2, 3, 5),
+        causal_edge_scores_steps=torch.randn(2, 3, 4),
+        causal_residual_edge_scores_steps=torch.randn(2, 3, 4),
+        causal_mediator_tokens_steps=torch.randn(2, 4, 6),
+        causal_growth_context_steps=torch.randn(2, 3, 5),
+    )
+
+    sliced = rollout.slice_group(1)
+
+    assert sliced.context_steps.shape == (2, 5)
+    assert sliced.base_context_steps.shape == (2, 1, 5)
+    assert sliced.growth_context_steps.shape == (2, 1, 5)
+    assert sliced.causal_edge_scores_steps.shape == (2, 1, 4)
+    assert sliced.causal_residual_edge_scores_steps.shape == (2, 1, 4)
+    assert sliced.causal_mediator_tokens_steps.shape == (2, 4, 6)
+    assert sliced.causal_growth_context_steps.shape == (2, 1, 5)
 
 
 def test_full_dynamics_model_uses_causal_attention_growth_context() -> None:
@@ -305,6 +411,28 @@ def test_model_config_rejects_invalid_causal_attention_shape() -> None:
         ModelConfig(context_kind="causal_attention", causal_token_dim=10, causal_heads=4)
 
 
+def test_causal_losses_backpropagate() -> None:
+    edge_scores = torch.rand(3, 4, requires_grad=True)
+    residual_edges = torch.rand(3, 4, requires_grad=True)
+    mediator_tokens = torch.randn(4, 6, requires_grad=True)
+    context_steps = torch.randn(3, 3, 5, requires_grad=True)
+    tau_steps = torch.linspace(0.0, 1.0, 4)
+    control_mask = torch.tensor([True, False, False])
+
+    loss = (
+        control_edge_null_loss(residual_edges, control_mask)
+        + guide_concordance_loss(residual_edges, ["ctrl", "gene", "gene"])
+        + edge_sparsity_loss(edge_scores)
+        + mediator_orthogonality_loss(mediator_tokens)
+        + context_smoothness_loss(context_steps, tau_steps)
+    )
+    loss.backward()
+
+    for tensor in (edge_scores, residual_edges, mediator_tokens, context_steps):
+        assert tensor.grad is not None
+        assert torch.isfinite(tensor.grad).all()
+
+
 def test_chunked_causal_attention_training_uses_global_context(tmp_path) -> None:
     endpoint = _endpoint()
     model = _model()
@@ -346,3 +474,50 @@ def test_chunked_causal_attention_training_uses_global_context(tmp_path) -> None
 
     assert metrics["perturbation_batch_size"] == 1
     assert torch.isfinite(torch.tensor(metrics["loss_total"]))
+    assert torch.isfinite(torch.tensor(metrics["loss_causal"]))
+    assert np.isfinite(metrics["edge_sparsity"])
+    assert np.isfinite(metrics["mediator_orthogonality"])
+
+
+def test_causal_training_history_records_loss_and_diagnostics(tmp_path) -> None:
+    endpoint = _endpoint()
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        simulation=SimulationConfig(n_particles=4, n_steps=2, store_history=True),
+        training=TrainingConfig(
+            lambda_weak=0.0,
+            lambda_count=0.0,
+            lambda_reg_net=0.0,
+            lambda_reg_diffusion=0.0,
+            max_active_perturbations=1,
+            sinkhorn_max_iter=5,
+            log_every=10,
+            checkpoint_every=100,
+            early_stop_patience=5,
+            lr_transformer=1e-4,
+        ),
+    )
+    trainer = Trainer(model, cfg, endpoint, ["ctrl", "gene_a", "gene_b"], output_dir=str(tmp_path))
+
+    history = trainer.train(stage="all", n_epochs=1)
+    frame = history.to_dataframe()
+
+    assert "loss_causal" in frame.columns
+    assert "edge_sparsity" in frame.columns
+    assert "mediator_orthogonality" in frame.columns
+    assert np.isfinite(frame.loc[0, "loss_causal"])
+    assert np.isfinite(frame.loc[0, "edge_sparsity"])
+    assert (tmp_path / "training_history.csv").exists()

@@ -275,13 +275,16 @@ def rollout_with_clamped_context(
             if growth_context_steps is not None
             else context
         )
-        ecology_context = (
+        # q/s are global finite-measure ecological summaries.  CEA may supply
+        # group-specific growth contexts [G, C], but those contain an additive
+        # causal mediator delta and do not redefine the global q/s payoff input.
+        global_ecology_context = (
             growth_context
             if growth_context_steps is not None and growth_context.ndim == 1
             else context
         )
-        q = ecology_context[:n_programs]
-        s = ecology_context[n_programs:]
+        q = global_ecology_context[:n_programs]
+        s = global_ecology_context[n_programs:]
         a = model.embedding(perturbation_ids)
         b = model.embedding.growth_intercepts(perturbation_ids)
         eta_z, _ = model.context_agg.encode_particles(z)
@@ -786,6 +789,8 @@ class CounterfactualEngine:
                         "target_perturbation_id": pid,
                         "mediator_id": int(mediator_id),
                         "ablation_scope": "global_mediator" if ablate_global_mediator else "group_edge",
+                        "rollout_control_semantics": "intervention_not_control_reference",
+                        "intervention_type": "mediator_ablation",
                         "initial_seed": int(seed),
                         "noise_seed": noise_seed if common_noise else None,
                     }

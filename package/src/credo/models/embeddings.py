@@ -124,10 +124,14 @@ class PerturbationEmbedding(nn.Module):
         dtype = self._device_sentinel.dtype
         out = torch.zeros(len(perturbation_ids), self.embedding_dim, device=device, dtype=dtype)
         if self.shared_guide_embedding:
-            return self.shared_embedding.to(device=device, dtype=dtype).unsqueeze(0).expand(
+            out = self.shared_embedding.to(device=device, dtype=dtype).unsqueeze(0).expand(
                 len(perturbation_ids),
                 -1,
-            )
+            ).clone()
+            for i, pid in enumerate(perturbation_ids):
+                if pid in self.all_control_ids:
+                    out[i].zero_()
+            return out
         if self.embeddings is None:
             return out
         for i, pid in enumerate(perturbation_ids):
