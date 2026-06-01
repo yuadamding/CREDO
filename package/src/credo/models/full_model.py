@@ -5,7 +5,7 @@ It computes the ecological context, then returns Coefficients and ContextState.
 """
 from __future__ import annotations
 
-from typing import Literal, List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -13,7 +13,9 @@ import torch.nn as nn
 from .embeddings import PerturbationEmbedding, TimeEmbedding
 from .context import ContextAggregator, ContextState
 from .coefficients import CoefficientNetworks, Coefficients
+from .causal_context import CausalEcologicalAttentionContext
 from .transformer_context import MassAwareTransformerContextAggregator
+from .interventions import CausalAttentionIntervention
 
 
 class FullDynamicsModel(nn.Module):
@@ -60,22 +62,34 @@ class FullDynamicsModel(nn.Module):
         program_assignment_scale: float = 1.0,
         control_mode: str = "soft_ref",
         control_ref_penalty: float = 5e-4,
-        context_kind: Literal["mlp", "transformer"] = "mlp",
-        transformer_token_dim: int = 128,
+        context_kind: Literal["mlp", "transformer", "causal_attention"] = "mlp",
+        transformer_token_dim: int = 64,
         transformer_heads: int = 4,
-        transformer_within_layers: int = 2,
-        transformer_cross_layers: int = 2,
-        transformer_inducing: int = 16,
+        transformer_within_layers: int = 1,
+        transformer_cross_layers: int = 1,
+        transformer_inducing: int = 8,
         transformer_dropout: float = 0.05,
-        mass_attention_temperature: float = 1.0,
+        mass_attention_temperature: float = 0.5,
         transformer_growth_only: bool = True,
+        causal_token_dim: int = 64,
+        causal_heads: int = 4,
+        causal_n_mediators: int = 12,
+        causal_dropout: float = 0.05,
+        causal_mass_attention_temperature: float = 0.5,
+        causal_growth_only: bool = True,
+        causal_sparse_edges: bool = True,
     ) -> None:
         super().__init__()
         self.perturbation_ids = perturbation_ids
         self.control_ids = set(control_ids)
         self.control_mode = control_mode
         self.context_kind = context_kind
-        self.transformer_growth_only = bool(transformer_growth_only)
+        self.causal_growth_only = bool(causal_growth_only)
+        self.transformer_growth_only = (
+            bool(causal_growth_only)
+            if context_kind == "causal_attention"
+            else bool(transformer_growth_only)
+        )
         self.anchor_controls = control_mode == "anchored"
         self.latent_dim = latent_dim
         self.embedding_dim = embedding_dim
@@ -150,6 +164,39 @@ class FullDynamicsModel(nn.Module):
                 self.meanfield_context_agg.encoder = self.context_agg.program_encoder
             else:
                 self.meanfield_context_agg = None
+        elif context_kind == "causal_attention":
+            self.context_agg = CausalEcologicalAttentionContext(
+                latent_dim=latent_dim,
+                embedding_dim=embedding_dim,
+                n_programs=self.n_programs,
+                mediator_dim=mediator_dim,
+                context_dim=context_dim,
+                hidden_dim=hidden_dim,
+                token_dim=causal_token_dim,
+                n_heads=causal_heads,
+                n_mediators=causal_n_mediators,
+                dropout=causal_dropout,
+                mass_attention_temperature=causal_mass_attention_temperature,
+                fixed_program_centroids=program_centroids,
+                program_assignment_scale=program_assignment_scale,
+                activation_checkpointing=activation_checkpointing,
+                use_sparse_edges=causal_sparse_edges,
+            )
+            if self.transformer_growth_only:
+                self.meanfield_context_agg = ContextAggregator(
+                    latent_dim=latent_dim,
+                    n_programs=self.n_programs,
+                    mediator_dim=mediator_dim,
+                    context_dim=context_dim,
+                    hidden_dim=hidden_dim,
+                    use_identity_context=True,
+                    fixed_program_centroids=program_centroids,
+                    program_assignment_scale=program_assignment_scale,
+                    activation_checkpointing=activation_checkpointing,
+                )
+                self.meanfield_context_agg.encoder = self.context_agg.program_encoder
+            else:
+                self.meanfield_context_agg = None
         else:
             raise ValueError(f"Unknown context_kind {context_kind!r}")
 
@@ -179,20 +226,36 @@ class FullDynamicsModel(nn.Module):
         logw: torch.Tensor,   # [G, N]
         log_m0: torch.Tensor, # [G]
         perturbation_ids: Optional[List[str]] = None,
+        intervention: Optional[CausalAttentionIntervention] = None,
     ) -> Tuple[Coefficients, ContextState]:
         """One step of the dynamics: compute context and coefficients."""
         pids = perturbation_ids or self.perturbation_ids
         a = self.embedding(pids)   # [G, r]
+        delta = self.embedding.residuals(pids)
         b_g = self.embedding.growth_intercepts(pids)  # [G]
 
-        ctx_state = self.context_agg(z, logw, a, log_m0, tau=tau)
+        if self.context_kind == "causal_attention":
+            ctx_state = self.context_agg(
+                z,
+                logw,
+                a,
+                log_m0,
+                tau=tau,
+                residual=delta,
+                intervention=intervention,
+            )
+        else:
+            ctx_state = self.context_agg(z, logw, a, log_m0, tau=tau)
         ctx = ctx_state.context    # [C]
         base_context = ctx
-        growth_context = None
+        growth_context = getattr(ctx_state, "growth_context", None)
+        if self.context_kind == "causal_attention" and not self.causal_growth_only and growth_context is not None:
+            base_context = growth_context
         if self.transformer_growth_only and self.meanfield_context_agg is not None:
             base_state = self.meanfield_context_agg(z, logw, a, log_m0, tau=tau)
             base_context = base_state.context
-            growth_context = ctx
+            if growth_context is None:
+                growth_context = ctx
         ctx_state.base_context = base_context
         ctx_state.growth_context = growth_context if growth_context is not None else base_context
 
@@ -210,7 +273,7 @@ class FullDynamicsModel(nn.Module):
             eta_z=eta_z,
             q=q,
             s=s,
-            growth_context=growth_context,
+            growth_context=ctx_state.growth_context,
         )
 
         return coeffs, ctx_state

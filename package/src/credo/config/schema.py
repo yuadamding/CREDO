@@ -92,7 +92,7 @@ class ModelConfig(BaseModel):
     n_payoff_ranks: int = 4
     control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"
     control_ref_penalty: float = 5e-4
-    context_kind: Literal["mlp", "transformer"] = "mlp"
+    context_kind: Literal["mlp", "transformer", "causal_attention"] = "mlp"
     transformer_token_dim: int = 64
     transformer_heads: int = 4
     transformer_within_layers: int = 1
@@ -101,9 +101,16 @@ class ModelConfig(BaseModel):
     transformer_dropout: float = 0.05
     mass_attention_temperature: float = 0.5
     transformer_growth_only: bool = True
+    causal_token_dim: int = 64
+    causal_heads: int = 4
+    causal_n_mediators: int = 12
+    causal_dropout: float = 0.05
+    causal_mass_attention_temperature: float = 0.5
+    causal_growth_only: bool = True
+    causal_sparse_edges: bool = True
 
     @model_validator(mode="after")
-    def _validate_transformer_context(self) -> "ModelConfig":
+    def _validate_context_backends(self) -> "ModelConfig":
         if self.transformer_token_dim < 1:
             raise ValueError("transformer_token_dim must be >= 1.")
         if self.transformer_heads < 1:
@@ -120,6 +127,18 @@ class ModelConfig(BaseModel):
             raise ValueError("transformer_dropout must be in [0, 1).")
         if self.mass_attention_temperature < 0:
             raise ValueError("mass_attention_temperature must be >= 0.")
+        if self.causal_token_dim < 1:
+            raise ValueError("causal_token_dim must be >= 1.")
+        if self.causal_heads < 1:
+            raise ValueError("causal_heads must be >= 1.")
+        if self.causal_token_dim % self.causal_heads != 0:
+            raise ValueError("causal_token_dim must be divisible by causal_heads.")
+        if self.causal_n_mediators < 1:
+            raise ValueError("causal_n_mediators must be >= 1.")
+        if not 0.0 <= self.causal_dropout < 1.0:
+            raise ValueError("causal_dropout must be in [0, 1).")
+        if self.causal_mass_attention_temperature < 0:
+            raise ValueError("causal_mass_attention_temperature must be >= 0.")
         return self
 
 

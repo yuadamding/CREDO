@@ -152,13 +152,22 @@ class CoefficientNetworks(nn.Module):
         self,
         z: torch.Tensor,      # [G, N, d]
         tau: torch.Tensor,    # scalar or [1]
-        context: torch.Tensor,  # [C]
+        context: torch.Tensor,  # [C] or [G, C]
     ) -> torch.Tensor:
         """Assemble u = [z, gamma(tau), c_tau] with shape [G, N, input_dim]."""
         G, N, d = z.shape
         tau_scalar = tau.reshape(1)
         gamma = self.time_embed(tau_scalar).squeeze(0)   # [time_dim]
-        ctx_expand = context.unsqueeze(0).unsqueeze(0).expand(G, N, -1)   # [G, N, C]
+        if context.ndim == 1:
+            ctx_expand = context.unsqueeze(0).unsqueeze(0).expand(G, N, -1)
+        elif context.ndim == 2:
+            if context.shape[0] != G:
+                raise ValueError(
+                    f"group-specific context must have shape [G, C], got {tuple(context.shape)}"
+                )
+            ctx_expand = context.unsqueeze(1).expand(G, N, -1)
+        else:
+            raise ValueError(f"context must have shape [C] or [G, C], got {tuple(context.shape)}")
         gamma_expand = gamma.unsqueeze(0).unsqueeze(0).expand(G, N, -1)   # [G, N, time_dim]
         return torch.cat([z, gamma_expand, ctx_expand], dim=-1)  # [G, N, input_dim]
 
@@ -172,7 +181,7 @@ class CoefficientNetworks(nn.Module):
         eta_z: Optional[torch.Tensor] = None,  # [G, N, K] for ecology
         q: Optional[torch.Tensor] = None,      # [K] for ecology
         s: Optional[torch.Tensor] = None,      # [L] for ecology (optional)
-        growth_context: Optional[torch.Tensor] = None,  # [C] optional growth-only context
+        growth_context: Optional[torch.Tensor] = None,  # [C] or [G, C] optional growth-only context
     ) -> Coefficients:
         u = self._common_input(z, tau, context)   # [G, N, input_dim]
         u_growth = u if growth_context is None else self._common_input(z, tau, growth_context)

@@ -31,7 +31,7 @@ class ParticleRollout:
     growth_steps: Optional[torch.Tensor] = None     # [K, G, N]
     context_steps: Optional[torch.Tensor] = None    # [K, C], context for tau_k -> tau_{k+1}
     base_context_steps: Optional[torch.Tensor] = None  # [K, C], drift/sigma context
-    growth_context_steps: Optional[torch.Tensor] = None  # [K, C], growth context
+    growth_context_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C], growth context
     context_diagnostics: Optional[Dict[str, torch.Tensor]] = None  # scalar diagnostics stacked over K
     noise_steps: Optional[torch.Tensor] = None      # [K, G, N, d] innovations used by rollout
 
@@ -115,6 +115,7 @@ class WeightedParticleSimulator(nn.Module):
         generator: Optional[torch.Generator] = None,
         noise_steps: Optional[torch.Tensor] = None,
         return_noise_used: bool = False,
+        intervention: Optional[object] = None,
     ) -> ParticleRollout:
         """Run the full Euler-Maruyama rollout.
 
@@ -188,13 +189,16 @@ class WeightedParticleSimulator(nn.Module):
             sqrt_dtau = (dtau ** 0.5) if dtau_uniform is not None else torch.sqrt(dtau)
 
             # Get coefficients and context from model
-            coeffs, ctx = model.step(
-                z=z,
-                tau=tau_k,
-                logw=logw,
-                log_m0=log_m0,
-                perturbation_ids=perturbation_ids,
-            )
+            step_kwargs = {
+                "z": z,
+                "tau": tau_k,
+                "logw": logw,
+                "log_m0": log_m0,
+                "perturbation_ids": perturbation_ids,
+            }
+            if intervention is not None:
+                step_kwargs["intervention"] = intervention
+            coeffs, ctx = model.step(**step_kwargs)
 
             v = coeffs.drift      # [G, N, d]
             sigma = coeffs.sigma_diag  # [G, N, d]

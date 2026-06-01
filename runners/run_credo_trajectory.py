@@ -166,18 +166,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mediator-dim", type=int, default=8)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--depth", type=int, default=3)
-    parser.add_argument("--context-kind", choices=["mlp", "transformer"], default="mlp")
-    parser.add_argument("--transformer-token-dim", type=int, default=128)
+    parser.add_argument("--context-kind", choices=["mlp", "transformer", "causal_attention"], default="mlp")
+    parser.add_argument("--transformer-token-dim", type=int, default=64)
     parser.add_argument("--transformer-heads", type=int, default=4)
-    parser.add_argument("--transformer-within-layers", type=int, default=2)
-    parser.add_argument("--transformer-cross-layers", type=int, default=2)
-    parser.add_argument("--transformer-inducing", type=int, default=16)
+    parser.add_argument("--transformer-within-layers", type=int, default=1)
+    parser.add_argument("--transformer-cross-layers", type=int, default=1)
+    parser.add_argument("--transformer-inducing", type=int, default=8)
     parser.add_argument("--transformer-dropout", type=float, default=0.05)
-    parser.add_argument("--mass-attention-temperature", type=float, default=1.0)
+    parser.add_argument("--mass-attention-temperature", type=float, default=0.5)
     parser.add_argument("--transformer-growth-only", dest="transformer_growth_only", action="store_true")
     parser.add_argument("--transformer-all-coefficients", dest="transformer_growth_only", action="store_false")
     parser.set_defaults(transformer_growth_only=True)
-    parser.add_argument("--lr-transformer", type=float, default=1e-4)
+    parser.add_argument("--causal-token-dim", type=int, default=64)
+    parser.add_argument("--causal-heads", type=int, default=4)
+    parser.add_argument("--causal-n-mediators", type=int, default=12)
+    parser.add_argument("--causal-dropout", type=float, default=0.05)
+    parser.add_argument("--causal-mass-attention-temperature", type=float, default=0.5)
+    parser.add_argument("--causal-growth-only", dest="causal_growth_only", action="store_true")
+    parser.add_argument("--causal-all-coefficients", dest="causal_growth_only", action="store_false")
+    parser.set_defaults(causal_growth_only=True)
+    parser.add_argument("--causal-sparse-edges", dest="causal_sparse_edges", action="store_true")
+    parser.add_argument("--causal-dense-edges", dest="causal_sparse_edges", action="store_false")
+    parser.set_defaults(causal_sparse_edges=True)
+    parser.add_argument("--lr-transformer", type=float, default=5e-5)
     parser.add_argument("--transformer-weight-decay", type=float, default=1e-4)
     parser.add_argument("--control-mode", choices=["anchored", "free", "soft_ref"], default="soft_ref")
     parser.add_argument("--lambda-weak", type=float, default=0.1)
@@ -623,6 +634,13 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.model.transformer_dropout = args.transformer_dropout
     cfg.model.mass_attention_temperature = args.mass_attention_temperature
     cfg.model.transformer_growth_only = args.transformer_growth_only
+    cfg.model.causal_token_dim = args.causal_token_dim
+    cfg.model.causal_heads = args.causal_heads
+    cfg.model.causal_n_mediators = args.causal_n_mediators
+    cfg.model.causal_dropout = args.causal_dropout
+    cfg.model.causal_mass_attention_temperature = args.causal_mass_attention_temperature
+    cfg.model.causal_growth_only = args.causal_growth_only
+    cfg.model.causal_sparse_edges = args.causal_sparse_edges
     cfg.model.control_mode = args.control_mode
     cfg.model.ecological_growth = args.ecological_growth
     cfg.model.use_growth_intercept = args.use_growth_intercept
@@ -828,6 +846,13 @@ def main(argv: list[str] | None = None) -> None:
         transformer_dropout=cfg.model.transformer_dropout,
         mass_attention_temperature=cfg.model.mass_attention_temperature,
         transformer_growth_only=cfg.model.transformer_growth_only,
+        causal_token_dim=cfg.model.causal_token_dim,
+        causal_heads=cfg.model.causal_heads,
+        causal_n_mediators=cfg.model.causal_n_mediators,
+        causal_dropout=cfg.model.causal_dropout,
+        causal_mass_attention_temperature=cfg.model.causal_mass_attention_temperature,
+        causal_growth_only=cfg.model.causal_growth_only,
+        causal_sparse_edges=cfg.model.causal_sparse_edges,
     )
     trainer = TrajectoryTrainer(
         model=model,

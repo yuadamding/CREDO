@@ -13,6 +13,7 @@ import torch
 
 from ..data.core import EndpointProblem, FiniteMeasure, TrajectoryProblem
 from .full_model import FullDynamicsModel
+from .interventions import CausalAttentionIntervention
 from .weighted_sde import WeightedParticleSimulator, ParticleRollout
 
 
@@ -205,7 +206,21 @@ def rollout_with_clamped_context(
     def _validate_context_steps(name: str, value: torch.Tensor) -> None:
         if value.shape[0] < K:
             raise ValueError(f"{name} has {value.shape[0]} steps, but rollout requested {K} steps.")
-        if value.ndim != 2 or value.shape[1] != expected_context_width:
+        if value.ndim == 2 and value.shape[1] == expected_context_width:
+            return
+        if (
+            value.ndim == 3
+            and value.shape[1] == z0.shape[0]
+            and value.shape[2] == expected_context_width
+        ):
+            return
+        if value.ndim == 3:
+            raise ValueError(
+                f"{name} must have shape [K, context_dim] or [K, G, context_dim] "
+                f"with G={z0.shape[0]} and context_dim={expected_context_width}; "
+                f"got {tuple(value.shape)}"
+            )
+        else:
             raise ValueError(
                 f"{name} must have shape [K, context_dim] with "
                 f"context_dim={expected_context_width}; got {tuple(value.shape)}"
@@ -260,7 +275,11 @@ def rollout_with_clamped_context(
             if growth_context_steps is not None
             else context
         )
-        ecology_context = growth_context if growth_context_steps is not None else context
+        ecology_context = (
+            growth_context
+            if growth_context_steps is not None and growth_context.ndim == 1
+            else context
+        )
         q = ecology_context[:n_programs]
         s = ecology_context[n_programs:]
         a = model.embedding(perturbation_ids)
@@ -417,8 +436,8 @@ class CounterfactualEngine:
         if clamp_context and not self.simulator.store_history:
             raise ValueError("clamp_context=True requires a simulator with store_history=True.")
 
-        if getattr(self.model, "context_kind", "mlp") == "transformer":
-            return self._run_transformer_full_context(
+        if getattr(self.model, "context_kind", "mlp") in {"transformer", "causal_attention"}:
+            return self._run_global_context_counterfactual(
                 endpoint=endpoint,
                 perturbation_ids=perturbation_ids,
                 clamp_context=clamp_context,
@@ -525,19 +544,19 @@ class CounterfactualEngine:
         context_fraction = len(available) / float(n_model)
         if len(available) < 2:
             raise ValueError(
-                "Transformer counterfactuals require full-context rollout with at least "
+                "Global-context counterfactuals require full-context rollout with at least "
                 "two perturbations, or an explicit clamped context trajectory. "
                 "Single-perturbation ecology is degenerate."
             )
         if missing and not allow_partial_context:
             raise ValueError(
-                "Transformer counterfactual context is partial: "
+                "Global-context counterfactual context is partial: "
                 f"{len(available)}/{len(model_pids)} perturbations available. "
                 "Pass allow_partial_context=True only for an explicit diagnostic."
             )
         if context_fraction < float(min_context_fraction) and not allow_partial_context:
             raise ValueError(
-                f"Transformer counterfactual context coverage {context_fraction:.3f} "
+                f"Global-context counterfactual context coverage {context_fraction:.3f} "
                 f"is below the required {float(min_context_fraction):.3f}."
             )
         metadata: Dict[str, object] = {
@@ -550,7 +569,7 @@ class CounterfactualEngine:
         }
         return available, metadata
 
-    def _run_transformer_full_context(
+    def _run_global_context_counterfactual(
         self,
         *,
         endpoint: EndpointProblem,
@@ -562,7 +581,7 @@ class CounterfactualEngine:
         allow_partial_context: bool,
         min_context_fraction: float,
     ) -> List[CounterfactualResult]:
-        """Run transformer counterfactuals inside the full ecological context."""
+        """Run counterfactuals inside the full ecological context."""
         all_pids, context_metadata = self._full_context_perturbation_ids(
             endpoint,
             allow_partial_context=allow_partial_context,
@@ -662,8 +681,11 @@ class CounterfactualEngine:
             metadata = dict(context_metadata)
             metadata.update(
                 {
+                    "context_kind": getattr(self.model, "context_kind", "mlp"),
                     "target_perturbation_id": pid,
                     "counterfactual_seed_mode": "global_common" if common_noise else "global_initial_only",
+                    "same_start": True,
+                    "same_noise": bool(common_noise),
                     "initial_seed": int(seed),
                     "noise_seed": noise_seed if common_noise else None,
                     "factual_full_context_reused": True,
@@ -680,6 +702,102 @@ class CounterfactualEngine:
                 )
             )
 
+        return results
+
+    @torch.no_grad()
+    def run_mediator_ablation(
+        self,
+        endpoint: EndpointProblem,
+        perturbation_ids: List[str],
+        mediator_ids: List[int],
+        seed: int = 0,
+        common_noise: bool = True,
+        allow_partial_context: bool = False,
+        min_context_fraction: float = 0.95,
+        ablate_global_mediator: bool = False,
+    ) -> List[CounterfactualResult]:
+        """Run same-start/same-noise CEA mediator or edge ablations."""
+        if getattr(self.model, "context_kind", "mlp") != "causal_attention":
+            raise ValueError("run_mediator_ablation requires context_kind='causal_attention'.")
+        all_pids, context_metadata = self._full_context_perturbation_ids(
+            endpoint,
+            allow_partial_context=allow_partial_context,
+            min_context_fraction=min_context_fraction,
+        )
+        z0_all, lw0_all, lm0_all = initialise_particles(
+            endpoint,
+            all_pids,
+            self.n_particles,
+            self.device,
+            seed=seed,
+        )
+        noise_seed = int(seed) + 10_000
+        noise_steps = None
+        if common_noise:
+            noise_steps = self.simulator.sample_noise_like(
+                z0_all,
+                self.simulator.n_steps,
+                seed=noise_seed,
+            )
+
+        factual_all = self.simulator.rollout(
+            z0=z0_all,
+            logw0=lw0_all,
+            model=self.model,
+            log_m0=lm0_all,
+            perturbation_ids=all_pids,
+            noise_steps=noise_steps,
+            return_noise_used=common_noise,
+        )
+
+        results: List[CounterfactualResult] = []
+        for pid in perturbation_ids:
+            if pid not in endpoint.initial or pid not in all_pids:
+                continue
+            target_idx = all_pids.index(pid)
+            for mediator_id in mediator_ids:
+                if ablate_global_mediator:
+                    intervention = CausalAttentionIntervention(
+                        protocol="ablate_mediators",
+                        ablate_mediator_ids=[int(mediator_id)],
+                    )
+                else:
+                    intervention = CausalAttentionIntervention(
+                        protocol="ablate_edges",
+                        ablate_group_mediator_edges=[(target_idx, int(mediator_id))],
+                    )
+                ablated_all = self.simulator.rollout(
+                    z0=z0_all.clone(),
+                    logw0=lw0_all.clone(),
+                    model=self.model,
+                    log_m0=lm0_all.clone(),
+                    perturbation_ids=all_pids,
+                    noise_steps=noise_steps.clone() if noise_steps is not None else None,
+                    return_noise_used=common_noise,
+                    intervention=intervention,
+                )
+                metadata = dict(context_metadata)
+                metadata.update(
+                    {
+                        "counterfactual_type": "mediator_ablation",
+                        "context_kind": "causal_attention",
+                        "same_start": True,
+                        "same_noise": bool(common_noise),
+                        "target_perturbation_id": pid,
+                        "mediator_id": int(mediator_id),
+                        "ablation_scope": "global_mediator" if ablate_global_mediator else "group_edge",
+                        "initial_seed": int(seed),
+                        "noise_seed": noise_seed if common_noise else None,
+                    }
+                )
+                results.append(
+                    CounterfactualResult(
+                        perturbation_id=pid,
+                        rollout_perturb=factual_all.slice_group(target_idx),
+                        rollout_control=ablated_all.slice_group(target_idx),
+                        metadata=metadata,
+                    )
+                )
         return results
 
 

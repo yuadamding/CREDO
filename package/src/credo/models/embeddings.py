@@ -112,6 +112,29 @@ class PerturbationEmbedding(nn.Module):
             out = out + self.reference_embedding.to(device=device, dtype=dtype).unsqueeze(0)
         return out
 
+    def residuals(self, perturbation_ids: List[str]) -> torch.Tensor:
+        """Return perturbation residuals without the shared soft reference.
+
+        In ``soft_ref`` mode, controls have exactly zero residual and
+        non-controls return their learned residual around the reference.  In
+        ``anchored`` mode this matches the effective embedding.  In ``free``
+        mode all learned perturbation embeddings are treated as residuals.
+        """
+        device = self._device_sentinel.device
+        dtype = self._device_sentinel.dtype
+        out = torch.zeros(len(perturbation_ids), self.embedding_dim, device=device, dtype=dtype)
+        if self.shared_guide_embedding:
+            return self.shared_embedding.to(device=device, dtype=dtype).unsqueeze(0).expand(
+                len(perturbation_ids),
+                -1,
+            )
+        if self.embeddings is None:
+            return out
+        for i, pid in enumerate(perturbation_ids):
+            if pid in self._nc_to_local:
+                out[i] = self.embeddings[self._nc_to_local[pid]]
+        return out
+
     def control_anchor_is_exact(self) -> bool:
         """Verify that anchored-mode control residuals are exactly zero."""
         if self.shared_guide_embedding:

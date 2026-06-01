@@ -3,6 +3,12 @@ from __future__ import annotations
 
 from .coefficients import CoefficientNetworks, Coefficients
 from .context import ContextAggregator, ContextDiagnostics, ContextState, GroupStatistics, ProgramEncoder
+from .causal_attention_blocks import MassGraphMaskedCrossAttention
+from .causal_context import (
+    CausalAttentionDiagnostics,
+    CausalContextState,
+    CausalEcologicalAttentionContext,
+)
 from .ecology import EcologicalPayoff
 from .embeddings import PerturbationEmbedding, TimeEmbedding
 from .expression_vae import (
@@ -17,6 +23,7 @@ from .expression_vae import (
     standardize_latent,
 )
 from .full_model import FullDynamicsModel
+from .interventions import CausalAttentionIntervention
 from .transformer_blocks import FeedForwardBlock, InducedSetAttentionBlock, MassBiasedCrossAttention
 from .transformer_context import MassAwareTransformerContextAggregator
 from .particles import (
@@ -44,6 +51,10 @@ def __getattr__(name: str):
 __all__ = [
     "CoefficientNetworks",
     "Coefficients",
+    "CausalAttentionDiagnostics",
+    "CausalAttentionIntervention",
+    "CausalContextState",
+    "CausalEcologicalAttentionContext",
     "ContextAggregator",
     "ContextDiagnostics",
     "ContextState",
@@ -59,6 +70,7 @@ __all__ = [
     "LatentStandardization",
     "MassAwareTransformerContextAggregator",
     "MassBiasedCrossAttention",
+    "MassGraphMaskedCrossAttention",
     "ParticleRollout",
     "PerturbationEmbedding",
     "ProgramEncoder",

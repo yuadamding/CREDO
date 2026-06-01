@@ -188,6 +188,13 @@ _DIAGNOSTIC_KEYS = (
 )
 
 
+_GLOBAL_CONTEXT_BACKENDS = {"transformer", "causal_attention"}
+
+
+def _uses_global_context_backend(model: FullDynamicsModel) -> bool:
+    return getattr(model, "context_kind", "mlp") in _GLOBAL_CONTEXT_BACKENDS
+
+
 def _nan_diagnostics() -> Dict[str, float]:
     return {key: math.nan for key in _DIAGNOSTIC_KEYS}
 
@@ -291,7 +298,7 @@ class Trainer:
         )
         self._needs_rollout_history = (
             (tc.lambda_weak > 0) or (tc.lambda_count > 0) or has_trajectory_reg
-            or getattr(model, "context_kind", "mlp") == "transformer"
+            or _uses_global_context_backend(model)
         )
         self.precision = tc.precision
         self.autocast_enabled = self.device.startswith("cuda") and self.precision in {"fp16", "bf16"}
@@ -573,7 +580,7 @@ class Trainer:
         for name, p in self.model.named_parameters():
             if not p.requires_grad:
                 continue
-            if getattr(self.model, "context_kind", "mlp") == "transformer" and name.startswith("context_agg."):
+            if _uses_global_context_backend(self.model) and name.startswith("context_agg."):
                 group = "transformer"
             elif "embedding" in name:
                 group = "embed"
@@ -608,9 +615,9 @@ class Trainer:
         perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
-        if self._can_use_multi_gpu() and getattr(self.model, "context_kind", "mlp") == "transformer":
+        if self._can_use_multi_gpu() and _uses_global_context_backend(self.model):
             raise ValueError(
-                "Transformer ecological context is not supported with multi-GPU sharding yet. "
+                "Global ecological context backends are not supported with multi-GPU sharding yet. "
                 "Use a single training device so context is computed from the full perturbation set."
             )
         if not self._can_use_multi_gpu():
@@ -830,7 +837,7 @@ class Trainer:
         for step_idx in range(sc.n_steps):
             tau_k = tau_steps[step_idx]
 
-            if getattr(self.model, "context_kind", "mlp") == "transformer":
+            if _uses_global_context_backend(self.model):
                 pids_all: list[str] = []
                 group_slices: list[slice] = []
                 start = 0
@@ -845,18 +852,36 @@ class Trainer:
                     logw_all = torch.cat([state["logw"] for state in chunk_states], dim=0)
                     log_m0_all = torch.cat([state["log_m0"] for state in chunk_states], dim=0)
                     a_all = self.model.embedding(pids_all)
+                    residual_all = self.model.embedding.residuals(pids_all)
                     b_all = self.model.embedding.growth_intercepts(pids_all)
-                    ctx_state = self.model.context_agg(
-                        z_all,
-                        logw_all,
-                        a_all,
-                        log_m0_all,
-                        tau=tau_k,
-                    )
+                    context_kind = getattr(self.model, "context_kind", "mlp")
+                    if context_kind == "causal_attention":
+                        ctx_state = self.model.context_agg(
+                            z_all,
+                            logw_all,
+                            a_all,
+                            log_m0_all,
+                            tau=tau_k,
+                            residual=residual_all,
+                        )
+                    else:
+                        ctx_state = self.model.context_agg(
+                            z_all,
+                            logw_all,
+                            a_all,
+                            log_m0_all,
+                            tau=tau_k,
+                        )
                     _append_context_diagnostics(diagnostic_values, ctx_state.diagnostics)
                     eta_all, _ = self.model.context_agg.encode_particles(z_all)
                     base_context = ctx_state.context
-                    growth_context = None
+                    growth_context = getattr(ctx_state, "growth_context", None)
+                    if (
+                        context_kind == "causal_attention"
+                        and not getattr(self.model, "causal_growth_only", True)
+                        and growth_context is not None
+                    ):
+                        base_context = growth_context
                     if (
                         getattr(self.model, "transformer_growth_only", False)
                         and getattr(self.model, "meanfield_context_agg", None) is not None
@@ -869,20 +894,34 @@ class Trainer:
                             tau=tau_k,
                         )
                         base_context = base_state.context
-                        growth_context = ctx_state.context
+                        if growth_context is None:
+                            growth_context = ctx_state.context
 
                 for state, group_slice in zip(chunk_states, group_slices):
+                    base_context_local = base_context
+                    if (
+                        base_context.ndim == 2
+                        and base_context.shape[0] == len(pids_all)
+                    ):
+                        base_context_local = base_context[group_slice]
+                    growth_context_local = growth_context
+                    if (
+                        growth_context is not None
+                        and growth_context.ndim == 2
+                        and growth_context.shape[0] == len(pids_all)
+                    ):
+                        growth_context_local = growth_context[group_slice]
                     with autocast_ctx:
                         coeffs = self.model.coeff_nets(
                             z=state["z"],
                             tau=tau_k,
-                            context=base_context,
+                            context=base_context_local,
                             a=a_all[group_slice],
                             growth_intercept=b_all[group_slice],
                             eta_z=eta_all[group_slice],
                             q=ctx_state.q,
                             s=ctx_state.s,
-                            growth_context=growth_context,
+                            growth_context=growth_context_local,
                         )
                     noise = self._sample_chunk_noise_stable_by_pid(
                         state["pids"],
@@ -1089,9 +1128,9 @@ class Trainer:
     ) -> Dict[str, float]:
         tc = self.config.training
         sc = self.config.simulation
-        if getattr(self.model, "context_kind", "mlp") == "transformer":
+        if _uses_global_context_backend(self.model):
             raise ValueError(
-                "Transformer ecological context is not supported with multi-GPU sharding yet. "
+                "Global ecological context backends are not supported with multi-GPU sharding yet. "
                 "Use a single training device so context is computed from the full perturbation set."
             )
         if tc.lambda_count > 0:

@@ -22,7 +22,13 @@ from ..losses.uot import UOTLoss
 from ..losses.weak_form import WeakFormLoss
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import ParticleRollout, WeightedParticleSimulator
-from .trainer import EMA, WarmupCosineScheduler, _DIAGNOSTIC_KEYS, _diagnostics_from_rollout
+from .trainer import (
+    EMA,
+    WarmupCosineScheduler,
+    _DIAGNOSTIC_KEYS,
+    _diagnostics_from_rollout,
+    _uses_global_context_backend,
+)
 from .trajectory_batch import initialise_particles_from_trajectory
 from .trajectory_eval import rollout_metrics_by_key_time
 
@@ -186,7 +192,7 @@ class TrajectoryTrainer:
             or tc.lambda_count > 0
             or tc.lambda_reg_net > 0
             or tc.lambda_reg_diffusion > 0
-            or getattr(model, "context_kind", "mlp") == "transformer"
+            or _uses_global_context_backend(model)
         )
         self.simulator = WeightedParticleSimulator(
             n_steps=max(1, len(self.tau_grid) - 1),
@@ -331,7 +337,7 @@ class TrajectoryTrainer:
         for name, param in self.model.named_parameters():
             if not param.requires_grad:
                 continue
-            if getattr(self.model, "context_kind", "mlp") == "transformer" and name.startswith("context_agg."):
+            if _uses_global_context_backend(self.model) and name.startswith("context_agg."):
                 group = "transformer"
             elif "embedding" in name:
                 group = "embed"

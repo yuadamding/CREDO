@@ -9,6 +9,14 @@ from .counts import (
     integrated_fitness,
     integrated_fitness_curve,
 )
+from .causal_attention import (
+    context_smoothness_loss,
+    control_edge_null_loss,
+    edge_entropy_loss,
+    edge_sparsity_loss,
+    guide_concordance_loss,
+    mediator_orthogonality_loss,
+)
 from .multitime import (
     MultiTimeEndpointLoss,
     build_target_tensors_by_time,
@@ -37,13 +45,19 @@ __all__ = [
     "checkpoint_indices_for_taus",
     "checkpoint_indices_for_trajectory",
     "count_fractions_from_zeta",
+    "context_smoothness_loss",
+    "control_edge_null_loss",
     "diffusion_magnitude_penalty",
     "drift_action_penalty",
+    "edge_entropy_loss",
+    "edge_sparsity_loss",
     "GaussianRBFTestFunctions",
+    "guide_concordance_loss",
     "growth_action_penalty",
     "integrated_fitness",
     "integrated_fitness_curve",
     "make_observed_tau_grid",
+    "mediator_orthogonality_loss",
     "sinkhorn_divergence",
     "sinkhorn_divergence_normalized",
 ]
