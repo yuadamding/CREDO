@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 import torch.nn as nn
@@ -25,6 +25,9 @@ class CausalAttentionDiagnostics(ContextDiagnostics):
     mediator_to_group_effective_keys: Optional[torch.Tensor] = None
     mediator_usage: Optional[torch.Tensor] = None
     edge_sparsity: Optional[torch.Tensor] = None
+    effective_edge_mean: Optional[torch.Tensor] = None
+    baseline_edge_mean: Optional[torch.Tensor] = None
+    residual_edge_sparsity_loss: Optional[torch.Tensor] = None
     edge_entropy: Optional[torch.Tensor] = None
     control_edge_norm: Optional[torch.Tensor] = None
     mediator_orthogonality: Optional[torch.Tensor] = None
@@ -80,6 +83,7 @@ class CausalEcologicalAttentionContext(nn.Module):
         program_assignment_scale: float = 1.0,
         activation_checkpointing: bool = False,
         use_sparse_edges: bool = True,
+        residual_policy: Literal["edges_only", "tokens_and_edges"] = "edges_only",
     ) -> None:
         super().__init__()
         if context_dim != n_programs + mediator_dim:
@@ -92,6 +96,8 @@ class CausalEcologicalAttentionContext(nn.Module):
             raise ValueError("token_dim must be divisible by n_heads")
         if n_mediators < 1:
             raise ValueError("n_mediators must be >= 1")
+        if residual_policy not in {"edges_only", "tokens_and_edges"}:
+            raise ValueError("residual_policy must be 'edges_only' or 'tokens_and_edges'")
 
         self.latent_dim = int(latent_dim)
         self.embedding_dim = int(embedding_dim)
@@ -103,6 +109,7 @@ class CausalEcologicalAttentionContext(nn.Module):
         self.activation_checkpointing = bool(activation_checkpointing)
         self.use_sparse_edges = bool(use_sparse_edges)
         self.mass_attention_temperature = float(mass_attention_temperature)
+        self.residual_policy = residual_policy
 
         self.program_encoder = ProgramEncoder(
             latent_dim=latent_dim,
@@ -115,7 +122,9 @@ class CausalEcologicalAttentionContext(nn.Module):
         )
         self.n_programs = self.program_encoder.n_programs
 
-        particle_in_dim = latent_dim + 1 + embedding_dim + embedding_dim + 3
+        particle_in_dim = latent_dim + 1 + 3
+        if self.residual_policy == "tokens_and_edges":
+            particle_in_dim += 2 * embedding_dim
         self.particle_tokenizer = nn.Sequential(
             nn.Linear(particle_in_dim, token_dim),
             nn.LayerNorm(token_dim),
@@ -124,7 +133,9 @@ class CausalEcologicalAttentionContext(nn.Module):
             nn.Linear(token_dim, token_dim),
         )
 
-        group_in_dim = embedding_dim + embedding_dim + self.n_programs + latent_dim + 2
+        group_in_dim = self.n_programs + latent_dim + 2
+        if self.residual_policy == "tokens_and_edges":
+            group_in_dim += 2 * embedding_dim
         self.group_tokenizer = nn.Sequential(
             nn.Linear(group_in_dim, token_dim),
             nn.LayerNorm(token_dim),
@@ -168,7 +179,7 @@ class CausalEcologicalAttentionContext(nn.Module):
             nn.Tanh(),
         )
         self.group_context_project = nn.Sequential(
-            nn.LayerNorm(token_dim),
+            nn.LayerNorm(token_dim, elementwise_affine=False),
             nn.Linear(token_dim, context_dim, bias=False),
             nn.Tanh(),
         )
@@ -196,6 +207,12 @@ class CausalEcologicalAttentionContext(nn.Module):
         entropy = CausalEcologicalAttentionContext._entropy(attn)
         return None if entropy is None else entropy.exp().detach()
 
+    @staticmethod
+    def _smooth_edge_gate(edge_scores: torch.Tensor) -> torch.Tensor:
+        scores = edge_scores.float().clamp(min=0.0, max=1.0 - 1e-6)
+        gate = 1.0 - torch.exp(torch.log1p(-scores).sum(dim=-1, keepdim=True))
+        return gate.to(dtype=edge_scores.dtype)
+
     def _tokenize_particles(
         self,
         z: torch.Tensor,
@@ -208,18 +225,17 @@ class CausalEcologicalAttentionContext(nn.Module):
     ) -> torch.Tensor:
         G, N, _ = z.shape
         tau_feat = tau.reshape(1, 1, 1).expand(G, N, 1)
-        features = torch.cat(
-            [
-                z,
-                tau_feat,
-                a[:, None, :].expand(G, N, -1),
-                residual[:, None, :].expand(G, N, -1),
-                logw_centered[..., None],
-                log_mass_z[:, None, None].expand(G, N, 1),
-                freq_g[:, None, None].expand(G, N, 1),
-            ],
-            dim=-1,
-        )
+        parts = [
+            z,
+            tau_feat,
+            logw_centered[..., None],
+            log_mass_z[:, None, None].expand(G, N, 1),
+            freq_g[:, None, None].expand(G, N, 1),
+        ]
+        if self.residual_policy == "tokens_and_edges":
+            parts.insert(2, residual[:, None, :].expand(G, N, -1))
+            parts.insert(2, a[:, None, :].expand(G, N, -1))
+        features = torch.cat(parts, dim=-1)
         return self._maybe_checkpoint(self.particle_tokenizer, features)
 
     def _tokenize_groups(
@@ -231,10 +247,11 @@ class CausalEcologicalAttentionContext(nn.Module):
         log_mass_z: torch.Tensor,
         freq_g: torch.Tensor,
     ) -> torch.Tensor:
-        features = torch.cat(
-            [a, residual, q_g, z_bar_g, log_mass_z[:, None], freq_g[:, None]],
-            dim=-1,
-        )
+        parts = [q_g, z_bar_g, log_mass_z[:, None], freq_g[:, None]]
+        if self.residual_policy == "tokens_and_edges":
+            parts.insert(0, residual)
+            parts.insert(0, a)
+        features = torch.cat(parts, dim=-1)
         return self._maybe_checkpoint(self.group_tokenizer, features)
 
     def forward(
@@ -341,7 +358,7 @@ class CausalEcologicalAttentionContext(nn.Module):
         med_keys = global_med[None, :, :].expand(G, -1, -1)
         if self.use_sparse_edges:
             med_values = med_keys * edge_scores[:, :, None].to(dtype=dtype)
-            edge_gate = edge_scores.max(dim=-1).values[:, None].to(dtype=dtype)
+            edge_gate = self._smooth_edge_gate(edge_scores).to(dtype=dtype)
         else:
             med_values = med_keys
             edge_gate = torch.ones(G, 1, device=device, dtype=dtype)
@@ -356,7 +373,8 @@ class CausalEcologicalAttentionContext(nn.Module):
             ),
             return_attention=True,
         )
-        group_context = edge_gate * group_context.squeeze(1)
+        group_context_raw = group_context.squeeze(1)
+        group_context = edge_gate * group_context_raw
 
         h_particle_causal = h_particle + group_context[:, None, :]
         phi_causal = self.phi_head(h_particle_causal)
@@ -365,7 +383,8 @@ class CausalEcologicalAttentionContext(nn.Module):
         s = (freq_g[:, None] * s_g).sum(dim=0)
         context = torch.cat([q, s], dim=-1)
 
-        causal_delta_g = self.group_context_scale * self.group_context_project(group_context)
+        causal_delta_raw = self.group_context_project(group_context_raw)
+        causal_delta_g = edge_gate * self.group_context_scale * causal_delta_raw
         growth_context_g = context[None, :] + causal_delta_g
 
         mediator_tokens = global_med
@@ -406,7 +425,10 @@ class CausalEcologicalAttentionContext(nn.Module):
             local_to_global_mediator_effective_keys=self._effective_keys(attn_group),
             mediator_to_group_effective_keys=self._effective_keys(attn_med),
             mediator_usage=edge_scores.mean(dim=0).detach(),
-            edge_sparsity=edge_scores.mean().detach(),
+            edge_sparsity=residual_edge_magnitude.mean().detach(),
+            effective_edge_mean=edge_scores.mean().detach(),
+            baseline_edge_mean=baseline_edge_scores.mean().detach(),
+            residual_edge_sparsity_loss=residual_edge_magnitude.mean().detach(),
             edge_entropy=-(edge_dist * edge_dist.log()).sum(dim=-1).mean().detach(),
             control_edge_norm=control_edge_norm,
             mediator_orthogonality=(gram - eye).square().mean().detach(),

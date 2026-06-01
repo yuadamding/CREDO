@@ -165,6 +165,9 @@ class TrainingHistory:
     local_to_global_mediator_effective_keys: List[float] = field(default_factory=list)
     mediator_to_group_effective_keys: List[float] = field(default_factory=list)
     edge_sparsity: List[float] = field(default_factory=list)
+    effective_edge_mean: List[float] = field(default_factory=list)
+    baseline_edge_mean: List[float] = field(default_factory=list)
+    residual_edge_sparsity_loss: List[float] = field(default_factory=list)
     edge_entropy: List[float] = field(default_factory=list)
     control_edge_norm: List[float] = field(default_factory=list)
     mediator_orthogonality: List[float] = field(default_factory=list)
@@ -198,6 +201,9 @@ class TrainingHistory:
             "local_to_global_mediator_effective_keys": self.local_to_global_mediator_effective_keys,
             "mediator_to_group_effective_keys": self.mediator_to_group_effective_keys,
             "edge_sparsity": self.edge_sparsity,
+            "effective_edge_mean": self.effective_edge_mean,
+            "baseline_edge_mean": self.baseline_edge_mean,
+            "residual_edge_sparsity_loss": self.residual_edge_sparsity_loss,
             "edge_entropy": self.edge_entropy,
             "control_edge_norm": self.control_edge_norm,
             "mediator_orthogonality": self.mediator_orthogonality,
@@ -222,6 +228,9 @@ _DIAGNOSTIC_KEYS = (
     "local_to_global_mediator_effective_keys",
     "mediator_to_group_effective_keys",
     "edge_sparsity",
+    "effective_edge_mean",
+    "baseline_edge_mean",
+    "residual_edge_sparsity_loss",
     "edge_entropy",
     "control_edge_norm",
     "mediator_orthogonality",
@@ -682,11 +691,24 @@ class Trainer:
         loss = torch.tensor(0.0, device=device)
         if not self._uses_causal_attention_loss():
             return loss
+        tc = self.config.training
+        target_ids: Optional[List[str]] = None
+        if tc.lambda_causal_guide > 0:
+            target_ids, explicit_targets = self._target_ids_for_guides(perturbation_ids)
+            if not explicit_targets:
+                raise ValueError(
+                    "lambda_causal_guide > 0 requires target_ids_by_pid or target_ids in count_data. "
+                    "Guide concordance would otherwise be a no-op."
+                )
+            if all(str(target) == str(pid) for target, pid in zip(target_ids, perturbation_ids)):
+                raise ValueError(
+                    "lambda_causal_guide > 0 requires a non-identity target map. "
+                    "Guide concordance would otherwise be a no-op."
+                )
         scale = self._causal_loss_scale(epoch)
         if scale <= 0:
             return loss
 
-        tc = self.config.training
         residual_edges = (
             None
             if residual_edge_scores_steps is None
@@ -705,20 +727,9 @@ class Trainer:
                 control_mask,
             )
         if residual_edges is not None and tc.lambda_causal_guide > 0:
-            target_ids, explicit_targets = self._target_ids_for_guides(perturbation_ids)
-            if not explicit_targets:
-                raise ValueError(
-                    "lambda_causal_guide > 0 requires target_ids_by_pid or target_ids in count_data. "
-                    "Guide concordance would otherwise be a no-op."
-                )
-            if all(str(target) == str(pid) for target, pid in zip(target_ids, perturbation_ids)):
-                raise ValueError(
-                    "lambda_causal_guide > 0 requires a non-identity target map. "
-                    "Guide concordance would otherwise be a no-op."
-                )
             loss = loss + tc.lambda_causal_guide * guide_concordance_loss(
                 residual_edges,
-                target_ids,
+                target_ids or list(perturbation_ids),
             )
         if residual_edge_magnitude is not None and tc.lambda_causal_sparse > 0:
             loss = loss + tc.lambda_causal_sparse * edge_sparsity_loss(residual_edge_magnitude)
@@ -1794,6 +1805,11 @@ class Trainer:
                 float(metrics.get("mediator_to_group_effective_keys", math.nan))
             )
             self.history.edge_sparsity.append(float(metrics.get("edge_sparsity", math.nan)))
+            self.history.effective_edge_mean.append(float(metrics.get("effective_edge_mean", math.nan)))
+            self.history.baseline_edge_mean.append(float(metrics.get("baseline_edge_mean", math.nan)))
+            self.history.residual_edge_sparsity_loss.append(
+                float(metrics.get("residual_edge_sparsity_loss", math.nan))
+            )
             self.history.edge_entropy.append(float(metrics.get("edge_entropy", math.nan)))
             self.history.control_edge_norm.append(float(metrics.get("control_edge_norm", math.nan)))
             self.history.mediator_orthogonality.append(float(metrics.get("mediator_orthogonality", math.nan)))

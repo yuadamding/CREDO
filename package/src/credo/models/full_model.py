@@ -78,6 +78,7 @@ class FullDynamicsModel(nn.Module):
         causal_mass_attention_temperature: float = 0.5,
         causal_growth_only: bool = True,
         causal_sparse_edges: bool = True,
+        causal_residual_policy: Literal["edges_only", "tokens_and_edges"] = "edges_only",
     ) -> None:
         super().__init__()
         self.perturbation_ids = perturbation_ids
@@ -181,6 +182,7 @@ class FullDynamicsModel(nn.Module):
                 program_assignment_scale=program_assignment_scale,
                 activation_checkpointing=activation_checkpointing,
                 use_sparse_edges=causal_sparse_edges,
+                residual_policy=causal_residual_policy,
             )
             if self.transformer_growth_only:
                 self.meanfield_context_agg = ContextAggregator(

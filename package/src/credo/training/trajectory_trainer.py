@@ -54,6 +54,9 @@ class TrajectoryTrainingHistory:
     local_to_global_mediator_effective_keys: list[float] = field(default_factory=list)
     mediator_to_group_effective_keys: list[float] = field(default_factory=list)
     edge_sparsity: list[float] = field(default_factory=list)
+    effective_edge_mean: list[float] = field(default_factory=list)
+    baseline_edge_mean: list[float] = field(default_factory=list)
+    residual_edge_sparsity_loss: list[float] = field(default_factory=list)
     edge_entropy: list[float] = field(default_factory=list)
     control_edge_norm: list[float] = field(default_factory=list)
     mediator_orthogonality: list[float] = field(default_factory=list)
@@ -96,6 +99,9 @@ class TrajectoryTrainingHistory:
                 "local_to_global_mediator_effective_keys": self.local_to_global_mediator_effective_keys,
                 "mediator_to_group_effective_keys": self.mediator_to_group_effective_keys,
                 "edge_sparsity": self.edge_sparsity,
+                "effective_edge_mean": self.effective_edge_mean,
+                "baseline_edge_mean": self.baseline_edge_mean,
+                "residual_edge_sparsity_loss": self.residual_edge_sparsity_loss,
                 "edge_entropy": self.edge_entropy,
                 "control_edge_norm": self.control_edge_norm,
                 "mediator_orthogonality": self.mediator_orthogonality,

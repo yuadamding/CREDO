@@ -26,7 +26,10 @@ from credo.losses.causal_attention import (
 from credo.training.trainer import Trainer
 
 
-def _aggregator() -> CausalEcologicalAttentionContext:
+def _aggregator(
+    *,
+    residual_policy: str = "edges_only",
+) -> CausalEcologicalAttentionContext:
     agg = CausalEcologicalAttentionContext(
         latent_dim=2,
         embedding_dim=3,
@@ -39,6 +42,7 @@ def _aggregator() -> CausalEcologicalAttentionContext:
         n_mediators=5,
         dropout=0.0,
         mass_attention_temperature=0.5,
+        residual_policy=residual_policy,
     )
     agg.eval()
     return agg
@@ -128,6 +132,10 @@ def test_causal_attention_context_uses_absolute_mass_reductions() -> None:
     assert torch.allclose(out.freq_g, expected_freq, atol=1e-6)
     assert torch.isclose(out.q.sum(), torch.tensor(1.0), atol=1e-6)
     assert torch.isfinite(out.growth_context).all()
+    assert out.diagnostics is not None
+    assert torch.isfinite(out.diagnostics.effective_edge_mean)
+    assert torch.isfinite(out.diagnostics.baseline_edge_mean)
+    assert torch.isfinite(out.diagnostics.residual_edge_sparsity_loss)
 
 
 def test_causal_attention_particle_and_group_permutation_equivariance() -> None:
@@ -176,6 +184,18 @@ def test_causal_attention_intervention_can_ablate_single_edge() -> None:
     assert torch.isfinite(out.context).all()
 
 
+def test_clamped_edge_scores_reject_simultaneous_ablation() -> None:
+    logits = torch.randn(3, 5)
+    intervention = CausalAttentionIntervention(
+        protocol="clamp_edges",
+        ablate_mediator_ids=[1],
+        clamp_edge_scores_gm=torch.full((3, 5), 0.5),
+    )
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        intervention.apply_effective_logits(logits)
+
+
 def test_residual_edge_scores_are_signed_deltas_from_baseline() -> None:
     agg = _aggregator()
     with torch.no_grad():
@@ -219,6 +239,37 @@ def test_residual_edge_ablation_preserves_baseline_usage() -> None:
     assert torch.allclose(ablated.edge_scores_gm[1, 2], ablated.baseline_edge_scores_gm[1, 2], atol=1e-6)
 
 
+def test_edges_only_tokenizers_do_not_leak_residual_or_effective_embedding() -> None:
+    agg = _aggregator(residual_policy="edges_only")
+    with torch.no_grad():
+        agg.residual_edge_score.weight.fill_(0.4)
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(z, logw, a, log_m0, tau=0.5, residual=residual)
+    changed = agg(
+        z,
+        logw,
+        a + 10.0,
+        log_m0,
+        tau=0.5,
+        residual=-3.0 * residual,
+    )
+
+    assert torch.allclose(out.baseline_edge_scores_gm, changed.baseline_edge_scores_gm, atol=1e-6)
+    assert torch.allclose(out.mediator_tokens, changed.mediator_tokens, atol=1e-6)
+    assert not torch.allclose(out.edge_scores_gm, changed.edge_scores_gm, atol=1e-6)
+
+
+def test_tokens_and_edges_policy_allows_residual_conditioned_baseline_features() -> None:
+    agg = _aggregator(residual_policy="tokens_and_edges")
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(z, logw, a, log_m0, tau=0.5, residual=residual)
+    changed = agg(z, logw, a, log_m0, tau=0.5, residual=-3.0 * residual)
+
+    assert not torch.allclose(out.baseline_edge_scores_gm, changed.baseline_edge_scores_gm, atol=1e-6)
+
+
 def test_all_edges_ablated_gives_zero_causal_delta() -> None:
     agg = _aggregator()
     z, logw, a, residual, log_m0 = _inputs()
@@ -232,6 +283,34 @@ def test_all_edges_ablated_gives_zero_causal_delta() -> None:
         residual=residual,
         intervention=CausalAttentionIntervention(
             protocol="ablate_mediators",
+            ablate_mediator_ids=list(range(agg.n_mediators)),
+        ),
+    )
+
+    assert torch.allclose(out.edge_scores_gm, torch.zeros_like(out.edge_scores_gm))
+    assert torch.allclose(
+        out.growth_context,
+        out.context.unsqueeze(0).expand_as(out.growth_context),
+        atol=1e-6,
+    )
+
+
+def test_all_edges_ablated_stays_exact_after_attention_bias_training() -> None:
+    agg = _aggregator()
+    with torch.no_grad():
+        agg.global_med_to_group.out_proj.bias.fill_(2.0)
+        agg.group_context_scale.fill_(10.0)
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(
+        z,
+        logw,
+        a,
+        log_m0,
+        tau=0.5,
+        residual=residual,
+        intervention=CausalAttentionIntervention(
+            protocol="ablate_effective_edges",
             ablate_mediator_ids=list(range(agg.n_mediators)),
         ),
     )
@@ -313,7 +392,7 @@ def test_all_causal_attention_context_parameters_receive_gradients() -> None:
     assert not missing, missing
     assert z.grad is not None and torch.isfinite(z.grad).all()
     assert logw.grad is not None and torch.isfinite(logw.grad).all()
-    assert a.grad is not None and torch.isfinite(a.grad).all()
+    assert a.grad is None
     assert residual.grad is not None and torch.isfinite(residual.grad).all()
     assert log_m0.grad is not None and torch.isfinite(log_m0.grad).all()
 
@@ -500,6 +579,15 @@ def test_causal_attention_residual_edge_ablation_counterfactual() -> None:
 def test_model_config_rejects_invalid_causal_attention_shape() -> None:
     with pytest.raises(ValueError, match="causal_token_dim"):
         ModelConfig(context_kind="causal_attention", causal_token_dim=10, causal_heads=4)
+
+
+def test_causal_attention_defaults_are_claim_grade_edges_only() -> None:
+    model_cfg = ModelConfig(context_kind="causal_attention")
+    training_cfg = TrainingConfig()
+
+    assert model_cfg.causal_residual_policy == "edges_only"
+    assert training_cfg.causal_loss_start_epoch == 100
+    assert training_cfg.causal_loss_ramp_epochs == 200
 
 
 def test_causal_losses_backpropagate() -> None:
@@ -777,6 +865,9 @@ def test_causal_training_history_records_loss_and_diagnostics(tmp_path) -> None:
 
     assert "loss_causal" in frame.columns
     assert "edge_sparsity" in frame.columns
+    assert "effective_edge_mean" in frame.columns
+    assert "baseline_edge_mean" in frame.columns
+    assert "residual_edge_sparsity_loss" in frame.columns
     assert "mediator_orthogonality" in frame.columns
     assert np.isfinite(frame.loc[0, "loss_causal"])
     assert np.isfinite(frame.loc[0, "edge_sparsity"])

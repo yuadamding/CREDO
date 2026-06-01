@@ -108,6 +108,7 @@ class ModelConfig(BaseModel):
     causal_mass_attention_temperature: float = 0.5
     causal_growth_only: bool = True
     causal_sparse_edges: bool = True
+    causal_residual_policy: Literal["edges_only", "tokens_and_edges"] = "edges_only"
 
     @model_validator(mode="after")
     def _validate_context_backends(self) -> "ModelConfig":
@@ -172,8 +173,8 @@ class TrainingConfig(BaseModel):
     lambda_causal_sparse: float = 1e-4
     lambda_causal_orth: float = 1e-4
     lambda_causal_ctx_smooth: float = 1e-4
-    causal_loss_start_epoch: int = 0
-    causal_loss_ramp_epochs: int = 1
+    causal_loss_start_epoch: int = 100
+    causal_loss_ramp_epochs: int = 200
     training_schedule: Literal["joint", "staged"] = "staged"
     stage_c_epochs: int = 150
     stage_d_epochs: int = 150

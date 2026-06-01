@@ -50,6 +50,9 @@ class CausalAttentionIntervention:
             out[int(group_idx), int(mediator_idx)] = 0.0
         return out
 
+    def _has_ablation(self) -> bool:
+        return bool(self.ablate_mediator_ids or self.ablate_group_mediator_edges)
+
     def apply_residual_logits(self, residual_logits: torch.Tensor) -> torch.Tensor:
         """Zero selected perturbation-residual edge logits."""
         if self.protocol != "ablate_residual_edges":
@@ -66,6 +69,11 @@ class CausalAttentionIntervention:
         """Return intervention-modified effective logits with shape ``[G, M]``."""
         if self.protocol not in {"ablate_mediators", "ablate_edges", "ablate_effective_edges", "clamp_edges"}:
             return edge_logits
+        if self.clamp_edge_scores_gm is not None and self._has_ablation():
+            raise ValueError(
+                "clamp_edge_scores_gm cannot be combined with mediator/edge ablation; "
+                "construct the clamped tensor explicitly instead."
+            )
 
         out = self._apply_floor(edge_logits)
 
