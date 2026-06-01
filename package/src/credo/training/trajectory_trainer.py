@@ -57,6 +57,11 @@ class TrajectoryTrainingHistory:
     edge_entropy: list[float] = field(default_factory=list)
     control_edge_norm: list[float] = field(default_factory=list)
     mediator_orthogonality: list[float] = field(default_factory=list)
+    residual_edge_abs_mean: list[float] = field(default_factory=list)
+    residual_edge_signed_mean: list[float] = field(default_factory=list)
+    mediator_usage_entropy: list[float] = field(default_factory=list)
+    mediator_usage_min: list[float] = field(default_factory=list)
+    mediator_usage_max: list[float] = field(default_factory=list)
 
     def append(self, epoch: int, metrics: dict[str, float]) -> None:
         self.epochs.append(int(epoch))
@@ -94,6 +99,11 @@ class TrajectoryTrainingHistory:
                 "edge_entropy": self.edge_entropy,
                 "control_edge_norm": self.control_edge_norm,
                 "mediator_orthogonality": self.mediator_orthogonality,
+                "residual_edge_abs_mean": self.residual_edge_abs_mean,
+                "residual_edge_signed_mean": self.residual_edge_signed_mean,
+                "mediator_usage_entropy": self.mediator_usage_entropy,
+                "mediator_usage_min": self.mediator_usage_min,
+                "mediator_usage_max": self.mediator_usage_max,
             }
         )
 
@@ -144,6 +154,10 @@ class TrajectoryTrainer:
             raise NotImplementedError("TrajectoryTrainer supports context_batch_mode='all_keys' only.")
         if trc.max_active_measure_keys:
             raise NotImplementedError("TrajectoryTrainer rolls out all active measure keys together.")
+        if getattr(model, "context_kind", "mlp") == "causal_attention":
+            raise NotImplementedError(
+                "CEA trajectory training requires explicit causal-loss integration and tests."
+            )
 
         self.view = TrajectoryView(
             trajectory=trajectory,

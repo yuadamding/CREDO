@@ -168,6 +168,11 @@ class TrainingHistory:
     edge_entropy: List[float] = field(default_factory=list)
     control_edge_norm: List[float] = field(default_factory=list)
     mediator_orthogonality: List[float] = field(default_factory=list)
+    residual_edge_abs_mean: List[float] = field(default_factory=list)
+    residual_edge_signed_mean: List[float] = field(default_factory=list)
+    mediator_usage_entropy: List[float] = field(default_factory=list)
+    mediator_usage_min: List[float] = field(default_factory=list)
+    mediator_usage_max: List[float] = field(default_factory=list)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame({
@@ -196,6 +201,11 @@ class TrainingHistory:
             "edge_entropy": self.edge_entropy,
             "control_edge_norm": self.control_edge_norm,
             "mediator_orthogonality": self.mediator_orthogonality,
+            "residual_edge_abs_mean": self.residual_edge_abs_mean,
+            "residual_edge_signed_mean": self.residual_edge_signed_mean,
+            "mediator_usage_entropy": self.mediator_usage_entropy,
+            "mediator_usage_min": self.mediator_usage_min,
+            "mediator_usage_max": self.mediator_usage_max,
         })
 
 
@@ -215,6 +225,11 @@ _DIAGNOSTIC_KEYS = (
     "edge_entropy",
     "control_edge_norm",
     "mediator_orthogonality",
+    "residual_edge_abs_mean",
+    "residual_edge_signed_mean",
+    "mediator_usage_entropy",
+    "mediator_usage_min",
+    "mediator_usage_max",
 )
 
 
@@ -610,41 +625,77 @@ class Trainer:
             dtype=torch.bool,
         )
 
-    def _target_ids_for_guides(self, perturbation_ids: List[str]) -> List[str]:
+    def _target_ids_for_guides(self, perturbation_ids: List[str]) -> Tuple[List[str], bool]:
         if self.count_data is not None:
             mapping = self.count_data.get("target_ids_by_pid")
             if isinstance(mapping, dict):
-                return [str(mapping.get(pid, pid)) for pid in perturbation_ids]
+                missing = [pid for pid in perturbation_ids if pid not in mapping]
+                if missing:
+                    raise ValueError(
+                        "lambda_causal_guide > 0 requires target_ids_by_pid entries "
+                        f"for all perturbations; missing {missing[:5]}."
+                    )
+                return [str(mapping[pid]) for pid in perturbation_ids], True
             target_ids = self.count_data.get("target_ids")
             if target_ids is not None and len(target_ids) == len(self.supported_pids):
                 target_by_pid = {
                     pid: str(target)
                     for pid, target in zip(self.supported_pids, target_ids)
                 }
-                return [target_by_pid.get(pid, pid) for pid in perturbation_ids]
-        return list(perturbation_ids)
+                return [target_by_pid.get(pid, pid) for pid in perturbation_ids], True
+        return list(perturbation_ids), False
+
+    def _causal_loss_scale(self, epoch: Optional[int]) -> float:
+        if epoch is None:
+            return 1.0
+        tc = self.config.training
+        if epoch < tc.causal_loss_start_epoch:
+            return 0.0
+        return min(
+            1.0,
+            float(epoch - tc.causal_loss_start_epoch + 1) / float(tc.causal_loss_ramp_epochs),
+        )
+
+    def _validate_count_order(self, perturbation_ids: List[str]) -> None:
+        if self.count_data is None or "perturbation_ids" not in self.count_data:
+            return
+        count_pids = [str(pid) for pid in self.count_data["perturbation_ids"]]
+        if list(perturbation_ids) != count_pids:
+            raise ValueError(
+                "Count loss perturbation order mismatch: "
+                f"rollout={list(perturbation_ids)[:5]}..., count_data={count_pids[:5]}..."
+            )
 
     def _causal_attention_loss_from_tensors(
         self,
         *,
         edge_scores_steps: Optional[torch.Tensor],
         residual_edge_scores_steps: Optional[torch.Tensor],
+        residual_edge_magnitude_steps: Optional[torch.Tensor],
         mediator_tokens_steps: Optional[torch.Tensor],
         growth_context_steps: Optional[torch.Tensor],
         tau_steps: Optional[torch.Tensor],
         perturbation_ids: List[str],
+        epoch: Optional[int] = None,
     ) -> torch.Tensor:
         device = next(self.model.parameters()).device
         loss = torch.tensor(0.0, device=device)
         if not self._uses_causal_attention_loss():
             return loss
+        scale = self._causal_loss_scale(epoch)
+        if scale <= 0:
+            return loss
 
         tc = self.config.training
-        edges = None if edge_scores_steps is None else edge_scores_steps.float().mean(dim=0)
         residual_edges = (
             None
             if residual_edge_scores_steps is None
             else residual_edge_scores_steps.float().mean(dim=0)
+        )
+        residual_edge_magnitude = (
+            residual_edges.abs()
+            if residual_edge_magnitude_steps is None
+            else residual_edge_magnitude_steps.float().mean(dim=0)
         )
 
         if residual_edges is not None and tc.lambda_causal_ctrl_edge > 0:
@@ -654,13 +705,23 @@ class Trainer:
                 control_mask,
             )
         if residual_edges is not None and tc.lambda_causal_guide > 0:
-            target_ids = self._target_ids_for_guides(perturbation_ids)
+            target_ids, explicit_targets = self._target_ids_for_guides(perturbation_ids)
+            if not explicit_targets:
+                raise ValueError(
+                    "lambda_causal_guide > 0 requires target_ids_by_pid or target_ids in count_data. "
+                    "Guide concordance would otherwise be a no-op."
+                )
+            if all(str(target) == str(pid) for target, pid in zip(target_ids, perturbation_ids)):
+                raise ValueError(
+                    "lambda_causal_guide > 0 requires a non-identity target map. "
+                    "Guide concordance would otherwise be a no-op."
+                )
             loss = loss + tc.lambda_causal_guide * guide_concordance_loss(
                 residual_edges,
                 target_ids,
             )
-        if edges is not None and tc.lambda_causal_sparse > 0:
-            loss = loss + tc.lambda_causal_sparse * edge_sparsity_loss(edges)
+        if residual_edge_magnitude is not None and tc.lambda_causal_sparse > 0:
+            loss = loss + tc.lambda_causal_sparse * edge_sparsity_loss(residual_edge_magnitude)
         if mediator_tokens_steps is not None and tc.lambda_causal_orth > 0:
             loss = loss + tc.lambda_causal_orth * mediator_orthogonality_loss(
                 mediator_tokens_steps[-1].float()
@@ -674,20 +735,23 @@ class Trainer:
                 growth_context_steps.float(),
                 tau_steps.float(),
             )
-        return loss
+        return loss * scale
 
     def _causal_attention_loss_from_rollout(
         self,
         rollout,
         perturbation_ids: List[str],
+        epoch: Optional[int] = None,
     ) -> torch.Tensor:
         return self._causal_attention_loss_from_tensors(
             edge_scores_steps=getattr(rollout, "causal_edge_scores_steps", None),
             residual_edge_scores_steps=getattr(rollout, "causal_residual_edge_scores_steps", None),
+            residual_edge_magnitude_steps=getattr(rollout, "causal_residual_edge_magnitude_steps", None),
             mediator_tokens_steps=getattr(rollout, "causal_mediator_tokens_steps", None),
             growth_context_steps=getattr(rollout, "causal_growth_context_steps", None),
             tau_steps=rollout.tau_steps,
             perturbation_ids=perturbation_ids,
+            epoch=epoch,
         )
 
     @staticmethod
@@ -708,12 +772,16 @@ class Trainer:
             ("embed", True): [],
             ("transformer", False): [],
             ("transformer", True): [],
+            ("causal", False): [],
+            ("causal", True): [],
         }
 
         for name, p in self.model.named_parameters():
             if not p.requires_grad:
                 continue
-            if _uses_global_context_backend(self.model) and name.startswith("context_agg."):
+            if getattr(self.model, "context_kind", "mlp") == "causal_attention" and name.startswith("context_agg."):
+                group = "causal"
+            elif getattr(self.model, "context_kind", "mlp") == "transformer" and name.startswith("context_agg."):
                 group = "transformer"
             elif "embedding" in name:
                 group = "embed"
@@ -729,6 +797,7 @@ class Trainer:
             "net": (tc.lr_net, tc.weight_decay),
             "embed": (tc.lr_embed, tc.weight_decay),
             "transformer": (tc.lr_transformer, tc.transformer_weight_decay),
+            "causal": (tc.lr_causal_attention, tc.causal_attention_weight_decay),
         }
         for group, (lr, decay) in specs.items():
             decay_params = grouped[(group, False)]
@@ -838,6 +907,7 @@ class Trainer:
             and rollout.growth_steps is not None
             and perturbation_ids == self.supported_pids
         ):
+            self._validate_count_order(perturbation_ids)
             cd = self._get_count_tensors_for_device(self.device)
             loss_count = self.count_lik(
                 growth_steps=rollout.growth_steps,
@@ -858,7 +928,7 @@ class Trainer:
         loss_reg = loss_reg + self.model.growth_bias_regularization(
             lambda_growth_bias=tc.lambda_reg_growth_bias
         )
-        loss_causal = self._causal_attention_loss_from_rollout(rollout, perturbation_ids)
+        loss_causal = self._causal_attention_loss_from_rollout(rollout, perturbation_ids, epoch=epoch)
 
         # --- Total ---
         loss = (
@@ -971,6 +1041,7 @@ class Trainer:
         diagnostic_values: dict[str, list[float]] = {}
         causal_edge_scores_list: list[torch.Tensor] = []
         causal_residual_edge_scores_list: list[torch.Tensor] = []
+        causal_residual_edge_magnitude_list: list[torch.Tensor] = []
         causal_mediator_tokens_list: list[torch.Tensor] = []
         causal_growth_context_list: list[torch.Tensor] = []
 
@@ -1020,6 +1091,9 @@ class Trainer:
                         residual_edge_scores = getattr(ctx_state, "residual_edge_scores_gm", None)
                         if residual_edge_scores is not None:
                             causal_residual_edge_scores_list.append(residual_edge_scores)
+                        residual_edge_magnitude = getattr(ctx_state, "residual_edge_magnitude_gm", None)
+                        if residual_edge_magnitude is not None:
+                            causal_residual_edge_magnitude_list.append(residual_edge_magnitude)
                         mediator_tokens = getattr(ctx_state, "mediator_tokens", None)
                         if mediator_tokens is not None:
                             causal_mediator_tokens_list.append(mediator_tokens)
@@ -1226,6 +1300,7 @@ class Trainer:
             )
 
         if tc.lambda_count > 0 and self.count_data is not None and perturbation_ids == self.supported_pids:
+            self._validate_count_order(perturbation_ids)
             growth_all = torch.cat(
                 [torch.stack(state["growth_list"], dim=0) for state in chunk_states],
                 dim=1,
@@ -1256,6 +1331,11 @@ class Trainer:
                     if causal_residual_edge_scores_list
                     else None
                 ),
+                residual_edge_magnitude_steps=(
+                    torch.stack(causal_residual_edge_magnitude_list, dim=0)
+                    if causal_residual_edge_magnitude_list
+                    else None
+                ),
                 mediator_tokens_steps=(
                     torch.stack(causal_mediator_tokens_list, dim=0)
                     if causal_mediator_tokens_list
@@ -1268,6 +1348,7 @@ class Trainer:
                 ),
                 tau_steps=tau_steps,
                 perturbation_ids=perturbation_ids,
+                epoch=epoch,
             )
 
         loss = (
@@ -1716,6 +1797,11 @@ class Trainer:
             self.history.edge_entropy.append(float(metrics.get("edge_entropy", math.nan)))
             self.history.control_edge_norm.append(float(metrics.get("control_edge_norm", math.nan)))
             self.history.mediator_orthogonality.append(float(metrics.get("mediator_orthogonality", math.nan)))
+            self.history.residual_edge_abs_mean.append(float(metrics.get("residual_edge_abs_mean", math.nan)))
+            self.history.residual_edge_signed_mean.append(float(metrics.get("residual_edge_signed_mean", math.nan)))
+            self.history.mediator_usage_entropy.append(float(metrics.get("mediator_usage_entropy", math.nan)))
+            self.history.mediator_usage_min.append(float(metrics.get("mediator_usage_min", math.nan)))
+            self.history.mediator_usage_max.append(float(metrics.get("mediator_usage_max", math.nan)))
 
             # Best checkpoint (training weights)
             if metrics["loss_total"] < self._best_loss:

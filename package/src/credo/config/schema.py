@@ -154,8 +154,10 @@ class TrainingConfig(BaseModel):
     lr_net: float = 3e-4
     lr_embed: float = 1e-3
     lr_transformer: float = 5e-5
+    lr_causal_attention: float = 5e-5
     weight_decay: float = 1e-6
     transformer_weight_decay: float = 1e-4
+    causal_attention_weight_decay: float = 1e-4
     grad_clip: float = 1.0
     lambda_end: float = 1.0
     lambda_count: float = 0.3
@@ -166,10 +168,12 @@ class TrainingConfig(BaseModel):
     lambda_reg_net: float = 1e-4
     lambda_reg_diffusion: float = 1e-4
     lambda_causal_ctrl_edge: float = 1e-3
-    lambda_causal_guide: float = 1e-3
+    lambda_causal_guide: float = 0.0
     lambda_causal_sparse: float = 1e-4
     lambda_causal_orth: float = 1e-4
     lambda_causal_ctx_smooth: float = 1e-4
+    causal_loss_start_epoch: int = 0
+    causal_loss_ramp_epochs: int = 1
     training_schedule: Literal["joint", "staged"] = "staged"
     stage_c_epochs: int = 150
     stage_d_epochs: int = 150
@@ -200,8 +204,12 @@ class TrainingConfig(BaseModel):
             raise ValueError("max_active_perturbations must be >= 0.")
         if self.lr_transformer <= 0:
             raise ValueError("lr_transformer must be > 0.")
+        if self.lr_causal_attention <= 0:
+            raise ValueError("lr_causal_attention must be > 0.")
         if self.transformer_weight_decay < 0:
             raise ValueError("transformer_weight_decay must be >= 0.")
+        if self.causal_attention_weight_decay < 0:
+            raise ValueError("causal_attention_weight_decay must be >= 0.")
         causal_lambdas = {
             "lambda_causal_ctrl_edge": self.lambda_causal_ctrl_edge,
             "lambda_causal_guide": self.lambda_causal_guide,
@@ -212,6 +220,10 @@ class TrainingConfig(BaseModel):
         for name, value in causal_lambdas.items():
             if value < 0:
                 raise ValueError(f"{name} must be >= 0.")
+        if self.causal_loss_start_epoch < 0:
+            raise ValueError("causal_loss_start_epoch must be >= 0.")
+        if self.causal_loss_ramp_epochs < 1:
+            raise ValueError("causal_loss_ramp_epochs must be >= 1.")
         if self.divergence_factor <= 1:
             raise ValueError("divergence_factor must be > 1.")
         if self.divergence_patience < 1:

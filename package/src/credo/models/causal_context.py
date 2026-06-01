@@ -31,6 +31,15 @@ class CausalAttentionDiagnostics(ContextDiagnostics):
     edge_scores_gm: Optional[torch.Tensor] = None
     baseline_to_mediator_gm: Optional[torch.Tensor] = None
     residual_to_mediator_gm: Optional[torch.Tensor] = None
+    residual_to_mediator_abs_gm: Optional[torch.Tensor] = None
+    residual_edge_abs_mean: Optional[torch.Tensor] = None
+    residual_edge_signed_mean: Optional[torch.Tensor] = None
+    mediator_usage_entropy: Optional[torch.Tensor] = None
+    mediator_usage_min: Optional[torch.Tensor] = None
+    mediator_usage_max: Optional[torch.Tensor] = None
+    attn_mediator_to_group_gm: Optional[torch.Tensor] = None
+    effective_mediator_to_growth_gm: Optional[torch.Tensor] = None
+    residual_mediator_to_growth_gm: Optional[torch.Tensor] = None
     mediator_to_growth_gm: Optional[torch.Tensor] = None
 
 
@@ -43,6 +52,7 @@ class CausalContextState(ContextState):
     edge_scores_gm: Optional[torch.Tensor] = None
     baseline_edge_scores_gm: Optional[torch.Tensor] = None
     residual_edge_scores_gm: Optional[torch.Tensor] = None
+    residual_edge_magnitude_gm: Optional[torch.Tensor] = None
 
 
 class CausalEcologicalAttentionContext(nn.Module):
@@ -318,15 +328,16 @@ class CausalEcologicalAttentionContext(nn.Module):
         )
         baseline_logits = self.baseline_edge_score(baseline_edge_input)
         residual_logits = self.residual_edge_score(residual)
+        if intervention is not None:
+            baseline_logits = intervention.apply_baseline_logits(baseline_logits)
+            residual_logits = intervention.apply_residual_logits(residual_logits)
+        baseline_edge_scores = torch.sigmoid(baseline_logits)
         edge_logits = baseline_logits + residual_logits
         if intervention is not None:
-            edge_logits = intervention.apply_edge_logits(edge_logits)
+            edge_logits = intervention.apply_effective_logits(edge_logits)
         edge_scores = torch.sigmoid(edge_logits)
-        baseline_edge_scores = torch.sigmoid(baseline_logits)
-        residual_gate = residual.norm(dim=-1, keepdim=True).div(
-            1.0 + residual.norm(dim=-1, keepdim=True)
-        )
-        residual_edge_scores = torch.sigmoid(residual_logits) * residual_gate
+        residual_edge_scores = edge_scores - baseline_edge_scores
+        residual_edge_magnitude = residual_edge_scores.abs()
         med_keys = global_med[None, :, :].expand(G, -1, -1)
         if self.use_sparse_edges:
             med_values = med_keys * edge_scores[:, :, None].to(dtype=dtype)
@@ -338,6 +349,11 @@ class CausalEcologicalAttentionContext(nn.Module):
             h_group[:, None, :],
             med_keys,
             med_values,
+            graph_mask=(
+                None
+                if intervention is None
+                else intervention.mediator_to_group_graph_mask(G, self.n_mediators, device)
+            ),
             return_attention=True,
         )
         group_context = edge_gate * group_context.squeeze(1)
@@ -364,6 +380,11 @@ class CausalEcologicalAttentionContext(nn.Module):
             if zero_residual_mask.any()
             else torch.zeros((), device=device, dtype=dtype)
         )
+        mediator_usage = edge_scores.float().mean(dim=0)
+        mediator_usage_dist = mediator_usage / mediator_usage.sum().clamp_min(1e-30)
+        attn_med_gm = attn_med.mean(dim=(1, 2))
+        effective_mediator_to_growth_gm = attn_med_gm * edge_scores
+        residual_mediator_to_growth_gm = attn_med_gm * residual_edge_magnitude
         diagnostics = CausalAttentionDiagnostics(
             within_attention_entropy=self._entropy(attn_state),
             group_attention_entropy=self._entropy(attn_group),
@@ -392,7 +413,16 @@ class CausalEcologicalAttentionContext(nn.Module):
             edge_scores_gm=edge_scores.detach(),
             baseline_to_mediator_gm=baseline_edge_scores.detach(),
             residual_to_mediator_gm=residual_edge_scores.detach(),
-            mediator_to_growth_gm=attn_med.mean(dim=(1, 2)).detach(),
+            residual_to_mediator_abs_gm=residual_edge_magnitude.detach(),
+            residual_edge_abs_mean=residual_edge_magnitude.mean().detach(),
+            residual_edge_signed_mean=residual_edge_scores.mean().detach(),
+            mediator_usage_entropy=-(mediator_usage_dist * mediator_usage_dist.clamp_min(1e-30).log()).sum().detach(),
+            mediator_usage_min=mediator_usage.min().detach(),
+            mediator_usage_max=mediator_usage.max().detach(),
+            attn_mediator_to_group_gm=attn_med_gm.detach(),
+            effective_mediator_to_growth_gm=effective_mediator_to_growth_gm.detach(),
+            residual_mediator_to_growth_gm=residual_mediator_to_growth_gm.detach(),
+            mediator_to_growth_gm=effective_mediator_to_growth_gm.detach(),
         )
 
         return CausalContextState(
@@ -411,6 +441,7 @@ class CausalEcologicalAttentionContext(nn.Module):
             edge_scores_gm=edge_scores,
             baseline_edge_scores_gm=baseline_edge_scores,
             residual_edge_scores_gm=residual_edge_scores,
+            residual_edge_magnitude_gm=residual_edge_magnitude,
         )
 
 

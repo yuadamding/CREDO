@@ -176,6 +176,49 @@ def test_causal_attention_intervention_can_ablate_single_edge() -> None:
     assert torch.isfinite(out.context).all()
 
 
+def test_residual_edge_scores_are_signed_deltas_from_baseline() -> None:
+    agg = _aggregator()
+    with torch.no_grad():
+        agg.residual_edge_score.weight.fill_(0.4)
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(z, logw, a, log_m0, tau=0.5, residual=residual)
+
+    expected_delta = out.edge_scores_gm - out.baseline_edge_scores_gm
+    assert torch.allclose(out.residual_edge_scores_gm, expected_delta, atol=1e-6)
+    assert torch.allclose(out.residual_edge_magnitude_gm, expected_delta.abs(), atol=1e-6)
+    assert torch.allclose(
+        out.residual_edge_scores_gm[0],
+        torch.zeros_like(out.residual_edge_scores_gm[0]),
+        atol=1e-6,
+    )
+
+
+def test_residual_edge_ablation_preserves_baseline_usage() -> None:
+    agg = _aggregator()
+    with torch.no_grad():
+        agg.residual_edge_score.weight.fill_(0.4)
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(z, logw, a, log_m0, tau=0.5, residual=residual)
+    ablated = agg(
+        z,
+        logw,
+        a,
+        log_m0,
+        tau=0.5,
+        residual=residual,
+        intervention=CausalAttentionIntervention(
+            protocol="ablate_residual_edges",
+            ablate_group_mediator_edges=[(1, 2)],
+        ),
+    )
+
+    assert torch.allclose(ablated.baseline_edge_scores_gm, out.baseline_edge_scores_gm, atol=1e-6)
+    assert ablated.residual_edge_scores_gm[1, 2].item() == pytest.approx(0.0, abs=1e-6)
+    assert torch.allclose(ablated.edge_scores_gm[1, 2], ablated.baseline_edge_scores_gm[1, 2], atol=1e-6)
+
+
 def test_all_edges_ablated_gives_zero_causal_delta() -> None:
     agg = _aggregator()
     z, logw, a, residual, log_m0 = _inputs()
@@ -189,6 +232,31 @@ def test_all_edges_ablated_gives_zero_causal_delta() -> None:
         residual=residual,
         intervention=CausalAttentionIntervention(
             protocol="ablate_mediators",
+            ablate_mediator_ids=list(range(agg.n_mediators)),
+        ),
+    )
+
+    assert torch.allclose(out.edge_scores_gm, torch.zeros_like(out.edge_scores_gm))
+    assert torch.allclose(
+        out.growth_context,
+        out.context.unsqueeze(0).expand_as(out.growth_context),
+        atol=1e-6,
+    )
+
+
+def test_all_effective_edges_ablated_gives_zero_causal_delta() -> None:
+    agg = _aggregator()
+    z, logw, a, residual, log_m0 = _inputs()
+
+    out = agg(
+        z,
+        logw,
+        a,
+        log_m0,
+        tau=0.5,
+        residual=residual,
+        intervention=CausalAttentionIntervention(
+            protocol="ablate_effective_edges",
             ablate_mediator_ids=list(range(agg.n_mediators)),
         ),
     )
@@ -291,6 +359,7 @@ def test_slice_group_slices_group_specific_context_and_causal_edges() -> None:
         growth_context_steps=torch.randn(2, 3, 5),
         causal_edge_scores_steps=torch.randn(2, 3, 4),
         causal_residual_edge_scores_steps=torch.randn(2, 3, 4),
+        causal_residual_edge_magnitude_steps=torch.randn(2, 3, 4),
         causal_mediator_tokens_steps=torch.randn(2, 4, 6),
         causal_growth_context_steps=torch.randn(2, 3, 5),
     )
@@ -302,6 +371,7 @@ def test_slice_group_slices_group_specific_context_and_causal_edges() -> None:
     assert sliced.growth_context_steps.shape == (2, 1, 5)
     assert sliced.causal_edge_scores_steps.shape == (2, 1, 4)
     assert sliced.causal_residual_edge_scores_steps.shape == (2, 1, 4)
+    assert sliced.causal_residual_edge_magnitude_steps.shape == (2, 1, 4)
     assert sliced.causal_mediator_tokens_steps.shape == (2, 4, 6)
     assert sliced.causal_growth_context_steps.shape == (2, 1, 5)
 
@@ -400,6 +470,27 @@ def test_causal_attention_mediator_ablation_is_same_start_same_noise() -> None:
 
     assert result.metadata["counterfactual_type"] == "mediator_ablation"
     assert result.metadata["mediator_id"] == 1
+    assert result.metadata["edge_protocol"] == "ablate_effective_edges"
+    assert result.metadata["same_start"] is True
+    assert result.metadata["same_noise"] is True
+    assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
+    assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
+
+
+def test_causal_attention_residual_edge_ablation_counterfactual() -> None:
+    endpoint = _endpoint()
+    model = _model()
+    engine = CounterfactualEngine(
+        model=model,
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=4,
+    )
+
+    result = engine.run_residual_edge_ablation(endpoint, ["gene_a"], [1], seed=11)[0]
+
+    assert result.metadata["counterfactual_type"] == "mediator_ablation"
+    assert result.metadata["edge_protocol"] == "ablate_residual_edges"
+    assert result.metadata["rollout_control_semantics"] == "intervention_not_control_reference"
     assert result.metadata["same_start"] is True
     assert result.metadata["same_noise"] is True
     assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
@@ -431,6 +522,175 @@ def test_causal_losses_backpropagate() -> None:
     for tensor in (edge_scores, residual_edges, mediator_tokens, context_steps):
         assert tensor.grad is not None
         assert torch.isfinite(tensor.grad).all()
+
+
+def test_causal_guide_loss_requires_explicit_target_map(tmp_path) -> None:
+    endpoint = _endpoint()
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        simulation=SimulationConfig(n_particles=4, n_steps=2, store_history=True),
+        training=TrainingConfig(
+            lambda_weak=0.0,
+            lambda_count=0.0,
+            lambda_causal_guide=1e-3,
+            lambda_reg_net=0.0,
+            lambda_reg_diffusion=0.0,
+            sinkhorn_max_iter=5,
+        ),
+    )
+    trainer = Trainer(model, cfg, endpoint, ["ctrl", "gene_a", "gene_b"], output_dir=str(tmp_path))
+
+    with pytest.raises(ValueError, match="target_ids_by_pid"):
+        trainer._one_epoch(
+            optimizer=trainer._build_optimizer("all"),
+            epoch=0,
+            stage="all",
+            perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        )
+
+
+def test_count_loss_order_mismatch_fails_loudly(tmp_path) -> None:
+    endpoint = _endpoint()
+    pids = ["ctrl", "gene_a", "gene_b"]
+    count_data = {
+        "perturbation_ids": ["gene_b", "gene_a", "ctrl"],
+        "exposures": np.ones(3, dtype=np.float32),
+        "counts": np.asarray([[5.0, 7.0, 9.0]], dtype=np.float32),
+        "n_totals": np.asarray([21.0], dtype=np.float32),
+    }
+
+    for max_active in (0, 1):
+        model = _model()
+        cfg = RunConfig(
+            device="cpu",
+            latent={"dim": 2},
+            model={
+                "context_kind": "causal_attention",
+                "embedding_dim": 4,
+                "n_programs": 3,
+                "mediator_dim": 2,
+                "causal_token_dim": 16,
+                "causal_heads": 4,
+                "causal_n_mediators": 4,
+                "hidden_dim": 12,
+                "depth": 1,
+            },
+            simulation=SimulationConfig(n_particles=4, n_steps=2, store_history=True),
+            training=TrainingConfig(
+                lambda_weak=0.0,
+                lambda_count=0.3,
+                lambda_reg_net=0.0,
+                lambda_reg_diffusion=0.0,
+                max_active_perturbations=max_active,
+                sinkhorn_max_iter=5,
+            ),
+        )
+        trainer = Trainer(
+            model,
+            cfg,
+            endpoint,
+            pids,
+            count_data=count_data,
+            output_dir=str(tmp_path / f"count-order-{max_active}"),
+        )
+
+        with pytest.raises(ValueError, match="Count loss perturbation order mismatch"):
+            trainer._one_epoch(
+                optimizer=trainer._build_optimizer("all"),
+                epoch=0,
+                stage="all",
+                perturbation_ids=pids,
+            )
+
+
+def test_causal_guide_loss_rejects_identity_target_map(tmp_path) -> None:
+    endpoint = _endpoint()
+    pids = ["ctrl", "gene_a", "gene_b"]
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        simulation=SimulationConfig(n_particles=4, n_steps=2, store_history=True),
+        training=TrainingConfig(
+            lambda_weak=0.0,
+            lambda_count=0.0,
+            lambda_causal_guide=1e-3,
+            lambda_reg_net=0.0,
+            lambda_reg_diffusion=0.0,
+            sinkhorn_max_iter=5,
+        ),
+    )
+    count_data = {"target_ids_by_pid": {pid: pid for pid in pids}}
+    trainer = Trainer(
+        model,
+        cfg,
+        endpoint,
+        pids,
+        count_data=count_data,
+        output_dir=str(tmp_path),
+    )
+
+    with pytest.raises(ValueError, match="non-identity target map"):
+        trainer._one_epoch(
+            optimizer=trainer._build_optimizer("all"),
+            epoch=0,
+            stage="all",
+            perturbation_ids=pids,
+        )
+
+
+def test_causal_attention_optimizer_uses_causal_lr(tmp_path) -> None:
+    endpoint = _endpoint()
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        training=TrainingConfig(lr_causal_attention=2e-5, causal_attention_weight_decay=3e-4),
+    )
+    trainer = Trainer(model, cfg, endpoint, ["ctrl", "gene_a", "gene_b"], output_dir=str(tmp_path))
+    optimizer = trainer._build_optimizer("all")
+
+    causal_group_sizes = [
+        len(group["params"])
+        for group in optimizer.param_groups
+        if abs(float(group["lr"]) - 2e-5) < 1e-12
+    ]
+    assert causal_group_sizes
 
 
 def test_chunked_causal_attention_training_uses_global_context(tmp_path) -> None:

@@ -718,10 +718,16 @@ class CounterfactualEngine:
         allow_partial_context: bool = False,
         min_context_fraction: float = 0.95,
         ablate_global_mediator: bool = False,
+        edge_protocol: str = "ablate_effective_edges",
     ) -> List[CounterfactualResult]:
         """Run same-start/same-noise CEA mediator or edge ablations."""
         if getattr(self.model, "context_kind", "mlp") != "causal_attention":
             raise ValueError("run_mediator_ablation requires context_kind='causal_attention'.")
+        if edge_protocol not in {"ablate_residual_edges", "ablate_effective_edges", "ablate_baseline_edges"}:
+            raise ValueError(
+                "edge_protocol must be 'ablate_residual_edges', "
+                "'ablate_effective_edges', or 'ablate_baseline_edges'."
+            )
         all_pids, context_metadata = self._full_context_perturbation_ids(
             endpoint,
             allow_partial_context=allow_partial_context,
@@ -761,12 +767,12 @@ class CounterfactualEngine:
             for mediator_id in mediator_ids:
                 if ablate_global_mediator:
                     intervention = CausalAttentionIntervention(
-                        protocol="ablate_mediators",
+                        protocol=edge_protocol,
                         ablate_mediator_ids=[int(mediator_id)],
                     )
                 else:
                     intervention = CausalAttentionIntervention(
-                        protocol="ablate_edges",
+                        protocol=edge_protocol,
                         ablate_group_mediator_edges=[(target_idx, int(mediator_id))],
                     )
                 ablated_all = self.simulator.rollout(
@@ -791,6 +797,7 @@ class CounterfactualEngine:
                         "ablation_scope": "global_mediator" if ablate_global_mediator else "group_edge",
                         "rollout_control_semantics": "intervention_not_control_reference",
                         "intervention_type": "mediator_ablation",
+                        "edge_protocol": edge_protocol,
                         "initial_seed": int(seed),
                         "noise_seed": noise_seed if common_noise else None,
                     }
@@ -804,6 +811,31 @@ class CounterfactualEngine:
                     )
                 )
         return results
+
+    @torch.no_grad()
+    def run_residual_edge_ablation(
+        self,
+        endpoint: EndpointProblem,
+        perturbation_ids: List[str],
+        mediator_ids: List[int],
+        seed: int = 0,
+        common_noise: bool = True,
+        allow_partial_context: bool = False,
+        min_context_fraction: float = 0.95,
+        ablate_global_mediator: bool = False,
+    ) -> List[CounterfactualResult]:
+        """Run CEA ablations that remove perturbation-residual mediator edges only."""
+        return self.run_mediator_ablation(
+            endpoint,
+            perturbation_ids,
+            mediator_ids,
+            seed=seed,
+            common_noise=common_noise,
+            allow_partial_context=allow_partial_context,
+            min_context_fraction=min_context_fraction,
+            ablate_global_mediator=ablate_global_mediator,
+            edge_protocol="ablate_residual_edges",
+        )
 
 
 class _control_embedding_context:

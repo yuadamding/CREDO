@@ -36,6 +36,7 @@ class ParticleRollout:
     causal_edge_scores_steps: Optional[torch.Tensor] = None  # [K, G, M]
     causal_baseline_edge_scores_steps: Optional[torch.Tensor] = None  # [K, G, M]
     causal_residual_edge_scores_steps: Optional[torch.Tensor] = None  # [K, G, M]
+    causal_residual_edge_magnitude_steps: Optional[torch.Tensor] = None  # [K, G, M]
     causal_mediator_tokens_steps: Optional[torch.Tensor] = None  # [K, M, H]
     causal_growth_context_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C]
     noise_steps: Optional[torch.Tensor] = None      # [K, G, N, d] innovations used by rollout
@@ -95,6 +96,7 @@ class ParticleRollout:
             causal_edge_scores_steps=_slice_optional(self.causal_edge_scores_steps, 1),
             causal_baseline_edge_scores_steps=_slice_optional(self.causal_baseline_edge_scores_steps, 1),
             causal_residual_edge_scores_steps=_slice_optional(self.causal_residual_edge_scores_steps, 1),
+            causal_residual_edge_magnitude_steps=_slice_optional(self.causal_residual_edge_magnitude_steps, 1),
             causal_mediator_tokens_steps=self.causal_mediator_tokens_steps,
             causal_growth_context_steps=_slice_context_optional(self.causal_growth_context_steps),
             noise_steps=_slice_optional(self.noise_steps, 1),
@@ -197,6 +199,7 @@ class WeightedParticleSimulator(nn.Module):
         causal_edge_scores_list = []
         causal_baseline_edge_scores_list = []
         causal_residual_edge_scores_list = []
+        causal_residual_edge_magnitude_list = []
         causal_mediator_tokens_list = []
         causal_growth_context_list = []
         diagnostics: dict[str, list[torch.Tensor]] = {}
@@ -251,6 +254,9 @@ class WeightedParticleSimulator(nn.Module):
                 residual_edge_scores = getattr(ctx, "residual_edge_scores_gm", None)
                 if residual_edge_scores is not None:
                     causal_residual_edge_scores_list.append(residual_edge_scores)
+                residual_edge_magnitude = getattr(ctx, "residual_edge_magnitude_gm", None)
+                if residual_edge_magnitude is not None:
+                    causal_residual_edge_magnitude_list.append(residual_edge_magnitude)
                 mediator_tokens = getattr(ctx, "mediator_tokens", None)
                 if mediator_tokens is not None:
                     causal_mediator_tokens_list.append(mediator_tokens)
@@ -305,6 +311,8 @@ class WeightedParticleSimulator(nn.Module):
                 result.causal_baseline_edge_scores_steps = torch.stack(causal_baseline_edge_scores_list, dim=0)
             if causal_residual_edge_scores_list:
                 result.causal_residual_edge_scores_steps = torch.stack(causal_residual_edge_scores_list, dim=0)
+            if causal_residual_edge_magnitude_list:
+                result.causal_residual_edge_magnitude_steps = torch.stack(causal_residual_edge_magnitude_list, dim=0)
             if causal_mediator_tokens_list:
                 result.causal_mediator_tokens_steps = torch.stack(causal_mediator_tokens_list, dim=0)
             if causal_growth_context_list:
