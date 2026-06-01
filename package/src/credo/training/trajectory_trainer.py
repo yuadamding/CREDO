@@ -18,7 +18,7 @@ from ..data.trajectory_view import TrajectoryView, embedding_id_for_measure_key
 from ..losses.counts import MultiTimeCountLikelihood
 from ..losses.multitime import MultiTimeEndpointLoss, checkpoint_indices_for_taus, make_observed_tau_grid
 from ..losses.regularizers import RolloutRegularizer
-from ..losses.uot import EndpointGeometryMassLoss
+from ..losses.endpoint import EndpointGeometryMassLoss
 from ..losses.weak_form import WeakFormLoss
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import ParticleRollout, WeightedParticleSimulator
@@ -27,6 +27,7 @@ from .trainer import (
     WarmupCosineScheduler,
     _DIAGNOSTIC_KEYS,
     _diagnostics_from_rollout,
+    _ess_gate_status,
     _uses_global_context_backend,
 )
 from .trajectory_batch import initialise_particles_from_trajectory
@@ -70,6 +71,7 @@ class TrajectoryTrainingHistory:
     min_ess_frac_mean: list[float] = field(default_factory=list)
     max_weight_frac_mean: list[float] = field(default_factory=list)
     logw_range_max: list[float] = field(default_factory=list)
+    ess_gate_status: list[str] = field(default_factory=list)
 
     def append(self, epoch: int, metrics: dict[str, float]) -> None:
         self.epochs.append(int(epoch))
@@ -86,6 +88,7 @@ class TrajectoryTrainingHistory:
         self.min_ess_frac_mean.append(float(metrics.get("min_ess_frac_mean", math.nan)))
         self.max_weight_frac_mean.append(float(metrics.get("max_weight_frac_mean", math.nan)))
         self.logw_range_max.append(float(metrics.get("logw_range_max", math.nan)))
+        self.ess_gate_status.append(str(metrics.get("ess_gate_status", "not_available")))
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame(
@@ -125,6 +128,7 @@ class TrajectoryTrainingHistory:
                 "min_ess_frac_mean": self.min_ess_frac_mean,
                 "max_weight_frac_mean": self.max_weight_frac_mean,
                 "logw_range_max": self.logw_range_max,
+                "ess_gate_status": self.ess_gate_status,
             }
         )
 
@@ -537,6 +541,7 @@ class TrajectoryTrainer:
             "loss_reg": float(loss_reg.detach().cpu()),
             **_diagnostics_from_rollout(rollout),
         }
+        metrics["ess_gate_status"] = _ess_gate_status(metrics, tc)
         pred_df = rollout_metrics_by_key_time(
             view,
             rollout,

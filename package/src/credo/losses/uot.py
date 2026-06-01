@@ -171,11 +171,13 @@ class EndpointGeometryMassLoss(nn.Module):
         tau: float = 1.0,
         max_iter: int = 200,
         use_geomloss: bool = True,
+        fail_on_missing_target: bool = True,
     ) -> None:
         super().__init__()
         self.eps = eps
         self.tau = tau
         self.max_iter = max_iter
+        self.fail_on_missing_target = bool(fail_on_missing_target)
         self._geomloss_fn = None
 
         if use_geomloss:
@@ -233,13 +235,26 @@ class EndpointGeometryMassLoss(nn.Module):
         target_logw: Dict[Hashable, torch.Tensor],
         perturbation_ids: list,
         weights: Optional[Dict[Hashable, float]] = None,
+        fail_on_missing_target: Optional[bool] = None,
     ) -> Tuple[torch.Tensor, Dict[Hashable, Dict[str, torch.Tensor]]]:
         """Return total loss and per-key geometry/mass/total components."""
         total = torch.tensor(0.0, device=pred_z.device, dtype=pred_z.dtype)
         per_pid: Dict[Hashable, Dict[str, torch.Tensor]] = {}
+        strict_missing = self.fail_on_missing_target if fail_on_missing_target is None else bool(
+            fail_on_missing_target
+        )
+        missing_support = [pid for pid in perturbation_ids if pid not in target_support]
+        missing_logw = [pid for pid in perturbation_ids if pid in target_support and pid not in target_logw]
+        if strict_missing and (missing_support or missing_logw):
+            parts = []
+            if missing_support:
+                parts.append(f"support={missing_support}")
+            if missing_logw:
+                parts.append(f"logw={missing_logw}")
+            raise KeyError("Missing endpoint targets for perturbation ids: " + ", ".join(parts))
 
         for g, pid in enumerate(perturbation_ids):
-            if pid not in target_support:
+            if pid not in target_support or pid not in target_logw:
                 continue
             x = pred_z[g]             # [N, d]
             la = pred_logw_abs[g]     # [N]  absolute

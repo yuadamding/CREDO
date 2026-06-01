@@ -23,6 +23,10 @@ Generated outputs belong in `runs/`, `outputs/`, `results/`, or `models/`.
 bash scripts/install_bundle.sh credo-hnscc
 python -m pip install --no-cache-dir -e package
 python scripts/verify_setup.py
+python scripts/verify_setup.py --json
+python scripts/verify_setup.py \
+  --check-data \
+  --data-path ../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad
 ```
 
 ## Smoke Runs

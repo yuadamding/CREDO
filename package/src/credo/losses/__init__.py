@@ -30,13 +30,15 @@ from .regularizers import (
     drift_action_penalty,
     growth_action_penalty,
 )
-from .uot import (
+from .endpoint import (
     EndpointGeometryMassLoss,
-    UOTLoss,
     endpoint_geometry_mass_components,
     endpoint_geometry_mass_loss,
-    sinkhorn_divergence,
     sinkhorn_divergence_normalized,
+)
+from .uot import (
+    UOTLoss,
+    sinkhorn_divergence,
 )
 from .weak_form import GaussianRBFTestFunctions, WeakFormLoss
 

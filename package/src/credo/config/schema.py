@@ -193,6 +193,10 @@ class TrainingConfig(BaseModel):
     divergence_factor: float = 50.0
     divergence_patience: int = 2
     divergence_min_epochs: int = 25
+    ess_warn_frac: float = 0.20
+    ess_fail_frac: float = 0.05
+    ess_claim_grade_min_frac: float = 0.10
+    ess_max_weight_frac_fail: float = 0.50
     stage: Literal["A", "B", "C", "D", "E", "F", "all"] = "all"
 
     # Endpoint geometry-plus-log-mass loss parameters
@@ -236,6 +240,21 @@ class TrainingConfig(BaseModel):
             raise ValueError("divergence_patience must be >= 1.")
         if self.divergence_min_epochs < 0:
             raise ValueError("divergence_min_epochs must be >= 0.")
+        ess_thresholds = {
+            "ess_warn_frac": self.ess_warn_frac,
+            "ess_fail_frac": self.ess_fail_frac,
+            "ess_claim_grade_min_frac": self.ess_claim_grade_min_frac,
+            "ess_max_weight_frac_fail": self.ess_max_weight_frac_fail,
+        }
+        for name, value in ess_thresholds.items():
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be in [0, 1].")
+        if self.ess_fail_frac > self.ess_warn_frac:
+            raise ValueError("ess_fail_frac must be <= ess_warn_frac.")
+        if self.ess_fail_frac > self.ess_claim_grade_min_frac:
+            raise ValueError("ess_fail_frac must be <= ess_claim_grade_min_frac.")
+        if self.ess_claim_grade_min_frac > self.ess_warn_frac:
+            raise ValueError("ess_claim_grade_min_frac must be <= ess_warn_frac.")
         return self
 
 

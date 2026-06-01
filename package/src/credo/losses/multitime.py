@@ -8,7 +8,7 @@ import torch.nn as nn
 
 from ..data.core import MeasureKey, SparseTrajectoryProblem, TrajectoryProblem
 from ..models.weighted_sde import ParticleRollout
-from .uot import EndpointGeometryMassLoss
+from .endpoint import EndpointGeometryMassLoss
 
 
 def make_observed_tau_grid(
@@ -201,13 +201,16 @@ class MultiTimeEndpointLoss(nn.Module):
 
             pred_z = rollout.z_steps[idx]
             pred_logw_abs = rollout.log_m0[:, None] + rollout.logw_steps[idx]
-            loss_t, components = self.uot_loss.component_dict(
-                pred_z=pred_z,
-                pred_logw_abs=pred_logw_abs,
-                target_support=target_support,
-                target_logw=target_logw,
-                perturbation_ids=keys,
-            )
+            kwargs = {
+                "pred_z": pred_z,
+                "pred_logw_abs": pred_logw_abs,
+                "target_support": target_support,
+                "target_logw": target_logw,
+                "perturbation_ids": keys,
+            }
+            if isinstance(self.uot_loss, EndpointGeometryMassLoss):
+                kwargs["fail_on_missing_target"] = False
+            loss_t, components = self.uot_loss.component_dict(**kwargs)
             loss_scaled = loss_t / float(n_active) if self.reduction == "mean" else loss_t
             weight = float(self.time_weights.get(time_label, 1.0))
             total = total + weight * loss_scaled

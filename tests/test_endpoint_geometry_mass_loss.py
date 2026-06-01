@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import torch
+import pytest
 
+from credo.losses.endpoint import EndpointGeometryMassLoss as PublicEndpointGeometryMassLoss
 from credo.losses.uot import (
     EndpointGeometryMassLoss,
     UOTLoss,
@@ -54,3 +56,38 @@ def test_uotloss_class_alias_matches_new_module() -> None:
     assert torch.allclose(new_total, old_total)
     for key in new_components["p"]:
         assert torch.allclose(new_components["p"][key], old_components["p"][key])
+
+
+def test_endpoint_module_is_public_import_home() -> None:
+    assert PublicEndpointGeometryMassLoss is EndpointGeometryMassLoss
+
+
+def test_missing_endpoint_target_fails_by_default() -> None:
+    x, log_a, _, _ = _measures()
+    loss_fn = EndpointGeometryMassLoss(eps=0.2, max_iter=20, use_geomloss=False)
+
+    with pytest.raises(KeyError, match="Missing endpoint targets"):
+        loss_fn.component_dict(
+            pred_z=x.unsqueeze(0),
+            pred_logw_abs=log_a.unsqueeze(0),
+            target_support={},
+            target_logw={},
+            perturbation_ids=["missing"],
+        )
+
+
+def test_missing_endpoint_target_can_be_masked_for_sparse_batches() -> None:
+    x, log_a, y, log_b = _measures()
+    loss_fn = EndpointGeometryMassLoss(eps=0.2, max_iter=20, use_geomloss=False)
+
+    total, components = loss_fn.component_dict(
+        pred_z=torch.stack([x, x], dim=0),
+        pred_logw_abs=torch.stack([log_a, log_a], dim=0),
+        target_support={"present": y},
+        target_logw={"present": log_b},
+        perturbation_ids=["present", "missing"],
+        fail_on_missing_target=False,
+    )
+
+    assert torch.isfinite(total)
+    assert list(components) == ["present"]

@@ -7,7 +7,8 @@ def test_credo_model_stack_imports() -> None:
     from credo.data import EndpointProblem as PublicEndpointProblem
     from credo.data import TrajectoryView
     from credo.data.problems import EndpointProblem, SparseTrajectoryProblem, TrajectoryProblem
-    from credo.losses import MultiTimeEndpointLoss
+    from credo.losses import EndpointGeometryMassLoss, MultiTimeEndpointLoss
+    from credo.losses.endpoint import EndpointGeometryMassLoss as EndpointGeometryMassLossPublic
     from credo.losses.trajectory import make_observed_tau_grid
     from credo.models import FullDynamicsModel as PublicFullDynamicsModel
     from credo.models.full_model import FullDynamicsModel
@@ -27,6 +28,7 @@ def test_credo_model_stack_imports() -> None:
     assert PublicTrainer is Trainer
     assert PublicEndpointProblem is EndpointProblem
     assert SparseTrajectoryProblem.__name__ == "SparseTrajectoryProblem"
+    assert EndpointGeometryMassLossPublic is EndpointGeometryMassLoss
     assert MultiTimeEndpointLoss.__name__ == "MultiTimeEndpointLoss"
     assert make_observed_tau_grid.__name__ == "make_observed_tau_grid"
     assert rollout_with_clamped_context.__name__ == "rollout_with_clamped_context"

@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from credo.config.schema import TrainingConfig
+from credo.training.trainer import _ess_gate_status
 from credo.models.weighted_sde import WeightedParticleSimulator
 
 
@@ -211,3 +213,27 @@ def test_rollout_records_weight_diagnostics_for_every_step() -> None:
         rollout.max_weight_frac_steps,
         torch.full_like(rollout.max_weight_frac_steps, 0.25),
     )
+
+
+def test_ess_gate_status_uses_configurable_thresholds() -> None:
+    cfg = TrainingConfig(
+        ess_warn_frac=0.2,
+        ess_claim_grade_min_frac=0.1,
+        ess_fail_frac=0.05,
+        ess_max_weight_frac_fail=0.5,
+    )
+
+    assert _ess_gate_status({"terminal_ess_frac_min": 0.3, "max_weight_frac_mean": 0.2}, cfg) == "pass"
+    assert _ess_gate_status({"terminal_ess_frac_min": 0.15, "max_weight_frac_mean": 0.2}, cfg) == "warn"
+    assert _ess_gate_status({"terminal_ess_frac_min": 0.08, "max_weight_frac_mean": 0.2}, cfg) == "claim_grade_blocked"
+    assert _ess_gate_status({"terminal_ess_frac_min": 0.03, "max_weight_frac_mean": 0.2}, cfg) == "fail"
+    assert _ess_gate_status({"terminal_ess_frac_min": 0.3, "max_weight_frac_mean": 0.8}, cfg) == "fail"
+
+
+def test_ess_thresholds_are_ordered() -> None:
+    with pytest.raises(ValueError, match="ess_claim_grade_min_frac"):
+        TrainingConfig(
+            ess_warn_frac=0.1,
+            ess_claim_grade_min_frac=0.2,
+            ess_fail_frac=0.05,
+        )

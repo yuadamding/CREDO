@@ -1,6 +1,6 @@
 """Trajectory-level loss utilities.
 
-Two-endpoint code can use :mod:`credo.losses.uot` and
+Two-endpoint code can use :mod:`credo.losses.endpoint` and
 :mod:`credo.losses.counts` directly. Multi-time workflows can import the
 checkpointed endpoint and cumulative count helpers from this compact facade.
 """

@@ -31,7 +31,7 @@ import torch.nn as nn
 
 from ..config.schema import RunConfig
 from ..data.core import EndpointProblem, FiniteMeasure
-from ..losses.uot import EndpointGeometryMassLoss
+from ..losses.endpoint import EndpointGeometryMassLoss
 from ..losses.weak_form import WeakFormLoss
 from ..losses.counts import CountLikelihood
 from ..losses.causal_attention import (
@@ -181,6 +181,7 @@ class TrainingHistory:
     min_ess_frac_mean: List[float] = field(default_factory=list)
     max_weight_frac_mean: List[float] = field(default_factory=list)
     logw_range_max: List[float] = field(default_factory=list)
+    ess_gate_status: List[str] = field(default_factory=list)
 
     def to_dataframe(self) -> pd.DataFrame:
         return pd.DataFrame({
@@ -222,6 +223,7 @@ class TrainingHistory:
             "min_ess_frac_mean": self.min_ess_frac_mean,
             "max_weight_frac_mean": self.max_weight_frac_mean,
             "logw_range_max": self.logw_range_max,
+            "ess_gate_status": self.ess_gate_status,
         })
 
 
@@ -320,6 +322,20 @@ def _weight_diagnostics_from_tensors(
     if logw_range_steps is not None and logw_range_steps.numel() > 0:
         metrics["logw_range_max"] = float(logw_range_steps.float().max().item())
     return metrics
+
+
+def _ess_gate_status(metrics: Dict[str, float], training_config) -> str:
+    terminal_min = metrics.get("terminal_ess_frac_min", math.nan)
+    max_weight = metrics.get("max_weight_frac_mean", math.nan)
+    if not math.isfinite(terminal_min) or not math.isfinite(max_weight):
+        return "not_available"
+    if terminal_min < training_config.ess_fail_frac or max_weight > training_config.ess_max_weight_frac_fail:
+        return "fail"
+    if terminal_min < training_config.ess_claim_grade_min_frac:
+        return "claim_grade_blocked"
+    if terminal_min < training_config.ess_warn_frac:
+        return "warn"
+    return "pass"
 
 
 def _diagnostics_from_lists(values_by_key: Dict[str, list[float]]) -> Dict[str, float]:
@@ -1035,7 +1051,7 @@ class Trainer:
             nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
             optimizer.step()
 
-        return {
+        metrics = {
             "n_active_perturbations": len(perturbation_ids),
             "perturbation_batch_size": len(perturbation_ids),
             "loss_total": float(loss.item()),
@@ -1046,6 +1062,8 @@ class Trainer:
             "loss_causal": float(loss_causal.item()),
             **_diagnostics_from_rollout(rollout),
         }
+        metrics["ess_gate_status"] = _ess_gate_status(metrics, tc)
+        return metrics
 
     def _one_epoch_chunked(
         self,
@@ -1501,6 +1519,7 @@ class Trainer:
         metrics["loss_reg"] = float((loss_reg + model_reg).item())
         metrics["loss_causal"] = float(loss_causal.item())
         metrics["loss_total"] = float((loss + model_reg).item())
+        metrics["ess_gate_status"] = _ess_gate_status(metrics, tc)
         return metrics
 
     def _one_epoch_multi_gpu(
@@ -1758,7 +1777,7 @@ class Trainer:
         nn.utils.clip_grad_norm_(self.model.parameters(), tc.grad_clip)
         optimizer.step()
 
-        return {
+        metrics = {
             "n_active_perturbations": len(perturbation_ids),
             "perturbation_batch_size": len(perturbation_ids),
             "loss_total": float(loss.item()),
@@ -1768,6 +1787,8 @@ class Trainer:
             "loss_reg": float(loss_reg.item()),
             "loss_causal": 0.0,
         }
+        metrics["ess_gate_status"] = _ess_gate_status(metrics, tc)
+        return metrics
 
     def _active_perturbation_ids(self, stage: str) -> List[str]:
         if stage != "C":
@@ -1933,6 +1954,7 @@ class Trainer:
             self.history.min_ess_frac_mean.append(float(metrics.get("min_ess_frac_mean", math.nan)))
             self.history.max_weight_frac_mean.append(float(metrics.get("max_weight_frac_mean", math.nan)))
             self.history.logw_range_max.append(float(metrics.get("logw_range_max", math.nan)))
+            self.history.ess_gate_status.append(str(metrics.get("ess_gate_status", "not_available")))
 
             # Best checkpoint (training weights)
             if metrics["loss_total"] < self._best_loss:
