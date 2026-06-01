@@ -686,6 +686,7 @@ class Trainer:
         tau_steps: Optional[torch.Tensor],
         perturbation_ids: List[str],
         epoch: Optional[int] = None,
+        causal_delta_steps: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         device = next(self.model.parameters()).device
         loss = torch.tensor(0.0, device=device)
@@ -714,16 +715,21 @@ class Trainer:
             if residual_edge_scores_steps is None
             else residual_edge_scores_steps.float().mean(dim=0)
         )
+        residual_edges_for_control = (
+            None
+            if residual_edge_scores_steps is None
+            else residual_edge_scores_steps.float().square().mean(dim=0).sqrt()
+        )
         residual_edge_magnitude = (
-            residual_edges.abs()
+            None if residual_edges is None else residual_edges.abs()
             if residual_edge_magnitude_steps is None
             else residual_edge_magnitude_steps.float().mean(dim=0)
         )
 
-        if residual_edges is not None and tc.lambda_causal_ctrl_edge > 0:
-            control_mask = self._control_mask_for_pids(perturbation_ids, residual_edges.device)
+        if residual_edges_for_control is not None and tc.lambda_causal_ctrl_edge > 0:
+            control_mask = self._control_mask_for_pids(perturbation_ids, residual_edges_for_control.device)
             loss = loss + tc.lambda_causal_ctrl_edge * control_edge_null_loss(
-                residual_edges,
+                residual_edges_for_control,
                 control_mask,
             )
         if residual_edges is not None and tc.lambda_causal_guide > 0:
@@ -738,12 +744,13 @@ class Trainer:
                 mediator_tokens_steps[-1].float()
             )
         if (
-            growth_context_steps is not None
+            (causal_delta_steps is not None or growth_context_steps is not None)
             and tau_steps is not None
             and tc.lambda_causal_ctx_smooth > 0
         ):
+            smooth_context_steps = causal_delta_steps if causal_delta_steps is not None else growth_context_steps
             loss = loss + tc.lambda_causal_ctx_smooth * context_smoothness_loss(
-                growth_context_steps.float(),
+                smooth_context_steps.float(),
                 tau_steps.float(),
             )
         return loss * scale
@@ -760,6 +767,7 @@ class Trainer:
             residual_edge_magnitude_steps=getattr(rollout, "causal_residual_edge_magnitude_steps", None),
             mediator_tokens_steps=getattr(rollout, "causal_mediator_tokens_steps", None),
             growth_context_steps=getattr(rollout, "causal_growth_context_steps", None),
+            causal_delta_steps=getattr(rollout, "causal_delta_steps", None),
             tau_steps=rollout.tau_steps,
             perturbation_ids=perturbation_ids,
             epoch=epoch,
@@ -1055,6 +1063,7 @@ class Trainer:
         causal_residual_edge_magnitude_list: list[torch.Tensor] = []
         causal_mediator_tokens_list: list[torch.Tensor] = []
         causal_growth_context_list: list[torch.Tensor] = []
+        causal_delta_list: list[torch.Tensor] = []
 
         for step_idx in range(sc.n_steps):
             tau_k = tau_steps[step_idx]
@@ -1111,6 +1120,10 @@ class Trainer:
                         ctx_growth_context = getattr(ctx_state, "growth_context", None)
                         if ctx_growth_context is not None:
                             causal_growth_context_list.append(ctx_growth_context)
+                            if ctx_growth_context.ndim == 2 and ctx_state.context.ndim == 1:
+                                causal_delta_list.append(ctx_growth_context - ctx_state.context[None, :])
+                            else:
+                                causal_delta_list.append(ctx_growth_context - ctx_state.context)
                     eta_all, _ = self.model.context_agg.encode_particles(z_all)
                     base_context = ctx_state.context
                     growth_context = getattr(ctx_state, "growth_context", None)
@@ -1355,6 +1368,11 @@ class Trainer:
                 growth_context_steps=(
                     torch.stack(causal_growth_context_list, dim=0)
                     if causal_growth_context_list
+                    else None
+                ),
+                causal_delta_steps=(
+                    torch.stack(causal_delta_list, dim=0)
+                    if causal_delta_list
                     else None
                 ),
                 tau_steps=tau_steps,

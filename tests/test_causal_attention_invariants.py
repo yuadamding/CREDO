@@ -441,6 +441,7 @@ def test_slice_group_slices_group_specific_context_and_causal_edges() -> None:
         causal_residual_edge_magnitude_steps=torch.randn(2, 3, 4),
         causal_mediator_tokens_steps=torch.randn(2, 4, 6),
         causal_growth_context_steps=torch.randn(2, 3, 5),
+        causal_delta_steps=torch.randn(2, 3, 5),
     )
 
     sliced = rollout.slice_group(1)
@@ -453,6 +454,7 @@ def test_slice_group_slices_group_specific_context_and_causal_edges() -> None:
     assert sliced.causal_residual_edge_magnitude_steps.shape == (2, 1, 4)
     assert sliced.causal_mediator_tokens_steps.shape == (2, 4, 6)
     assert sliced.causal_growth_context_steps.shape == (2, 1, 5)
+    assert sliced.causal_delta_steps.shape == (2, 1, 5)
 
 
 def test_full_dynamics_model_uses_causal_attention_growth_context() -> None:
@@ -552,6 +554,8 @@ def test_causal_attention_mediator_ablation_is_same_start_same_noise() -> None:
     assert result.metadata["edge_protocol"] == "ablate_effective_edges"
     assert result.metadata["same_start"] is True
     assert result.metadata["same_noise"] is True
+    assert result.rollout_perturb.causal_delta_steps is not None
+    assert result.rollout_control.causal_delta_steps is not None
     assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
     assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
 
@@ -581,6 +585,36 @@ def test_model_config_rejects_invalid_causal_attention_shape() -> None:
         ModelConfig(context_kind="causal_attention", causal_token_dim=10, causal_heads=4)
 
 
+def test_causal_attention_rejects_dense_edges_for_intervention_addressability() -> None:
+    with pytest.raises(ValueError, match="causal_sparse_edges"):
+        ModelConfig(context_kind="causal_attention", causal_sparse_edges=False)
+    with pytest.raises(ValueError, match="causal_sparse_edges"):
+        FullDynamicsModel(
+            perturbation_ids=["ctrl", "gene_a"],
+            control_ids=["ctrl"],
+            latent_dim=2,
+            embedding_dim=4,
+            n_programs=3,
+            mediator_dim=2,
+            context_kind="causal_attention",
+            causal_sparse_edges=False,
+        )
+
+
+def test_causal_mediator_ablation_rejects_dense_context_if_bypassed() -> None:
+    endpoint = _endpoint()
+    model = _model()
+    model.context_agg.use_sparse_edges = False
+    engine = CounterfactualEngine(
+        model=model,
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=4,
+    )
+
+    with pytest.raises(ValueError, match="causal_sparse_edges"):
+        engine.run_residual_edge_ablation(endpoint, ["gene_a"], [1], seed=11)
+
+
 def test_causal_attention_defaults_are_claim_grade_edges_only() -> None:
     model_cfg = ModelConfig(context_kind="causal_attention")
     training_cfg = TrainingConfig()
@@ -588,6 +622,97 @@ def test_causal_attention_defaults_are_claim_grade_edges_only() -> None:
     assert model_cfg.causal_residual_policy == "edges_only"
     assert training_cfg.causal_loss_start_epoch == 100
     assert training_cfg.causal_loss_ramp_epochs == 200
+
+
+def test_control_null_loss_does_not_cancel_time_sign_flips(tmp_path) -> None:
+    endpoint = _endpoint()
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        training=TrainingConfig(
+            lambda_causal_ctrl_edge=1.0,
+            lambda_causal_guide=0.0,
+            lambda_causal_sparse=0.0,
+            lambda_causal_orth=0.0,
+            lambda_causal_ctx_smooth=0.0,
+            causal_loss_start_epoch=0,
+            causal_loss_ramp_epochs=1,
+        ),
+    )
+    trainer = Trainer(model, cfg, endpoint, ["ctrl", "gene_a", "gene_b"], output_dir=str(tmp_path))
+    residual_steps = torch.zeros(2, 3, 2)
+    residual_steps[:, 0, :] = torch.tensor([[0.1, -0.1], [-0.1, 0.1]])
+
+    loss = trainer._causal_attention_loss_from_tensors(
+        edge_scores_steps=None,
+        residual_edge_scores_steps=residual_steps,
+        residual_edge_magnitude_steps=None,
+        mediator_tokens_steps=None,
+        growth_context_steps=None,
+        tau_steps=torch.linspace(0.0, 1.0, 3),
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        epoch=0,
+    )
+
+    assert loss.item() > 0.0
+
+
+def test_context_smoothness_regularizes_causal_delta_not_global_context(tmp_path) -> None:
+    endpoint = _endpoint()
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        training=TrainingConfig(
+            lambda_causal_ctrl_edge=0.0,
+            lambda_causal_guide=0.0,
+            lambda_causal_sparse=0.0,
+            lambda_causal_orth=0.0,
+            lambda_causal_ctx_smooth=1.0,
+            causal_loss_start_epoch=0,
+            causal_loss_ramp_epochs=1,
+        ),
+    )
+    trainer = Trainer(model, cfg, endpoint, ["ctrl", "gene_a", "gene_b"], output_dir=str(tmp_path))
+    growth_context_steps = torch.randn(3, 3, 5) * 10.0
+    causal_delta_steps = torch.zeros_like(growth_context_steps)
+
+    loss = trainer._causal_attention_loss_from_tensors(
+        edge_scores_steps=None,
+        residual_edge_scores_steps=None,
+        residual_edge_magnitude_steps=None,
+        mediator_tokens_steps=None,
+        growth_context_steps=growth_context_steps,
+        causal_delta_steps=causal_delta_steps,
+        tau_steps=torch.linspace(0.0, 1.0, 4),
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        epoch=0,
+    )
+
+    assert loss.item() == pytest.approx(0.0, abs=1e-8)
 
 
 def test_causal_losses_backpropagate() -> None:

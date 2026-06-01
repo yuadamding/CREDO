@@ -140,6 +140,11 @@ class ModelConfig(BaseModel):
             raise ValueError("causal_dropout must be in [0, 1).")
         if self.causal_mass_attention_temperature < 0:
             raise ValueError("causal_mass_attention_temperature must be >= 0.")
+        if self.context_kind == "causal_attention" and not self.causal_sparse_edges:
+            raise ValueError(
+                "causal_attention requires causal_sparse_edges=True. "
+                "Dense mediator attention is not intervention-addressable CEA."
+            )
         return self
 
 

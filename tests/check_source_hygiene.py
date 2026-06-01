@@ -27,6 +27,13 @@ SOURCE_PATTERNS = (
     "*.yaml",
 )
 
+MIN_PHYSICAL_LINES = {
+    "package/src/credo/models/causal_context.py": 250,
+    "package/src/credo/models/interventions.py": 80,
+    "package/src/credo/training/trainer.py": 500,
+    "tests/test_causal_attention_invariants.py": 100,
+}
+
 
 def iter_source_paths(root: Path) -> list[Path]:
     paths: set[Path] = set()
@@ -56,6 +63,12 @@ def collect_source_hygiene_offenders(root: Path | None = None) -> list[str]:
                 trailing_ws += 1
         if trailing_ws:
             hits.append(f"TRAILING_WS={trailing_ws}")
+        rel_path = str(path.relative_to(root))
+        min_lines = MIN_PHYSICAL_LINES.get(rel_path)
+        if min_lines is not None:
+            n_lines = text.count("\n") + (1 if text else 0)
+            if n_lines < min_lines:
+                hits.append(f"COLLAPSED_LINES={n_lines}<{min_lines}")
         if hits:
             offenders.append(f"{path.relative_to(root)}: {', '.join(hits)}")
     return offenders

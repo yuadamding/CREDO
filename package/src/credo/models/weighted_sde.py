@@ -39,6 +39,7 @@ class ParticleRollout:
     causal_residual_edge_magnitude_steps: Optional[torch.Tensor] = None  # [K, G, M]
     causal_mediator_tokens_steps: Optional[torch.Tensor] = None  # [K, M, H]
     causal_growth_context_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C]
+    causal_delta_steps: Optional[torch.Tensor] = None  # [K, C] or [K, G, C]
     noise_steps: Optional[torch.Tensor] = None      # [K, G, N, d] innovations used by rollout
 
     @property
@@ -99,6 +100,7 @@ class ParticleRollout:
             causal_residual_edge_magnitude_steps=_slice_optional(self.causal_residual_edge_magnitude_steps, 1),
             causal_mediator_tokens_steps=self.causal_mediator_tokens_steps,
             causal_growth_context_steps=_slice_context_optional(self.causal_growth_context_steps),
+            causal_delta_steps=_slice_context_optional(self.causal_delta_steps),
             noise_steps=_slice_optional(self.noise_steps, 1),
         )
 
@@ -202,6 +204,7 @@ class WeightedParticleSimulator(nn.Module):
         causal_residual_edge_magnitude_list = []
         causal_mediator_tokens_list = []
         causal_growth_context_list = []
+        causal_delta_list = []
         diagnostics: dict[str, list[torch.Tensor]] = {}
         noise_used_list = []
 
@@ -248,6 +251,7 @@ class WeightedParticleSimulator(nn.Module):
                 if edge_scores is not None:
                     causal_edge_scores_list.append(edge_scores)
                     causal_growth_context_list.append(growth_context)
+                    causal_delta_list.append(self._causal_delta(growth_context, ctx.context))
                 baseline_edge_scores = getattr(ctx, "baseline_edge_scores_gm", None)
                 if baseline_edge_scores is not None:
                     causal_baseline_edge_scores_list.append(baseline_edge_scores)
@@ -317,10 +321,19 @@ class WeightedParticleSimulator(nn.Module):
                 result.causal_mediator_tokens_steps = torch.stack(causal_mediator_tokens_list, dim=0)
             if causal_growth_context_list:
                 result.causal_growth_context_steps = torch.stack(causal_growth_context_list, dim=0)
+            if causal_delta_list:
+                result.causal_delta_steps = torch.stack(causal_delta_list, dim=0)
         if return_noise_used:
             result.noise_steps = torch.stack(noise_used_list, dim=0)
 
         return result
+
+    @staticmethod
+    def _causal_delta(growth_context: torch.Tensor, context: torch.Tensor) -> torch.Tensor:
+        """Return the group-specific causal delta from global context."""
+        if growth_context.ndim == 2 and context.ndim == 1:
+            return growth_context - context[None, :]
+        return growth_context - context
 
     @staticmethod
     def sample_noise_like(

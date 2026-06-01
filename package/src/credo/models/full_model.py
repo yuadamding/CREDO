@@ -85,6 +85,11 @@ class FullDynamicsModel(nn.Module):
         self.control_ids = set(control_ids)
         self.control_mode = control_mode
         self.context_kind = context_kind
+        if context_kind == "causal_attention" and not causal_sparse_edges:
+            raise ValueError(
+                "causal_attention requires causal_sparse_edges=True. "
+                "Dense mediator attention is not intervention-addressable CEA."
+            )
         self.causal_growth_only = bool(causal_growth_only)
         self.transformer_growth_only = (
             bool(causal_growth_only)

@@ -723,6 +723,11 @@ class CounterfactualEngine:
         """Run same-start/same-noise CEA mediator or edge ablations."""
         if getattr(self.model, "context_kind", "mlp") != "causal_attention":
             raise ValueError("run_mediator_ablation requires context_kind='causal_attention'.")
+        if not getattr(getattr(self.model, "context_agg", None), "use_sparse_edges", True):
+            raise ValueError(
+                "CEA mediator interventions require causal_sparse_edges=True; "
+                "dense mediator attention is not intervention-addressable."
+            )
         if edge_protocol not in {"ablate_residual_edges", "ablate_effective_edges", "ablate_baseline_edges"}:
             raise ValueError(
                 "edge_protocol must be 'ablate_residual_edges', "
