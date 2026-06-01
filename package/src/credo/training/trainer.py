@@ -748,6 +748,14 @@ class Trainer:
             and tau_steps is not None
             and tc.lambda_causal_ctx_smooth > 0
         ):
+            if (
+                getattr(self.model, "context_kind", "mlp") == "causal_attention"
+                and causal_delta_steps is None
+            ):
+                raise ValueError(
+                    "CEA context smoothness requires causal_delta_steps. "
+                    "Do not fall back to full growth_context_steps for CEA."
+                )
             smooth_context_steps = causal_delta_steps if causal_delta_steps is not None else growth_context_steps
             loss = loss + tc.lambda_causal_ctx_smooth * context_smoothness_loss(
                 smooth_context_steps.float(),

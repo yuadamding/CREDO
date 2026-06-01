@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import hashlib
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 import torch
@@ -346,6 +346,16 @@ class CounterfactualResult:
     rollout_clamped: Optional[ParticleRollout] = None  # factual dynamics with context clamped to control
     rollout_control_clamped: Optional[ParticleRollout] = None
     metadata: Dict[str, object] = field(default_factory=dict)
+
+    @property
+    def rollout_factual(self) -> ParticleRollout:
+        """Alias for the factual branch."""
+        return self.rollout_perturb
+
+    @property
+    def rollout_intervention(self) -> ParticleRollout:
+        """Alias for intervention branches stored in ``rollout_control``."""
+        return self.rollout_control
 
     def terminal_log_mass_diff(self) -> float:
         """Terminal factual-reference log-mass contrast."""
@@ -719,6 +729,7 @@ class CounterfactualEngine:
         min_context_fraction: float = 0.95,
         ablate_global_mediator: bool = False,
         edge_protocol: str = "ablate_effective_edges",
+        context_protocol: Literal["self_consistent", "global_context_clamped"] = "self_consistent",
     ) -> List[CounterfactualResult]:
         """Run same-start/same-noise CEA mediator or edge ablations."""
         if getattr(self.model, "context_kind", "mlp") != "causal_attention":
@@ -728,10 +739,26 @@ class CounterfactualEngine:
                 "CEA mediator interventions require causal_sparse_edges=True; "
                 "dense mediator attention is not intervention-addressable."
             )
+        if context_protocol not in {"self_consistent", "global_context_clamped"}:
+            raise ValueError("context_protocol must be 'self_consistent' or 'global_context_clamped'.")
+        if context_protocol == "global_context_clamped":
+            raise NotImplementedError(
+                "Global-context-clamped CEA edge ablation is not implemented yet; "
+                "use context_protocol='self_consistent'."
+            )
         if edge_protocol not in {"ablate_residual_edges", "ablate_effective_edges", "ablate_baseline_edges"}:
             raise ValueError(
                 "edge_protocol must be 'ablate_residual_edges', "
                 "'ablate_effective_edges', or 'ablate_baseline_edges'."
+            )
+        if (
+            edge_protocol == "ablate_residual_edges"
+            and getattr(self.model.context_agg, "residual_policy", "edges_only") != "edges_only"
+        ):
+            raise ValueError(
+                "Residual-edge ablation is only a clean causal estimand when "
+                "causal_residual_policy='edges_only'. Use effective-edge ablation "
+                "or label the run as predictive/diagnostic."
             )
         all_pids, context_metadata = self._full_context_perturbation_ids(
             endpoint,
@@ -803,6 +830,7 @@ class CounterfactualEngine:
                         "rollout_control_semantics": "intervention_not_control_reference",
                         "intervention_type": "mediator_ablation",
                         "edge_protocol": edge_protocol,
+                        "context_protocol": context_protocol,
                         "initial_seed": int(seed),
                         "noise_seed": noise_seed if common_noise else None,
                     }
@@ -828,6 +856,7 @@ class CounterfactualEngine:
         allow_partial_context: bool = False,
         min_context_fraction: float = 0.95,
         ablate_global_mediator: bool = False,
+        context_protocol: Literal["self_consistent", "global_context_clamped"] = "self_consistent",
     ) -> List[CounterfactualResult]:
         """Run CEA ablations that remove perturbation-residual mediator edges only."""
         return self.run_mediator_ablation(
@@ -840,6 +869,7 @@ class CounterfactualEngine:
             min_context_fraction=min_context_fraction,
             ablate_global_mediator=ablate_global_mediator,
             edge_protocol="ablate_residual_edges",
+            context_protocol=context_protocol,
         )
 
 

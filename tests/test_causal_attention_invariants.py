@@ -80,7 +80,11 @@ def _endpoint() -> EndpointProblem:
     )
 
 
-def _model(*, causal_growth_only: bool = True) -> FullDynamicsModel:
+def _model(
+    *,
+    causal_growth_only: bool = True,
+    causal_residual_policy: str = "edges_only",
+) -> FullDynamicsModel:
     model = FullDynamicsModel(
         perturbation_ids=["ctrl", "gene_a", "gene_b"],
         control_ids=["ctrl"],
@@ -99,6 +103,7 @@ def _model(*, causal_growth_only: bool = True) -> FullDynamicsModel:
         causal_dropout=0.0,
         causal_mass_attention_temperature=0.5,
         causal_growth_only=causal_growth_only,
+        causal_residual_policy=causal_residual_policy,
     )
     model.eval()
     return model
@@ -552,10 +557,13 @@ def test_causal_attention_mediator_ablation_is_same_start_same_noise() -> None:
     assert result.metadata["counterfactual_type"] == "mediator_ablation"
     assert result.metadata["mediator_id"] == 1
     assert result.metadata["edge_protocol"] == "ablate_effective_edges"
+    assert result.metadata["context_protocol"] == "self_consistent"
     assert result.metadata["same_start"] is True
     assert result.metadata["same_noise"] is True
     assert result.rollout_perturb.causal_delta_steps is not None
     assert result.rollout_control.causal_delta_steps is not None
+    assert result.rollout_factual is result.rollout_perturb
+    assert result.rollout_intervention is result.rollout_control
     assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
     assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
 
@@ -573,11 +581,44 @@ def test_causal_attention_residual_edge_ablation_counterfactual() -> None:
 
     assert result.metadata["counterfactual_type"] == "mediator_ablation"
     assert result.metadata["edge_protocol"] == "ablate_residual_edges"
+    assert result.metadata["context_protocol"] == "self_consistent"
     assert result.metadata["rollout_control_semantics"] == "intervention_not_control_reference"
     assert result.metadata["same_start"] is True
     assert result.metadata["same_noise"] is True
     assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
     assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
+
+
+def test_residual_edge_ablation_requires_edges_only_policy() -> None:
+    endpoint = _endpoint()
+    model = _model(causal_residual_policy="tokens_and_edges")
+    engine = CounterfactualEngine(
+        model=model,
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=4,
+    )
+
+    with pytest.raises(ValueError, match="edges_only"):
+        engine.run_residual_edge_ablation(endpoint, ["gene_a"], [1], seed=11)
+
+
+def test_global_context_clamped_cea_edge_ablation_fails_explicitly() -> None:
+    endpoint = _endpoint()
+    model = _model()
+    engine = CounterfactualEngine(
+        model=model,
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=4,
+    )
+
+    with pytest.raises(NotImplementedError, match="Global-context-clamped"):
+        engine.run_residual_edge_ablation(
+            endpoint,
+            ["gene_a"],
+            [1],
+            seed=11,
+            context_protocol="global_context_clamped",
+        )
 
 
 def test_model_config_rejects_invalid_causal_attention_shape() -> None:
@@ -619,9 +660,11 @@ def test_causal_attention_defaults_are_claim_grade_edges_only() -> None:
     model_cfg = ModelConfig(context_kind="causal_attention")
     training_cfg = TrainingConfig()
 
+    assert "causal_residual_policy" in ModelConfig.model_fields
     assert model_cfg.causal_residual_policy == "edges_only"
     assert training_cfg.causal_loss_start_epoch == 100
     assert training_cfg.causal_loss_ramp_epochs == 200
+    assert training_cfg.lr_causal_attention > 0
 
 
 def test_control_null_loss_does_not_cancel_time_sign_flips(tmp_path) -> None:
@@ -713,6 +756,49 @@ def test_context_smoothness_regularizes_causal_delta_not_global_context(tmp_path
     )
 
     assert loss.item() == pytest.approx(0.0, abs=1e-8)
+
+
+def test_cea_context_smoothness_requires_causal_delta_steps(tmp_path) -> None:
+    endpoint = _endpoint()
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        training=TrainingConfig(
+            lambda_causal_ctrl_edge=0.0,
+            lambda_causal_guide=0.0,
+            lambda_causal_sparse=0.0,
+            lambda_causal_orth=0.0,
+            lambda_causal_ctx_smooth=1.0,
+            causal_loss_start_epoch=0,
+            causal_loss_ramp_epochs=1,
+        ),
+    )
+    trainer = Trainer(model, cfg, endpoint, ["ctrl", "gene_a", "gene_b"], output_dir=str(tmp_path))
+
+    with pytest.raises(ValueError, match="causal_delta_steps"):
+        trainer._causal_attention_loss_from_tensors(
+            edge_scores_steps=None,
+            residual_edge_scores_steps=None,
+            residual_edge_magnitude_steps=None,
+            mediator_tokens_steps=None,
+            growth_context_steps=torch.randn(3, 3, 5),
+            causal_delta_steps=None,
+            tau_steps=torch.linspace(0.0, 1.0, 4),
+            perturbation_ids=["ctrl", "gene_a", "gene_b"],
+            epoch=0,
+        )
 
 
 def test_causal_losses_backpropagate() -> None:

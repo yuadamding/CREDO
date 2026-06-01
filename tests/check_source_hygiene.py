@@ -31,6 +31,8 @@ MIN_PHYSICAL_LINES = {
     "package/src/credo/models/causal_context.py": 250,
     "package/src/credo/models/interventions.py": 80,
     "package/src/credo/training/trainer.py": 500,
+    "tests/check_source_hygiene.py": 50,
+    "tests/test_source_hygiene.py": 20,
     "tests/test_causal_attention_invariants.py": 100,
 }
 
