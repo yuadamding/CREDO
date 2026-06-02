@@ -1868,6 +1868,7 @@ class Trainer:
             active_pids=active_pids,
             stage=stage,
             n_epochs=epochs,
+            output_dir=self.output_dir,
         )
         write_run_manifest(
             self.output_dir / "run_manifest.json",

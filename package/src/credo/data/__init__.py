@@ -16,7 +16,7 @@ from .core import (
     TimeAxis,
     TrajectoryProblem,
 )
-from .schema import DEFAULT_OBS_COLUMNS, validate_anndata_schema
+from .schema import DEFAULT_OBS_COLUMNS, SCHEMA_OBS_COLUMNS, validate_anndata_schema
 from .trajectory_view import TrajectoryLike, TrajectoryView, embedding_id_for_measure_key
 from .hnscc import (
     DEFAULT_RANDOM_STRATIFY_COLS,
@@ -47,6 +47,7 @@ from .hnscc import (
 
 __all__ = [
     "DEFAULT_OBS_COLUMNS",
+    "SCHEMA_OBS_COLUMNS",
     "CellStateTable",
     "EndpointProblem",
     "ExposureTable",

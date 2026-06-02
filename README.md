@@ -1,6 +1,6 @@
 # CREDO
 
-Compact CREDO `2.0` package for endpoint and multi-time finite-measure
+Compact CREDO `2.0.1` package for endpoint and multi-time finite-measure
 Perturb-seq trajectory modeling. The source snapshot contains the installable
 `credo` package, runners, post-training analysis utilities, setup scripts, and
 tests. It intentionally excludes `.h5ad` data, checkpoints, and run outputs.

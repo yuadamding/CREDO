@@ -5,10 +5,11 @@ import pytest
 import torch
 
 from credo.data.core import FiniteMeasure, PerturbationCatalog, TimeAxis, TrajectoryProblem
-from credo.models.context import ContextAggregator
+from credo.models.context import ContextAggregator, GroupStatistics
 from credo.models.embeddings import PerturbationEmbedding
 from credo.models.full_model import FullDynamicsModel
 from credo.models.simulator import _control_embedding_context
+from credo.models.weighted_sde import WeightedParticleSimulator
 from credo.training.trainer import _uses_global_ecological_context
 from credo.training.trajectory_batch import initialise_particles_from_trajectory
 
@@ -173,6 +174,105 @@ def test_ecological_growth_requires_global_context_under_sharding() -> None:
 
     assert _uses_global_ecological_context(ecological)
     assert not _uses_global_ecological_context(non_ecological)
+
+
+def test_mlp_ecological_chunked_rollout_matches_full_global_context() -> None:
+    torch.manual_seed(71)
+    pids = ["ctrl", "gene_a", "gene_b"]
+    model = FullDynamicsModel(
+        perturbation_ids=pids,
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=3,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="mlp",
+    )
+    model.eval()
+    z_full = torch.randn(3, 4, 2)
+    logw_full = torch.full((3, 4), -torch.log(torch.tensor(4.0)))
+    log_m0_full = torch.tensor([0.0, 0.2, -0.4])
+    noise_steps = torch.randn(2, 3, 4, 2)
+
+    simulator = WeightedParticleSimulator(n_steps=2, store_history=True)
+    full = simulator.rollout(
+        z0=z_full,
+        logw0=logw_full,
+        model=model,
+        log_m0=log_m0_full,
+        perturbation_ids=pids,
+        noise_steps=noise_steps,
+    )
+
+    chunks = [
+        {
+            "pids": pids[:1],
+            "z": z_full[:1].clone(),
+            "logw": logw_full[:1].clone(),
+            "log_m0": log_m0_full[:1].clone(),
+        },
+        {
+            "pids": pids[1:],
+            "z": z_full[1:].clone(),
+            "logw": logw_full[1:].clone(),
+            "log_m0": log_m0_full[1:].clone(),
+        },
+    ]
+    tau_steps = torch.linspace(0.0, 1.0, 3)
+    for step_idx in range(2):
+        tau_k = tau_steps[step_idx]
+        dtau = tau_steps[step_idx + 1] - tau_steps[step_idx]
+        stats_parts = []
+        cache = []
+        for chunk in chunks:
+            a_local = model.embedding(chunk["pids"])
+            b_local = model.embedding.growth_intercepts(chunk["pids"])
+            eta_local, phi_local = model.context_agg.encode_particles(chunk["z"])
+            stats_local, _, _ = model.context_agg.summarize_groups(
+                chunk["z"],
+                chunk["logw"],
+                chunk["log_m0"],
+                eta=eta_local,
+                phi=phi_local,
+            )
+            stats_parts.append(stats_local)
+            cache.append({"a": a_local, "b": b_local, "eta": eta_local})
+        global_context = model.context_agg.context_from_group_statistics(
+            GroupStatistics(
+                log_n_g=torch.cat([stats.log_n_g for stats in stats_parts], dim=0),
+                eta_g=torch.cat([stats.eta_g for stats in stats_parts], dim=0),
+                phi_g=torch.cat([stats.phi_g for stats in stats_parts], dim=0),
+            )
+        )
+
+        start = 0
+        for chunk, cached in zip(chunks, cache):
+            stop = start + len(chunk["pids"])
+            coeffs = model.coeff_nets(
+                z=chunk["z"],
+                tau=tau_k,
+                context=global_context.context,
+                a=cached["a"],
+                growth_intercept=cached["b"],
+                eta_z=cached["eta"],
+                q=global_context.q,
+                s=global_context.s,
+            )
+            chunk_noise = noise_steps[step_idx, start:stop]
+            chunk["z"] = chunk["z"] + coeffs.drift * dtau + coeffs.sigma_diag * torch.sqrt(dtau) * chunk_noise
+            chunk["logw"] = chunk["logw"] + coeffs.growth * dtau
+            start = stop
+
+    assert torch.allclose(torch.cat([chunk["z"] for chunk in chunks], dim=0), full.terminal_z, atol=1e-6)
+    assert torch.allclose(
+        torch.cat([chunk["logw"] for chunk in chunks], dim=0),
+        full.terminal_logw,
+        atol=1e-6,
+    )
 
 
 def test_particle_initialization_respects_nonuniform_measure_weights() -> None:

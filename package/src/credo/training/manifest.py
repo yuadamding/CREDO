@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import hashlib
 import json
 import platform
 import subprocess
@@ -43,6 +44,7 @@ def build_run_manifest(
     active_pids: Sequence[str] | None = None,
     stage: str | None = None,
     n_epochs: int | None = None,
+    output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     """Build a compact reproducibility manifest for a trainer run."""
     try:
@@ -51,10 +53,16 @@ def build_run_manifest(
         credo_version = None
     training_cfg = dict(config.get("training", {})) if isinstance(config, Mapping) else {}
     model_cfg = dict(config.get("model", {})) if isinstance(config, Mapping) else {}
+    config_payload = json.dumps(config, sort_keys=True, default=str)
     return {
+        "manifest_schema_version": 2,
         "package_version": credo_version,
         "python": sys.version,
         "platform": platform.platform(),
+        "cwd": str(Path.cwd()),
+        "command": " ".join(sys.argv),
+        "argv": list(sys.argv),
+        "output_dir": str(output_dir) if output_dir is not None else None,
         "torch": torch.__version__,
         "torch_cuda_version": torch.version.cuda,
         "cuda_available": bool(torch.cuda.is_available()),
@@ -69,6 +77,7 @@ def build_run_manifest(
         "active_perturbation_ids": list(active_pids) if active_pids is not None else None,
         "context_kind": model_cfg.get("context_kind"),
         "global_context_batching": training_cfg.get("global_context_batching"),
+        "config_sha256": hashlib.sha256(config_payload.encode("utf-8")).hexdigest(),
         "ess_thresholds": {
             "ess_warn_frac": training_cfg.get("ess_warn_frac"),
             "ess_fail_frac": training_cfg.get("ess_fail_frac"),

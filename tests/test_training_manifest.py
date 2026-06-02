@@ -28,12 +28,18 @@ def test_build_run_manifest_records_core_reproducibility_fields(tmp_path) -> Non
         active_pids=["ctrl"],
         stage="C",
         n_epochs=3,
+        output_dir=tmp_path,
     )
     path = write_run_manifest(tmp_path / "run_manifest.json", manifest)
     loaded = json.loads(path.read_text())
 
     assert loaded["context_kind"] == "transformer"
     assert loaded["global_context_batching"] == "full_context_cache"
+    assert loaded["manifest_schema_version"] == 2
+    assert loaded["output_dir"] == str(tmp_path)
+    assert len(loaded["config_sha256"]) == 64
+    assert loaded["command"]
+    assert loaded["cwd"]
     assert loaded["supported_perturbation_count"] == 2
     assert loaded["active_perturbation_ids"] == ["ctrl"]
     assert loaded["ess_thresholds"]["ess_claim_grade_min_frac"] == 0.1

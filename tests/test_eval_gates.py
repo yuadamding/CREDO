@@ -3,6 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
+from credo.eval.hnscc import summarize_eval
 from credo.eval.gates import append_ess_claim_gate, ess_claim_gate, ess_gate_status
 
 
@@ -49,3 +50,46 @@ def test_append_ess_claim_gate_adds_stable_columns() -> None:
     assert list(out["ess_gate_status"]) == ["pass", "fail"]
     assert list(out["ess_claim_grade_allowed"]) == [True, False]
     assert out.loc[1, "ess_failed_gates"] == "terminal_ess_frac_min"
+
+
+def test_endpoint_eval_summary_prefers_endpoint_geom_mass_with_uot_aliases() -> None:
+    frame = pd.DataFrame(
+        {
+            "perturbation_id": ["ctrl", "gene_a"],
+            "endpoint_geom_mass": [0.2, 0.6],
+            "uot": [99.0, 99.0],
+            "mass_rel_error": [0.1, 0.3],
+            "is_control": [True, False],
+            "ess_claim_grade_allowed": [True, False],
+        }
+    )
+
+    summary = summarize_eval(frame)
+
+    assert summary["mean_endpoint_geom_mass"] == pytest.approx(0.4)
+    assert summary["median_endpoint_geom_mass"] == pytest.approx(0.4)
+    assert summary["mean_uot"] == pytest.approx(summary["mean_endpoint_geom_mass"])
+    assert summary["control_mean_endpoint_geom_mass"] == pytest.approx(0.2)
+    assert summary["non_control_mean_endpoint_geom_mass"] == pytest.approx(0.6)
+    assert summary["n_ess_claim_grade_allowed"] == 1
+    assert summary["n_ess_claim_grade_blocked"] == 1
+
+
+def test_endpoint_eval_summary_handles_csv_loaded_boolean_strings() -> None:
+    frame = pd.DataFrame(
+        {
+            "perturbation_id": ["ctrl", "gene_a"],
+            "endpoint_geom_mass": [0.2, 0.6],
+            "mass_rel_error": [0.1, 0.3],
+            "is_control": ["True", "False"],
+            "ess_claim_grade_allowed": ["False", "True"],
+        }
+    )
+
+    summary = summarize_eval(frame)
+
+    assert summary["n_ess_claim_grade_allowed"] == 1
+    assert summary["n_ess_claim_grade_blocked"] == 1
+    assert summary["n_controls"] == 1
+    assert summary["control_mean_endpoint_geom_mass"] == pytest.approx(0.2)
+    assert summary["non_control_mean_endpoint_geom_mass"] == pytest.approx(0.6)

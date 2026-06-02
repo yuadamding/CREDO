@@ -4,12 +4,18 @@ import argparse
 import json
 import sys
 
-from credo.data.schema import DEFAULT_OBS_COLUMNS, validate_anndata_schema
+from credo.data.schema import SCHEMA_OBS_COLUMNS, validate_anndata_schema
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate generic CREDO AnnData inputs.")
     parser.add_argument("--data-path", required=True, help="Path to an .h5ad file.")
+    parser.add_argument(
+        "--schema",
+        choices=sorted(SCHEMA_OBS_COLUMNS),
+        default="minimal",
+        help="Generic CREDO schema profile to validate.",
+    )
     parser.add_argument("--latent-key", default="X_pca", help="Required obsm latent key.")
     parser.add_argument(
         "--obs-column",
@@ -25,13 +31,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     report = validate_anndata_schema(
         args.data_path,
+        schema=args.schema,
         latent_key=args.latent_key,
-        obs_columns=args.obs_column or DEFAULT_OBS_COLUMNS,
+        obs_columns=args.obs_column or None,
     )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     elif report["ok"]:
-        print(f"OK: {report['path']} shape={report['shape']} latent={report['latent_key']}")
+        print(
+            f"OK: {report['path']} schema={report['schema']} "
+            f"shape={report['shape']} latent={report['latent_key']}"
+        )
     else:
         print(f"FAILED: {report['path']}", file=sys.stderr)
         for error in report["errors"]:
