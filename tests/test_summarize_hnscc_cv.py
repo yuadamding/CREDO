@@ -4,8 +4,12 @@ import json
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from runners.summarize_hnscc_cv import build_group_summary, collect_run_rows, write_markdown
+
+
+pytestmark = pytest.mark.runner
 
 
 def test_summarizer_handles_missing_state_metrics(tmp_path: Path) -> None:

@@ -18,6 +18,9 @@ from credo.models.weighted_sde import WeightedParticleSimulator
 from credo.training.trainer import Trainer
 
 
+pytestmark = pytest.mark.semantic
+
+
 def _aggregator() -> MassAwareTransformerContextAggregator:
     agg = MassAwareTransformerContextAggregator(
         latent_dim=2,
@@ -755,6 +758,83 @@ def test_chunked_transformer_training_uses_full_g_context(tmp_path) -> None:
     assert np.isfinite(metrics["loss_total"])
     assert np.isfinite(metrics["context_norm"])
     assert np.isfinite(metrics["group_attention_entropy"])
+
+
+def test_global_context_batching_error_rejects_chunked_transformer_training(tmp_path) -> None:
+    support = np.asarray([[0.0, 0.0], [0.5, 0.0]], dtype=np.float32)
+    weights = np.ones(2, dtype=np.float32)
+    measure = FiniteMeasure(support=support, weights=weights, total_mass=float(weights.sum()))
+    pids = ["ctrl", "gene_a", "gene_b"]
+    endpoint = EndpointProblem(
+        initial={pid: measure for pid in pids},
+        terminal={pid: measure for pid in pids},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=pids,
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=pids,
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="transformer",
+        transformer_token_dim=16,
+        transformer_heads=4,
+        transformer_within_layers=1,
+        transformer_cross_layers=1,
+        transformer_inducing=3,
+        transformer_dropout=0.0,
+        transformer_growth_only=True,
+    )
+    cfg = RunConfig(
+        run_id="chunked-transformer-error",
+        output_dir=str(tmp_path),
+        device="cpu",
+        model=ModelConfig(
+            context_kind="transformer",
+            transformer_token_dim=16,
+            transformer_heads=4,
+            transformer_within_layers=1,
+            transformer_cross_layers=1,
+            transformer_inducing=3,
+            transformer_dropout=0.0,
+            transformer_growth_only=True,
+        ),
+        simulation=SimulationConfig(n_particles=2, n_steps=1, store_history=True),
+        training=TrainingConfig(
+            epochs=1,
+            max_active_perturbations=1,
+            global_context_batching="error",
+            lambda_count=0.0,
+            lambda_weak=0.0,
+            lambda_reg_net=0.0,
+            lambda_reg_diffusion=0.0,
+            lambda_reg_embed=0.0,
+            lambda_reg_growth_bias=0.0,
+        ),
+    )
+    trainer = Trainer(
+        model=model,
+        config=cfg,
+        endpoint=endpoint,
+        supported_pids=pids,
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+        warmup_epochs=1,
+    )
+
+    with pytest.raises(ValueError, match="global_context_batching='full_context_cache'"):
+        trainer._one_epoch(
+            optimizer=trainer._build_optimizer(stage="all"),
+            epoch=0,
+            stage="all",
+            perturbation_ids=pids,
+        )
 
 
 def test_chunked_transformer_training_supports_count_loss_full_order(tmp_path) -> None:

@@ -27,6 +27,10 @@ python scripts/verify_setup.py --json
 python scripts/verify_setup.py \
   --check-data \
   --data-path ../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad
+credo-validate-data \
+  --data-path /path/to/input.h5ad \
+  --latent-key X_pca \
+  --json
 ```
 
 ## Smoke Runs
@@ -73,7 +77,7 @@ written to `practical_null_floors_used.json`.
 ## Verify
 
 ```bash
-pytest -q
+pytest -q -m "not slow and not gpu"
 python scripts/stress_test_trajectory_core.py --cases 1000
 python scripts/stress_test_trajectory_production.py \
   --cases 1000 \
@@ -101,6 +105,9 @@ Compatibility facades such as `credo.data.problems`,
   the perturbation residual instead of swapping in control initial cells.
 - Ecological context is computed from absolute particle weights, including
   source mass offsets.
+- Perturbation chunking for transformer or causal-attention ecology uses
+  exact full-context caching by default; chunk-local ecology is not a supported
+  claim-grade training mode.
 - The default endpoint loss is a finite-measure geometry-plus-log-mass proxy:
   debiased Sinkhorn geometry on normalized measures plus a log-mass penalty,
   not a full dynamic unbalanced-OT path objective.

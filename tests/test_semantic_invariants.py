@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from credo.data.core import FiniteMeasure, PerturbationCatalog, TimeAxis, TrajectoryProblem
@@ -10,6 +11,9 @@ from credo.models.full_model import FullDynamicsModel
 from credo.models.simulator import _control_embedding_context
 from credo.training.trainer import _uses_global_ecological_context
 from credo.training.trajectory_batch import initialise_particles_from_trajectory
+
+
+pytestmark = pytest.mark.semantic
 
 
 def test_soft_ref_effective_embeddings_are_reference_plus_residual() -> None:

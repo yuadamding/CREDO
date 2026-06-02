@@ -5,8 +5,17 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "credo"
 version = "2.0"
-description = "Compact CREDO package for endpoint and multi-time immune trajectory modeling"
+description = "Control-referenced ecological dynamics for longitudinal Perturb-seq"
 requires-python = ">=3.11"
+authors = [
+    { name = "CREDO contributors" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
     "torch>=2.1",
     "numpy>=1.26",
@@ -17,5 +26,30 @@ dependencies = [
     "anndata>=0.10",
 ]
 
+[project.optional-dependencies]
+test = [
+    "pytest>=8",
+]
+analysis = [
+    "scanpy>=1.9",
+]
+dev = [
+    "pre-commit>=3",
+    "pytest>=8",
+]
+
+[project.urls]
+Homepage = "https://github.com/yuadamding/CREDO"
+Repository = "https://github.com/yuadamding/CREDO"
+
+[project.scripts]
+credo-validate-data = "credo.cli.validate_data:main"
+
+[tool.setuptools]
+include-package-data = false
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["__pycache__/*", "*.pyc", "*.pyo"]

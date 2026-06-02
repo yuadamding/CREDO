@@ -7,6 +7,9 @@ import pytest
 from credo.data.hnscc import build_study_from_split
 
 
+pytestmark = pytest.mark.unit
+
+
 def _obs_with_mass(values: list[float] | None = None) -> tuple[pd.DataFrame, np.ndarray, pd.Series]:
     rows = []
     latent = []

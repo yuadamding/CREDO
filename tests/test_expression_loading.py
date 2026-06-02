@@ -11,6 +11,9 @@ import scipy.sparse as sp
 from credo.data.hnscc import load_hnscc_expression
 
 
+pytestmark = pytest.mark.unit
+
+
 def _write_h5ad(path: Path, matrix: sp.spmatrix, var: pd.DataFrame | None = None) -> None:
     obs = pd.DataFrame({"cell_id": [f"cell_{idx}" for idx in range(matrix.shape[0])]})
     if var is None:

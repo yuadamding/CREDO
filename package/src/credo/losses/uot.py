@@ -20,6 +20,7 @@ dynamic unbalanced-OT objective over paths.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Dict, Hashable, Optional, Tuple
 
 import torch
@@ -286,3 +287,12 @@ class EndpointGeometryMassLoss(nn.Module):
 
 class UOTLoss(EndpointGeometryMassLoss):
     """Backward-compatible name for :class:`EndpointGeometryMassLoss`."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        warnings.warn(
+            "UOTLoss is a compatibility alias for EndpointGeometryMassLoss; "
+            "use credo.losses.endpoint.EndpointGeometryMassLoss for new code.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)

@@ -22,6 +22,9 @@ from credo.training.trajectory_batch import initialise_particles_from_trajectory
 from credo.training.trajectory_trainer import TrajectoryTrainer
 
 
+pytestmark = pytest.mark.integration
+
+
 def _toy_study() -> PerturbSeqDynamicsData:
     labels = ["90m", "6h", "10h"]
     rows = []

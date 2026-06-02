@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import pytest
+
+
+pytestmark = pytest.mark.unit
+
 
 def test_credo_model_stack_imports() -> None:
     import credo

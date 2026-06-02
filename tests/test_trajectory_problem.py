@@ -22,6 +22,9 @@ from credo.models.simulator import initialise_particles_from_trajectory
 from credo.models.simulator import initialise_particles
 
 
+pytestmark = pytest.mark.unit
+
+
 def _three_time_data() -> PerturbSeqDynamicsData:
     labels = ["90m", "6h", "10h"]
     rows = []

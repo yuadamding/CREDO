@@ -14,6 +14,9 @@ from credo.losses.uot import (
 )
 
 
+pytestmark = pytest.mark.unit
+
+
 def _measures():
     x = torch.tensor([[0.0], [1.0], [2.0]], dtype=torch.float32)
     y = torch.tensor([[0.1], [1.1], [2.1]], dtype=torch.float32)
@@ -49,7 +52,8 @@ def test_uotloss_class_alias_matches_new_module() -> None:
     target_logw = {"p": log_b}
 
     new_loss = EndpointGeometryMassLoss(eps=0.2, tau=0.7, max_iter=40, use_geomloss=False)
-    old_loss = UOTLoss(eps=0.2, tau=0.7, max_iter=40, use_geomloss=False)
+    with pytest.warns(DeprecationWarning, match="EndpointGeometryMassLoss"):
+        old_loss = UOTLoss(eps=0.2, tau=0.7, max_iter=40, use_geomloss=False)
     new_total, new_components = new_loss.component_dict(pred_z, pred_logw, target_support, target_logw, ["p"])
     old_total, old_components = old_loss.component_dict(pred_z, pred_logw, target_support, target_logw, ["p"])
 

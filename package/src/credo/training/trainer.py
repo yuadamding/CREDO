@@ -46,6 +46,7 @@ from ..models.context import GroupStatistics
 from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import WeightedParticleSimulator
 from ..models.simulator import _stable_seed_offset, initialise_particles
+from .manifest import append_run_manifest_record, build_run_manifest, write_run_manifest
 
 
 # ---------------------------------------------------------------------------
@@ -925,6 +926,24 @@ class Trainer:
         if not self._can_use_multi_gpu():
             batch_size = self._perturbation_batch_size(perturbation_ids)
             if batch_size < len(perturbation_ids):
+                if _uses_global_ecological_context(self.model):
+                    batching_mode = getattr(
+                        self.config.training,
+                        "global_context_batching",
+                        "full_context_cache",
+                    )
+                    if batching_mode == "error":
+                        raise ValueError(
+                            "Global ecological context cannot be computed from "
+                            "chunk-local perturbation batches. Set "
+                            "global_context_batching='full_context_cache' to use "
+                            "the exact full-context chunked trainer."
+                        )
+                    if batching_mode != "full_context_cache":
+                        raise ValueError(
+                            "global_context_batching must be 'full_context_cache' "
+                            "or 'error' for the current trainer."
+                        )
                 return self._one_epoch_chunked(
                     optimizer=optimizer,
                     epoch=epoch,
@@ -1843,6 +1862,18 @@ class Trainer:
         self._divergence_counter = 0
         active_pids = self._active_perturbation_ids(stage)
         perturbation_batch_size = self._perturbation_batch_size(active_pids)
+        run_manifest = build_run_manifest(
+            config=self.config.model_dump(),
+            supported_pids=self.supported_pids,
+            active_pids=active_pids,
+            stage=stage,
+            n_epochs=epochs,
+        )
+        write_run_manifest(
+            self.output_dir / "run_manifest.json",
+            run_manifest,
+        )
+        append_run_manifest_record(self.output_dir / "run_manifest_stages.jsonl", run_manifest)
         print(
             f"[{stage}] Active perturbations={len(active_pids)} "
             f"batch_pids={perturbation_batch_size}"

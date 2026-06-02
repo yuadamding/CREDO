@@ -10,6 +10,9 @@ from credo.training.trainer import _ess_gate_status
 from credo.models.weighted_sde import WeightedParticleSimulator
 
 
+pytestmark = pytest.mark.unit
+
+
 class _ConstantDynamics:
     def step(self, z, tau, logw, log_m0, perturbation_ids=None):
         coeffs = SimpleNamespace(
@@ -237,3 +240,8 @@ def test_ess_thresholds_are_ordered() -> None:
             ess_claim_grade_min_frac=0.2,
             ess_fail_frac=0.05,
         )
+
+
+def test_training_config_rejects_local_global_context_ablation_mode() -> None:
+    with pytest.raises(ValueError, match="local_ablation"):
+        TrainingConfig(global_context_batching="local_ablation")

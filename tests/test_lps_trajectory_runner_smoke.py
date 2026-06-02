@@ -10,6 +10,9 @@ import pytest
 from runners.run_credo_trajectory import build_study_from_anndata, main as trajectory_main, parse_args
 
 
+pytestmark = pytest.mark.runner
+
+
 def _write_tiny_runner_adata(
     tmp_path,
     *,

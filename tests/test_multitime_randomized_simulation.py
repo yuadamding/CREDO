@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 import torch
 
 from credo.data.core import (
@@ -15,9 +16,12 @@ from credo.data.core import (
 )
 from credo.losses.counts import count_fractions_from_zeta, integrated_fitness_curve
 from credo.losses.multitime import MultiTimeEndpointLoss
-from credo.losses.uot import UOTLoss
+from credo.losses.endpoint import EndpointGeometryMassLoss
 from credo.models.simulator import initialise_particles
 from credo.models.weighted_sde import ParticleRollout, WeightedParticleSimulator
+
+
+pytestmark = pytest.mark.randomized
 
 
 def _synthetic_data(seed: int, *, n_pids: int, n_times: int, latent_dim: int) -> PerturbSeqDynamicsData:
@@ -254,7 +258,7 @@ def test_random_multitime_mass_loss_matches_closed_form() -> None:
             }
         }
         loss_fn = MultiTimeEndpointLoss(
-            UOTLoss(eps=0.1, tau=1.0, max_iter=80, use_geomloss=False),
+            EndpointGeometryMassLoss(eps=0.1, tau=1.0, max_iter=80, use_geomloss=False),
             time_weights={"terminal": 0.7},
         )
 

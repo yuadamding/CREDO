@@ -11,6 +11,9 @@ import pandas as pd
 import pytest
 
 
+pytestmark = pytest.mark.biology
+
+
 ROOT = Path(__file__).resolve().parents[1]
 
 

@@ -41,6 +41,10 @@ jobs:
         run: |
           python -m pytest -q \
             tests/test_source_hygiene.py \
+            tests/test_pytest_markers.py \
+            tests/test_data_schema.py \
+            tests/test_eval_gates.py \
+            tests/test_training_manifest.py \
             tests/test_endpoint_geometry_mass_loss.py \
             tests/test_semantic_invariants.py \
             tests/test_weighted_sde_tau_grid.py \

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from check_source_hygiene import MIN_PHYSICAL_LINES, collect_source_hygiene_offenders
+
+
+pytestmark = pytest.mark.unit
 
 
 def test_sources_have_plain_lf_text() -> None:

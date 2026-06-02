@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import pytest
 import torch
 
 from credo.losses.weak_form import WeakFormLoss
+
+
+pytestmark = pytest.mark.unit
 
 
 def test_constant_growth_does_not_move_normalized_law() -> None:

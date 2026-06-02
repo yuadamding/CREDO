@@ -27,8 +27,11 @@ from credo.losses.multitime import (
     checkpoint_indices_for_taus,
     make_observed_tau_grid,
 )
-from credo.losses.uot import UOTLoss
+from credo.losses.endpoint import EndpointGeometryMassLoss
 from credo.models.weighted_sde import ParticleRollout
+
+
+pytestmark = pytest.mark.unit
 
 
 class _ConstantComponentLoss(nn.Module):
@@ -113,7 +116,7 @@ def test_multitime_endpoint_loss_zero_when_targets_equal_predictions() -> None:
         "6h": {"LPS__mono": torch.log(torch.tensor(target.weights) + 1e-30)},
         "10h": {"LPS__mono": torch.log(torch.tensor(target.weights) + 1e-30)},
     }
-    loss_fn = MultiTimeEndpointLoss(UOTLoss(eps=0.1, max_iter=80, use_geomloss=False))
+    loss_fn = MultiTimeEndpointLoss(EndpointGeometryMassLoss(eps=0.1, max_iter=80, use_geomloss=False))
 
     loss, logs = loss_fn(
         rollout,
@@ -149,7 +152,7 @@ def test_multitime_endpoint_loss_reports_sparse_active_and_missing_keys() -> Non
     target_support = {"10h": {"a": support[0].clone()}}
     target_logw = {"10h": {"a": torch.zeros(2)}}
     loss_fn = MultiTimeEndpointLoss(
-        UOTLoss(eps=0.1, max_iter=80, use_geomloss=False),
+        EndpointGeometryMassLoss(eps=0.1, max_iter=80, use_geomloss=False),
         reduction="mean",
     )
 
@@ -175,7 +178,7 @@ def test_multitime_endpoint_loss_raises_when_checkpoint_has_no_active_keys() -> 
         tau_steps=torch.tensor([0.0, 1.0]),
         log_m0=torch.tensor([np.log(2.0)], dtype=torch.float32),
     )
-    loss_fn = MultiTimeEndpointLoss(UOTLoss(eps=0.1, max_iter=80, use_geomloss=False))
+    loss_fn = MultiTimeEndpointLoss(EndpointGeometryMassLoss(eps=0.1, max_iter=80, use_geomloss=False))
 
     with pytest.raises(ValueError, match="No active target keys"):
         loss_fn(

@@ -26,6 +26,9 @@ from credo.losses.causal_attention import (
 from credo.training.trainer import Trainer
 
 
+pytestmark = pytest.mark.semantic
+
+
 def _aggregator(
     *,
     residual_policy: str = "edges_only",

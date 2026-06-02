@@ -10,6 +10,9 @@ from credo.models.simulator import CounterfactualEngine, rollout_with_clamped_co
 from credo.models.weighted_sde import WeightedParticleSimulator
 
 
+pytestmark = pytest.mark.semantic
+
+
 def _endpoint() -> EndpointProblem:
     measure = FiniteMeasure(
         support=np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
