@@ -1,4 +1,5 @@
 from .gates import (
+    ESS_GATE_COLUMNS,
     ESS_STATUS_ORDER,
     append_ess_claim_gate,
     ess_claim_gate,
@@ -15,6 +16,7 @@ from .hnscc import (
 )
 
 __all__ = [
+    "ESS_GATE_COLUMNS",
     "ESS_STATUS_ORDER",
     "append_ess_claim_gate",
     "build_true_terminal_state_table",

@@ -29,6 +29,8 @@ python scripts/verify_setup.py \
   --data-path ../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad
 credo-validate-data \
   --data-path /path/to/input.h5ad \
+  --schema trajectory \
+  --strict \
   --latent-key X_pca \
   --json
 ```

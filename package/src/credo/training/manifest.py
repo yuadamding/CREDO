@@ -54,6 +54,8 @@ def build_run_manifest(
     training_cfg = dict(config.get("training", {})) if isinstance(config, Mapping) else {}
     model_cfg = dict(config.get("model", {})) if isinstance(config, Mapping) else {}
     config_payload = json.dumps(config, sort_keys=True, default=str)
+    git_sha = _git_value(["rev-parse", "HEAD"])
+    git_status = _git_value(["status", "--short"])
     return {
         "manifest_schema_version": 2,
         "package_version": credo_version,
@@ -67,8 +69,9 @@ def build_run_manifest(
         "torch_cuda_version": torch.version.cuda,
         "cuda_available": bool(torch.cuda.is_available()),
         "dependency_versions": _dependency_versions(),
-        "git_sha": _git_value(["rev-parse", "HEAD"]),
-        "git_dirty": bool(_git_value(["status", "--short"])),
+        "git_available": git_sha is not None,
+        "git_sha": git_sha,
+        "git_dirty": None if git_status is None else bool(git_status),
         "stage": stage,
         "n_epochs": n_epochs,
         "supported_perturbation_count": len(supported_pids),

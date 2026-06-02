@@ -21,7 +21,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--obs-column",
         action="append",
         default=None,
-        help="Required obs column. May be repeated. Defaults to CREDO endpoint columns.",
+        help=(
+            "Additional required obs column. May be repeated. "
+            "Use --schema custom to validate only the columns supplied here."
+        ),
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Require the stricter package schema profile for endpoint/trajectory inputs.",
     )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of a short text report.")
     return parser.parse_args(argv)
@@ -34,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
         schema=args.schema,
         latent_key=args.latent_key,
         obs_columns=args.obs_column or None,
+        strict=args.strict,
     )
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))

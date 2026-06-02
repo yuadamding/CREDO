@@ -15,6 +15,9 @@ from ..models.simulator import initialise_particles
 from ..models.weighted_sde import WeightedParticleSimulator
 
 
+TARGET_SUBSAMPLE_MODES = {"uniform", "preserve_weights", "weighted_sample_preserve_weights"}
+
+
 def _bool_series(series: pd.Series) -> pd.Series:
     """Coerce bool-like table columns without treating ``"False"`` as true."""
 
@@ -33,13 +36,25 @@ def cap_measure_atoms(
     *,
     max_atoms: Optional[int],
     seed: int,
+    mode: str = "preserve_weights",
 ) -> FiniteMeasure:
+    if mode not in TARGET_SUBSAMPLE_MODES:
+        raise ValueError(f"mode must be one of {sorted(TARGET_SUBSAMPLE_MODES)}.")
     if max_atoms is None or measure.n_atoms <= max_atoms:
         return measure
     rng = np.random.default_rng(seed)
-    idx = rng.choice(measure.n_atoms, size=max_atoms, replace=False)
+    probs = measure.normalized_weights if mode == "weighted_sample_preserve_weights" else None
+    idx = rng.choice(measure.n_atoms, size=max_atoms, replace=False, p=probs)
     support = measure.support[idx]
-    weights = np.full(max_atoms, measure.total_mass / max_atoms, dtype=np.float32)
+    if mode == "uniform":
+        weights = np.full(max_atoms, measure.total_mass / max_atoms, dtype=np.float32)
+    else:
+        weights = measure.weights[idx].astype(np.float64, copy=True)
+        weight_sum = float(weights.sum())
+        if weight_sum <= 0:
+            weights = np.full(max_atoms, measure.total_mass / max_atoms, dtype=np.float32)
+        else:
+            weights = (weights * (measure.total_mass / weight_sum)).astype(np.float32)
     return FiniteMeasure(support=support, weights=weights, total_mass=measure.total_mass)
 
 
@@ -48,6 +63,7 @@ def cap_endpoint_problem_terminal(
     *,
     max_terminal_atoms: Optional[int],
     seed: int,
+    mode: str = "preserve_weights",
 ) -> EndpointProblem:
     if max_terminal_atoms is None:
         return endpoint
@@ -57,6 +73,7 @@ def cap_endpoint_problem_terminal(
             endpoint.terminal[pid],
             max_atoms=max_terminal_atoms,
             seed=seed + i,
+            mode=mode,
         )
     return EndpointProblem(
         initial=endpoint.initial,
@@ -80,7 +97,14 @@ def evaluate_endpoint_problem(
     seed: int,
     eps: float,
     tau: float,
+    target_subsample_mode: str = "preserve_weights",
+    ess_warn_frac: float = 0.20,
+    ess_fail_frac: float = 0.05,
+    ess_claim_grade_min_frac: float = 0.10,
+    ess_max_weight_frac_fail: float = 0.50,
 ) -> pd.DataFrame:
+    if target_subsample_mode not in TARGET_SUBSAMPLE_MODES:
+        raise ValueError(f"target_subsample_mode must be one of {sorted(TARGET_SUBSAMPLE_MODES)}.")
     simulator = WeightedParticleSimulator(n_steps=n_steps, store_history=False)
     dtype = torch.float32
     model.eval()
@@ -106,9 +130,22 @@ def evaluate_endpoint_problem(
     for g, pid in enumerate(perturbation_ids):
         mu = endpoint.terminal[pid]
         if len(mu.support) > target_particles:
-            idx = rng.choice(len(mu.support), size=target_particles, replace=False)
+            probs = (
+                mu.normalized_weights
+                if target_subsample_mode == "weighted_sample_preserve_weights"
+                else None
+            )
+            idx = rng.choice(len(mu.support), size=target_particles, replace=False, p=probs)
             target_support = mu.support[idx]
-            target_weights = np.full(len(idx), mu.total_mass / len(idx), dtype=np.float32)
+            if target_subsample_mode == "uniform":
+                target_weights = np.full(len(idx), mu.total_mass / len(idx), dtype=np.float32)
+            else:
+                target_weights = mu.weights[idx].astype(np.float64, copy=True)
+                target_weight_sum = float(target_weights.sum())
+                if target_weight_sum <= 0:
+                    target_weights = np.full(len(idx), mu.total_mass / len(idx), dtype=np.float32)
+                else:
+                    target_weights = (target_weights * (mu.total_mass / target_weight_sum)).astype(np.float32)
         else:
             target_support = mu.support
             target_weights = mu.weights
@@ -144,6 +181,11 @@ def evaluate_endpoint_problem(
             else np.nan
         )
         ess_metrics = {
+            "terminal_ess_frac": terminal_ess_frac,
+            "min_ess_frac_over_time": min_ess_frac,
+            "max_weight_frac_over_time": max_weight_frac,
+            "logw_range_max_over_time": logw_range,
+            # Backward-compatible aggregate aliases used by older tables.
             "terminal_ess_frac_mean": terminal_ess_frac,
             "terminal_ess_frac_min": terminal_ess_frac,
             "min_ess_frac_mean": min_ess_frac,
@@ -161,11 +203,18 @@ def evaluate_endpoint_problem(
                 "mass_true": mass_true,
                 "mass_rel_error": mass_err,
                 **ess_metrics,
-                **ess_claim_gate(ess_metrics),
+                **ess_claim_gate(
+                    ess_metrics,
+                    ess_warn_frac=ess_warn_frac,
+                    ess_fail_frac=ess_fail_frac,
+                    ess_claim_grade_min_frac=ess_claim_grade_min_frac,
+                    ess_max_weight_frac_fail=ess_max_weight_frac_fail,
+                ),
                 "is_control": pid in control_ids,
                 "n_init_atoms": int(endpoint.initial[pid].n_atoms),
                 "n_term_atoms": int(endpoint.terminal[pid].n_atoms),
                 "n_term_atoms_eval": int(len(target_support)),
+                "target_subsample_mode": target_subsample_mode,
             }
         )
     return pd.DataFrame(rows)

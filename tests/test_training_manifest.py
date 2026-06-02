@@ -40,6 +40,8 @@ def test_build_run_manifest_records_core_reproducibility_fields(tmp_path) -> Non
     assert len(loaded["config_sha256"]) == 64
     assert loaded["command"]
     assert loaded["cwd"]
+    assert isinstance(loaded["git_available"], bool)
+    assert loaded["git_dirty"] in {True, False, None}
     assert loaded["supported_perturbation_count"] == 2
     assert loaded["active_perturbation_ids"] == ["ctrl"]
     assert loaded["ess_thresholds"]["ess_claim_grade_min_frac"] == 0.1
