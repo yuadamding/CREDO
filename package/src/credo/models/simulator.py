@@ -30,6 +30,16 @@ def _stable_seed_offset(text: str, modulus: int = 1_000_000) -> int:
     return int(digest[:12], 16) % modulus
 
 
+def embedding_ids_from_endpoint(endpoint: EndpointProblem, perturbation_ids: List[str]) -> List[str]:
+    """Resolve model embedding IDs for endpoint measure keys."""
+    mapping = endpoint.metadata.get("measure_to_embedding")
+    if not isinstance(mapping, dict):
+        mapping = endpoint.metadata.get("embedding_ids")
+    if not isinstance(mapping, dict):
+        return list(perturbation_ids)
+    return [str(mapping.get(pid, pid)) for pid in perturbation_ids]
+
+
 def initialise_particles_from_measures(
     measures: Dict[str, FiniteMeasure],
     perturbation_ids: List[str],
@@ -151,6 +161,7 @@ def rollout_with_clamped_context(
     perturbation_ids: List[str],
     context_steps: torch.Tensor,
     *,
+    embedding_ids: Optional[List[str]] = None,
     base_context_steps: Optional[torch.Tensor] = None,
     growth_context_steps: Optional[torch.Tensor] = None,
     n_steps: Optional[int] = None,
@@ -171,6 +182,8 @@ def rollout_with_clamped_context(
         raise ValueError("z0 and logw0 shapes are inconsistent")
     if z0.shape[0] != len(perturbation_ids):
         raise ValueError("perturbation_ids length must match z0.shape[0]")
+    if embedding_ids is not None and len(embedding_ids) != len(perturbation_ids):
+        raise ValueError("embedding_ids length must match perturbation_ids length")
     if generator is not None and noise_steps is not None:
         raise ValueError("Pass either generator or noise_steps, not both")
 
@@ -261,6 +274,7 @@ def rollout_with_clamped_context(
     noise_used_list = []
 
     n_programs = model.context_agg.n_programs
+    embed_pids = embedding_ids or perturbation_ids
     for k in range(K):
         tau_k = tau_steps[k]
         dtau = tau_steps[k + 1] - tau_steps[k]
@@ -285,8 +299,8 @@ def rollout_with_clamped_context(
         )
         q = global_ecology_context[:n_programs]
         s = global_ecology_context[n_programs:]
-        a = model.embedding(perturbation_ids)
-        b = model.embedding.growth_intercepts(perturbation_ids)
+        a = model.embedding(embed_pids)
+        b = model.embedding.growth_intercepts(embed_pids)
         eta_z, _ = model.context_agg.encode_particles(z)
         coeffs = model.coeff_nets(
             z=z,
@@ -464,6 +478,7 @@ class CounterfactualEngine:
         for pid in perturbation_ids:
             if pid not in endpoint.initial:
                 continue
+            embed_pid = embedding_ids_from_endpoint(endpoint, [pid])[0]
 
             # --- Perturbation rollout ---
             z0p, lw0p, lm0p = initialise_particles(
@@ -480,6 +495,7 @@ class CounterfactualEngine:
                 model=self.model,
                 log_m0=lm0p,
                 perturbation_ids=[pid],
+                embedding_ids=[embed_pid],
                 noise_steps=noise_steps,
             )
 
@@ -488,13 +504,14 @@ class CounterfactualEngine:
 
             # Reference-consistent soft-ref semantics keep a_ref and zero only
             # the perturbation residual; full zeroing is left as a diagnostic.
-            with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+            with _control_embedding_context(self.model, embed_pid, mode=control_rollout_mode):
                 rollout_c = self.simulator.rollout(
                     z0=z0c,
                     logw0=lw0c,
                     model=self.model,
                     log_m0=lm0c,
                     perturbation_ids=[pid],
+                    embedding_ids=[embed_pid],
                     noise_steps=noise_steps,
                 )
 
@@ -512,19 +529,21 @@ class CounterfactualEngine:
                     logw0=lw0p,
                     log_m0=lm0p,
                     perturbation_ids=[pid],
+                    embedding_ids=[embed_pid],
                     context_steps=rollout_c.context_steps,
                     tau_start=tau_start,
                     tau_end=tau_end,
                     tau_grid=tau_grid,
                     noise_steps=noise_steps,
                 )
-                with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+                with _control_embedding_context(self.model, embed_pid, mode=control_rollout_mode):
                     rollout_control_clamped = rollout_with_clamped_context(
                         model=self.model,
                         z0=z0c,
                         logw0=lw0c,
                         log_m0=lm0c,
                         perturbation_ids=[pid],
+                        embedding_ids=[embed_pid],
                         context_steps=rollout_c.context_steps,
                         tau_start=tau_start,
                         tau_end=tau_end,
@@ -609,6 +628,7 @@ class CounterfactualEngine:
             self.device,
             seed=seed,
         )
+        all_embedding_ids = embedding_ids_from_endpoint(endpoint, all_pids)
         noise_seed = int(seed) + 10_000
         noise_steps = None
         if common_noise:
@@ -624,6 +644,7 @@ class CounterfactualEngine:
             model=self.model,
             log_m0=lm0_all,
             perturbation_ids=all_pids,
+            embedding_ids=all_embedding_ids,
             noise_steps=noise_steps,
             return_noise_used=common_noise,
         )
@@ -631,14 +652,16 @@ class CounterfactualEngine:
         for pid in perturbation_ids:
             if pid not in endpoint.initial or pid not in all_pids:
                 continue
+            embed_pid = embedding_ids_from_endpoint(endpoint, [pid])[0]
 
-            with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+            with _control_embedding_context(self.model, embed_pid, mode=control_rollout_mode):
                 rollout_c_all = self.simulator.rollout(
                     z0=z0_all.clone(),
                     logw0=lw0_all.clone(),
                     model=self.model,
                     log_m0=lm0_all.clone(),
                     perturbation_ids=all_pids,
+                    embedding_ids=all_embedding_ids,
                     noise_steps=noise_steps.clone() if noise_steps is not None else None,
                     return_noise_used=common_noise,
                 )
@@ -661,6 +684,7 @@ class CounterfactualEngine:
                     logw0=lw0_all,
                     log_m0=lm0_all,
                     perturbation_ids=all_pids,
+                    embedding_ids=all_embedding_ids,
                     context_steps=rollout_c_all.context_steps,
                     base_context_steps=rollout_c_all.base_context_steps,
                     growth_context_steps=rollout_c_all.growth_context_steps,
@@ -670,13 +694,14 @@ class CounterfactualEngine:
                     noise_steps=noise_steps,
                     return_noise_used=common_noise,
                 )
-                with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+                with _control_embedding_context(self.model, embed_pid, mode=control_rollout_mode):
                     rollout_control_clamped_all = rollout_with_clamped_context(
                         model=self.model,
                         z0=z0_all.clone(),
                         logw0=lw0_all.clone(),
                         log_m0=lm0_all.clone(),
                         perturbation_ids=all_pids,
+                        embedding_ids=all_embedding_ids,
                         context_steps=rollout_c_all.context_steps,
                         base_context_steps=rollout_c_all.base_context_steps,
                         growth_context_steps=rollout_c_all.growth_context_steps,
@@ -787,6 +812,7 @@ class CounterfactualEngine:
             model=self.model,
             log_m0=lm0_all,
             perturbation_ids=all_pids,
+            embedding_ids=embedding_ids_from_endpoint(endpoint, all_pids),
             noise_steps=noise_steps,
             return_noise_used=common_noise,
         )
@@ -813,6 +839,7 @@ class CounterfactualEngine:
                     model=self.model,
                     log_m0=lm0_all.clone(),
                     perturbation_ids=all_pids,
+                    embedding_ids=embedding_ids_from_endpoint(endpoint, all_pids),
                     noise_steps=noise_steps.clone() if noise_steps is not None else None,
                     return_noise_used=common_noise,
                     intervention=intervention,

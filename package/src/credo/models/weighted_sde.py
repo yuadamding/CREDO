@@ -140,6 +140,7 @@ class WeightedParticleSimulator(nn.Module):
         tau_start: float = 0.0,
         tau_end: float = 1.0,
         perturbation_ids: Optional[List[str]] = None,
+        embedding_ids: Optional[List[str]] = None,
         tau_grid: Optional[torch.Tensor] = None,
         generator: Optional[torch.Generator] = None,
         noise_steps: Optional[torch.Tensor] = None,
@@ -173,6 +174,8 @@ class WeightedParticleSimulator(nn.Module):
         device = z0.device
         dtype = z0.dtype
         G, N, d = z0.shape
+        if embedding_ids is not None and len(embedding_ids) != G:
+            raise ValueError("embedding_ids length must match z0.shape[0].")
         if generator is not None and noise_steps is not None:
             raise ValueError("Pass either generator or noise_steps, not both")
 
@@ -241,6 +244,8 @@ class WeightedParticleSimulator(nn.Module):
                 "log_m0": log_m0,
                 "perturbation_ids": perturbation_ids,
             }
+            if embedding_ids is not None:
+                step_kwargs["embedding_ids"] = embedding_ids
             if intervention is not None:
                 step_kwargs["intervention"] = intervention
             selected_context_override = self._context_override_at_step(context_override, k)

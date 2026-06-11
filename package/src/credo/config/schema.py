@@ -30,12 +30,14 @@ class DataConfig(BaseModel):
 
 class SingleTimeConfig(BaseModel):
     enabled: bool = False
+    view_level: Literal["view", "embedding"] = "view"
     context_protocol: Literal[
         "observed_snapshot",
         "source_reference",
         "self_consistent",
         "clamped_external",
     ] = "observed_snapshot"
+    context_sampling: Literal["fixed", "epoch_resample"] = "fixed"
     context_tau: float | Literal["auto", "source", "target", "midpoint"] = "auto"
     reference_scope: Literal["auto", "sample", "batch", "global"] = "auto"
     mass_mode: Literal["cell_count", "unit_mass", "obs_column", "unavailable"] = "unit_mass"

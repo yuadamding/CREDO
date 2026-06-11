@@ -425,6 +425,14 @@ class Trainer:
         self._weak_loss_replicas: Dict[str, WeakFormLoss] = {}
         self._target_cache: Dict[str, Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]] = {}
         self._count_tensor_cache: Dict[str, Dict[str, torch.Tensor]] = {}
+        embedding_map = endpoint.metadata.get("measure_to_embedding")
+        if not isinstance(embedding_map, dict):
+            embedding_map = endpoint.metadata.get("embedding_ids")
+        self._embedding_ids_by_pid: Dict[str, str] = (
+            {str(pid): str(embed_id) for pid, embed_id in embedding_map.items()}
+            if isinstance(embedding_map, dict)
+            else {}
+        )
 
         tc = config.training
         sc = config.simulation
@@ -522,6 +530,12 @@ class Trainer:
             perturbation_ids[start:start + batch_size]
             for start in range(0, len(perturbation_ids), batch_size)
         ]
+
+    def _embedding_ids_for_pids(self, perturbation_ids: List[str]) -> List[str]:
+        """Return model embedding IDs for endpoint measure keys."""
+        if not self._embedding_ids_by_pid:
+            return list(perturbation_ids)
+        return [self._embedding_ids_by_pid.get(str(pid), str(pid)) for pid in perturbation_ids]
 
     def _sync_replica_from_primary(self, replica: FullDynamicsModel) -> None:
         replica.load_state_dict(self.model.state_dict())
@@ -712,8 +726,13 @@ class Trainer:
 
     def _control_mask_for_pids(self, perturbation_ids: List[str], device: torch.device | str) -> torch.Tensor:
         control_ids = set(getattr(self.model, "control_ids", set()))
+        control_measure_keys = set(self.endpoint.metadata.get("control_measure_keys", []))
+        embedding_ids = self._embedding_ids_for_pids(perturbation_ids)
         return torch.tensor(
-            [pid in control_ids for pid in perturbation_ids],
+            [
+                pid in control_measure_keys or embed_pid in control_ids
+                for pid, embed_pid in zip(perturbation_ids, embedding_ids)
+            ],
             device=device,
             dtype=torch.bool,
         )
@@ -736,6 +755,9 @@ class Trainer:
                     for pid, target in zip(self.supported_pids, target_ids)
                 }
                 return [target_by_pid.get(pid, pid) for pid in perturbation_ids], True
+        endpoint_targets = self.endpoint.metadata.get("target_ids")
+        if isinstance(endpoint_targets, dict):
+            return [str(endpoint_targets.get(pid, pid)) for pid in perturbation_ids], True
         return list(perturbation_ids), False
 
     def _causal_loss_scale(self, epoch: Optional[int]) -> float:
@@ -1028,6 +1050,7 @@ class Trainer:
                 model=self.model,
                 log_m0=log_m0,
                 perturbation_ids=perturbation_ids,
+                embedding_ids=self._embedding_ids_for_pids(perturbation_ids),
                 context_override=context_override,
             )
 
@@ -1142,6 +1165,12 @@ class Trainer:
         perturbation_ids: List[str],
         seed_offset: int = 0,
     ) -> Dict[str, float]:
+        if self.context_override_provider is not None or self.extra_loss_callback is not None:
+            raise ValueError(
+                "Custom context overrides or extra rollout losses are not implemented in "
+                "the chunked trainer path. Set max_active_perturbations=0 or implement "
+                "chunk-aware single-time hooks."
+            )
         tc = self.config.training
         sc = self.config.simulation
 
@@ -1232,14 +1261,15 @@ class Trainer:
                     stop = start + len(state["pids"])
                     group_slices.append(slice(start, stop))
                     start = stop
+                embedding_ids_all = self._embedding_ids_for_pids(pids_all)
 
                 with autocast_ctx:
                     z_all = torch.cat([state["z"] for state in chunk_states], dim=0)
                     logw_all = torch.cat([state["logw"] for state in chunk_states], dim=0)
                     log_m0_all = torch.cat([state["log_m0"] for state in chunk_states], dim=0)
-                    a_all = self.model.embedding(pids_all)
-                    residual_all = self.model.embedding.residuals(pids_all)
-                    b_all = self.model.embedding.growth_intercepts(pids_all)
+                    a_all = self.model.embedding(embedding_ids_all)
+                    residual_all = self.model.embedding.residuals(embedding_ids_all)
+                    b_all = self.model.embedding.growth_intercepts(embedding_ids_all)
                     context_kind = getattr(self.model, "context_kind", "mlp")
                     if context_kind == "causal_attention":
                         ctx_state = self.model.context_agg(
@@ -1356,9 +1386,10 @@ class Trainer:
             local_cache: list[dict[str, torch.Tensor]] = []
 
             for state in chunk_states:
+                local_embedding_ids = self._embedding_ids_for_pids(state["pids"])
                 with autocast_ctx:
-                    a_local = self.model.embedding(state["pids"])
-                    b_local = self.model.embedding.growth_intercepts(state["pids"])
+                    a_local = self.model.embedding(local_embedding_ids)
+                    b_local = self.model.embedding.growth_intercepts(local_embedding_ids)
                     eta_local, phi_local = self.model.context_agg.encode_particles(state["z"])
                     stats_local, _, _ = self.model.context_agg.summarize_groups(
                         state["z"],
@@ -1697,9 +1728,10 @@ class Trainer:
                 z_local = state["z"]
                 logw_local = state["logw"]
                 log_m0_local = state["log_m0"]
+                local_embedding_ids = self._embedding_ids_for_pids(local_pids)
                 with autocast_ctx_for(device):
-                    a_local = model.embedding(local_pids)
-                    b_local = model.embedding.growth_intercepts(local_pids)
+                    a_local = model.embedding(local_embedding_ids)
+                    b_local = model.embedding.growth_intercepts(local_embedding_ids)
                     eta_local, phi_local = model.context_agg.encode_particles(z_local)
                     stats_local, _, _ = model.context_agg.summarize_groups(
                         z_local,

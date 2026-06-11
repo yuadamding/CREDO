@@ -9,7 +9,12 @@ import torch
 from ..data.single_time import SingleTimeContextProtocol, SingleTimeProblem
 from .full_model import FullDynamicsModel
 from .single_time_context import ContextTau, SingleTimeContextProvider
-from .simulator import CounterfactualResult, _control_embedding_context, initialise_particles_from_measures
+from .simulator import (
+    CounterfactualResult,
+    _control_embedding_context,
+    embedding_ids_from_endpoint,
+    initialise_particles_from_measures,
+)
 from .weighted_sde import WeightedParticleSimulator
 
 
@@ -40,6 +45,7 @@ class SingleTimeCounterfactualEngine:
             protocol=protocol,
             context_tau=context_tau,
             context_override=context_override,
+            endpoint=problem.to_effect_endpoint_problem(view_level="view"),
         ).build(self.model, seed=seed)
 
     @torch.no_grad()
@@ -60,12 +66,37 @@ class SingleTimeCounterfactualEngine:
             raise ValueError(
                 "control_rollout_mode must be 'reference_consistent' or 'zero_centered'."
             )
-        endpoint = problem.to_effect_endpoint_problem()
+        endpoint = problem.to_effect_endpoint_problem(view_level="view")
         all_pids = endpoint.perturbation_ids
-        target_pids = perturbation_ids or problem.perturbation_ids
-        unknown = [pid for pid in target_pids if pid not in all_pids]
-        if unknown:
-            raise KeyError(f"Unknown single-time perturbation_ids: {unknown}")
+        control_measure_keys = set(endpoint.metadata.get("control_measure_keys", []))
+        measure_to_embedding = endpoint.metadata.get("measure_to_embedding", {})
+        measure_to_original = endpoint.metadata.get("measure_to_original_perturbation", {})
+
+        def _resolve_targets(requested: Optional[List[str]]) -> list[str]:
+            if requested is None:
+                return [pid for pid in all_pids if pid not in control_measure_keys]
+            resolved: list[str] = []
+            unknown: list[str] = []
+            for item in requested:
+                key = str(item)
+                if key in all_pids:
+                    resolved.append(key)
+                    continue
+                matches = [
+                    pid for pid in all_pids
+                    if str(measure_to_embedding.get(pid, pid)) == key
+                    or str(measure_to_original.get(pid, pid)) == key
+                ]
+                if matches:
+                    resolved.extend(matches)
+                else:
+                    unknown.append(key)
+            if unknown:
+                raise KeyError(f"Unknown single-time perturbation_ids: {unknown}")
+            return list(dict.fromkeys(resolved))
+
+        target_pids = _resolve_targets(perturbation_ids)
+        all_embedding_ids = embedding_ids_from_endpoint(endpoint, all_pids)
 
         z0_all, lw0_all, lm0_all = initialise_particles_from_measures(
             endpoint.initial,
@@ -96,6 +127,7 @@ class SingleTimeCounterfactualEngine:
             model=self.model,
             log_m0=lm0_all,
             perturbation_ids=all_pids,
+            embedding_ids=all_embedding_ids,
             noise_steps=noise_steps,
             return_noise_used=common_noise,
             context_override=selected_context_override,
@@ -103,13 +135,15 @@ class SingleTimeCounterfactualEngine:
 
         results: list[CounterfactualResult] = []
         for pid in target_pids:
-            with _control_embedding_context(self.model, pid, mode=control_rollout_mode):
+            target_embedding_id = embedding_ids_from_endpoint(endpoint, [pid])[0]
+            with _control_embedding_context(self.model, target_embedding_id, mode=control_rollout_mode):
                 reference_all = self.simulator.rollout(
                     z0=z0_all.clone(),
                     logw0=lw0_all.clone(),
                     model=self.model,
                     log_m0=lm0_all.clone(),
                     perturbation_ids=all_pids,
+                    embedding_ids=all_embedding_ids,
                     noise_steps=noise_steps.clone() if noise_steps is not None else None,
                     return_noise_used=common_noise,
                     context_override=selected_context_override,
@@ -118,12 +152,19 @@ class SingleTimeCounterfactualEngine:
             metadata = {
                 **endpoint.metadata,
                 "counterfactual_type": "single_time_effect_path",
-                "target_perturbation_id": pid,
+                "target_measure_key": pid,
+                "target_perturbation_id": endpoint.metadata.get(
+                    "measure_to_original_perturbation",
+                    {},
+                ).get(pid, pid),
+                "target_embedding_id": target_embedding_id,
                 "same_reference_source": True,
                 "same_start": True,
+                "same_start_semantics": "constructed_reference_source",
                 "same_noise": bool(common_noise),
                 "context_protocol": selected_protocol,
                 "context_tau": context_tau,
+                "context_sampling": "fixed",
                 "initial_seed": int(seed),
                 "noise_seed": noise_seed if common_noise else None,
                 "factual_full_context_reused": True,

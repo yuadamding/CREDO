@@ -8,6 +8,7 @@ control-reference -> observed-snapshot effect axis.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
@@ -18,7 +19,8 @@ from .core import EndpointProblem, FiniteMeasure, PerturbationCatalog, TimeAxis
 
 
 SingleTimeMassMode = Literal["cell_count", "unit_mass", "obs_column", "unavailable"]
-SingleTimeEmbeddingLevel = Literal["perturbation", "guide", "target_gene", "target_plus_guide_residual"]
+SingleTimeEmbeddingLevel = Literal["perturbation", "guide", "target_gene"]
+SingleTimeEndpointViewLevel = Literal["embedding", "perturbation", "view"]
 ControlReferenceScope = Literal["auto", "sample", "batch", "global"]
 SingleTimeContextProtocol = Literal[
     "observed_snapshot",
@@ -196,16 +198,19 @@ class SingleTimeProblem:
     def to_effect_endpoint_problem(
         self,
         *,
-        view_level: Literal["perturbation", "view"] = "perturbation",
+        view_level: SingleTimeEndpointViewLevel = "view",
     ) -> EndpointProblem:
         """Return a two-point control-reference -> observed effect problem."""
-        if view_level not in {"perturbation", "view"}:
-            raise ValueError("view_level must be 'perturbation' or 'view'.")
-        if view_level == "view":
+        if view_level not in {"embedding", "perturbation", "view"}:
+            raise ValueError("view_level must be 'view', 'embedding', or 'perturbation'.")
+        pooled_by_embedding = view_level in {"embedding", "perturbation"}
+        metadata_view_level = "embedding" if pooled_by_embedding else "view"
+        if not pooled_by_embedding:
             initial = {view.view_id: view.source for view in self.views}
             terminal = {view.view_id: view.target for view in self.views}
             pids = [view.view_id for view in self.views]
             embedding_ids = {view.view_id: view.embedding_id for view in self.views}
+            views_by_key = {view.view_id: [view] for view in self.views}
         else:
             by_embedding: dict[str, list[SingleTimeView]] = {}
             for view in self.views:
@@ -214,6 +219,35 @@ class SingleTimeProblem:
             initial = {pid: _pool_measures([view.source for view in by_embedding[pid]]) for pid in pids}
             terminal = {pid: _pool_measures([view.target for view in by_embedding[pid]]) for pid in pids}
             embedding_ids = {pid: pid for pid in pids}
+            views_by_key = by_embedding
+
+        def _unique_or_none(values: list[str | None]) -> str | None:
+            unique = sorted({str(value) for value in values if value is not None})
+            if len(unique) == 1:
+                return unique[0]
+            return None
+
+        measure_to_original = {
+            key: _unique_or_none([view.perturbation_id for view in views_by_key[key]]) or key
+            for key in pids
+        }
+        measure_to_target = {
+            key: _unique_or_none([view.target_gene for view in views_by_key[key]])
+            for key in pids
+        }
+        measure_to_guide = {
+            key: _unique_or_none([view.guide_id for view in views_by_key[key]])
+            for key in pids
+        }
+        guide_residual_ids = {
+            key: _unique_or_none([view.guide_residual_id for view in views_by_key[key]])
+            for key in pids
+        }
+        control_measure_keys = [
+            key
+            for key in pids
+            if any(view.is_control for view in views_by_key[key])
+        ]
 
         metadata = {
             **self.metadata,
@@ -226,20 +260,24 @@ class SingleTimeProblem:
             "mass_mode": self.mass_mode,
             "abundance_claims_allowed": self.abundance_claims_allowed,
             "abundance_claim_grade": self.abundance_claim_grade,
-            "view_level": view_level,
+            "single_time_abundance_claim_grade": self.abundance_claim_grade,
+            "view_level": metadata_view_level,
+            "measure_keys": list(pids),
             "embedding_ids": embedding_ids,
+            "measure_to_embedding": dict(embedding_ids),
+            "measure_to_original_perturbation": measure_to_original,
+            "measure_to_target_gene": measure_to_target,
+            "measure_to_guide": measure_to_guide,
+            "guide_residual_ids": guide_residual_ids,
+            "control_measure_keys": control_measure_keys,
+            "control_embedding_ids": list(self.catalog.control_ids),
             "target_ids": {
-                key: next(
-                    (
-                        view.target_gene
-                        for view in self.views
-                        if (view.view_id if view_level == "view" else view.embedding_id) == key
-                        and view.target_gene is not None
-                    ),
-                    key,
-                )
+                key: measure_to_target[key] or measure_to_original[key]
                 for key in pids
             },
+            "axis_interpretation": "effect_axis",
+            "counterfactual_source_semantics": "same_constructed_reference_source",
+            "same_start_semantics": "constructed_reference_source",
         }
         return EndpointProblem(
             initial=initial,
@@ -325,6 +363,7 @@ def build_single_time_problem_from_anndata(
     reference_scope: ControlReferenceScope = "auto",
     context_protocol: SingleTimeContextProtocol = "observed_snapshot",
     min_cells: int = 1,
+    control_split_seed: int = 0,
     metadata: Mapping[str, Any] | None = None,
 ) -> SingleTimeProblem:
     """Build a :class:`SingleTimeProblem` from an AnnData object or path."""
@@ -334,6 +373,14 @@ def build_single_time_problem_from_anndata(
         raise ValueError("Invalid single-time mass_mode.")
     if mass_mode == "obs_column" and not mass_value_col:
         raise ValueError("mass_value_col is required when mass_mode='obs_column'.")
+    if embedding_level == "target_plus_guide_residual":
+        raise NotImplementedError(
+            "embedding_level='target_plus_guide_residual' requires a hierarchical "
+            "target-plus-guide residual embedding module. Use 'target_gene' and "
+            "treat guide metadata as concordance diagnostics for now."
+        )
+    if embedding_level not in {"perturbation", "guide", "target_gene"}:
+        raise ValueError("embedding_level must be 'perturbation', 'guide', or 'target_gene'.")
     if isinstance(adata_or_path, (str, Path)):
         adata = ad.read_h5ad(adata_or_path)
     else:
@@ -390,11 +437,11 @@ def build_single_time_problem_from_anndata(
             target_gene = target_values_unique[0] if len(target_values_unique) == 1 else None
             if embedding_level == "guide":
                 embedding_id = guide_id or pid
-            elif embedding_level in {"target_gene", "target_plus_guide_residual"}:
+            elif embedding_level == "target_gene":
                 embedding_id = target_gene or pid
             else:
                 embedding_id = pid
-            guide_residual_id = guide_id if embedding_level == "target_plus_guide_residual" else None
+            guide_residual_id = None
             if pid in control_ids:
                 control_embedding_ids.add(embedding_id)
             sample_id = str(group_value) if group_col == "sample_id" and group_value is not None else None
@@ -415,6 +462,10 @@ def build_single_time_problem_from_anndata(
                 control_indices = np.flatnonzero(sample_mask)
                 if len(control_indices) < 2:
                     continue
+                split_key = f"{pid}|{group_col}|{group_value}|{control_split_seed}"
+                split_offset = int(hashlib.sha256(split_key.encode("utf-8")).hexdigest()[:12], 16)
+                rng = np.random.default_rng(int(control_split_seed) + split_offset)
+                control_indices = rng.permutation(control_indices)
                 split = max(1, len(control_indices) // 2)
                 source_indices = control_indices[:split]
                 target_indices = control_indices[split:]
@@ -466,6 +517,7 @@ __all__ = [
     "ControlReferenceBuilder",
     "ControlReferenceScope",
     "SingleTimeContextProtocol",
+    "SingleTimeEndpointViewLevel",
     "SingleTimeEmbeddingLevel",
     "SingleTimeMassMode",
     "SingleTimeProblem",

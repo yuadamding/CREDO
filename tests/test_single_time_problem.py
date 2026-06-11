@@ -28,7 +28,9 @@ from credo.models import (
     resolve_single_time_context_tau,
 )
 from credo.models.context import ContextState
+from credo.models.single_time_context import SingleTimeContextProvider
 from credo.training import SingleTimeTrainer
+from credo.training.trainer import Trainer
 
 
 pytestmark = pytest.mark.unit
@@ -62,6 +64,22 @@ def _single_time_adata() -> ad.AnnData:
 
 
 def _model() -> FullDynamicsModel:
+    torch.manual_seed(0)
+    return FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=2,
+        n_programs=2,
+        mediator_dim=1,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=False,
+        control_mode="soft_ref",
+    )
+
+
+def _target_gene_model() -> FullDynamicsModel:
     torch.manual_seed(0)
     return FullDynamicsModel(
         perturbation_ids=["ctrl", "gene_a", "gene_b"],
@@ -133,12 +151,26 @@ def test_single_time_problem_builds_nonphysical_effect_endpoint() -> None:
     assert endpoint.metadata["effect_axis_is_physical_time"] is False
     assert endpoint.metadata["claim_level"] == "single_time_effect_path"
     assert endpoint.metadata["context_protocol"] == "observed_snapshot"
-    assert endpoint.perturbation_ids == ["ctrl", "gene_a", "gene_b"]
+    assert endpoint.perturbation_ids == ["s1::ctrl", "s2::ctrl", "s1::gene_a", "s2::gene_b"]
     assert endpoint.metadata["abundance_claim_grade"] == "none"
+    assert endpoint.metadata["view_level"] == "view"
+    assert endpoint.metadata["measure_to_embedding"]["s1::gene_a"] == "gene_a"
+    assert endpoint.metadata["measure_to_original_perturbation"]["s1::gene_a"] == "gene_a"
+    assert endpoint.initial["s1::gene_a"].n_atoms == 2
+    assert endpoint.terminal["s1::gene_a"].n_atoms == 2
+    assert endpoint.initial["s1::ctrl"].n_atoms == 1
+    assert endpoint.terminal["s1::ctrl"].n_atoms == 1
+
+
+def test_single_time_effect_endpoint_can_pool_by_embedding() -> None:
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+    endpoint = problem.to_effect_endpoint_problem(view_level="embedding")
+
+    assert endpoint.perturbation_ids == ["ctrl", "gene_a", "gene_b"]
+    assert endpoint.metadata["view_level"] == "embedding"
+    assert endpoint.metadata["measure_to_embedding"]["gene_a"] == "gene_a"
     assert endpoint.initial["gene_a"].n_atoms == 2
     assert endpoint.terminal["gene_a"].n_atoms == 2
-    assert endpoint.initial["ctrl"].n_atoms == 2
-    assert endpoint.terminal["ctrl"].n_atoms == 2
 
 
 def test_single_time_problem_uses_batch_matching_without_sample_id() -> None:
@@ -207,7 +239,17 @@ def test_single_time_builder_stores_guide_target_metadata() -> None:
     gene_a = next(view for view in problem.views if view.embedding_id == "gene_a")
     assert gene_a.guide_id == "ga_g1"
     assert gene_a.target_gene == "gene_a"
-    assert endpoint.metadata["target_ids"]["gene_a"] == "gene_a"
+    assert endpoint.metadata["target_ids"]["s1::gene_a"] == "gene_a"
+    assert endpoint.metadata["measure_to_guide"]["s1::gene_a"] == "ga_g1"
+
+
+def test_single_time_target_plus_guide_residual_is_rejected_until_modeled() -> None:
+    data = _single_time_adata()
+    data.obs["guide_id"] = ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1", "ctrl_g1", "ctrl_g1", "gb_g1", "gb_g1"]
+    data.obs["target_gene"] = ["ctrl", "ctrl", "gene_a", "gene_a", "ctrl", "ctrl", "gene_b", "gene_b"]
+
+    with pytest.raises(NotImplementedError, match="hierarchical"):
+        build_single_time_problem_from_anndata(data, embedding_level="target_plus_guide_residual")
 
 
 def test_single_time_counterfactual_uses_same_reference_source_and_noise() -> None:
@@ -222,8 +264,11 @@ def test_single_time_counterfactual_uses_same_reference_source_and_noise() -> No
 
     assert result.metadata["counterfactual_type"] == "single_time_effect_path"
     assert result.metadata["same_reference_source"] is True
+    assert result.metadata["same_start_semantics"] == "constructed_reference_source"
     assert result.metadata["same_noise"] is True
     assert result.metadata["context_protocol"] == "observed_snapshot"
+    assert result.metadata["target_measure_key"] == "s1::gene_a"
+    assert result.metadata["target_embedding_id"] == "gene_a"
     assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
     assert torch.equal(result.rollout_perturb.logw_steps[0], result.rollout_control.logw_steps[0])
     assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
@@ -234,6 +279,24 @@ def test_single_time_context_tau_defaults_match_protocol() -> None:
     assert resolve_single_time_context_tau("source_reference", "auto") == 0.0
     assert resolve_single_time_context_tau("observed_snapshot", "midpoint") == 0.5
     assert resolve_single_time_context_tau("observed_snapshot", 0.25) == 0.25
+
+
+def test_single_time_context_provider_fixed_cache_reuses_context() -> None:
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+    endpoint = problem.to_effect_endpoint_problem(view_level="view")
+    provider = SingleTimeContextProvider(
+        problem=problem,
+        endpoint=endpoint,
+        n_particles=4,
+        protocol="observed_snapshot",
+        context_sampling="fixed",
+    )
+    model = _model()
+
+    ctx1 = provider.build(model, seed=1, perturbation_ids=endpoint.perturbation_ids)
+    ctx2 = provider.build(model, seed=999, perturbation_ids=endpoint.perturbation_ids)
+
+    assert ctx1 is ctx2
 
 
 def test_context_state_override_recomputes_mass_diagnostics() -> None:
@@ -295,6 +358,94 @@ def test_single_time_trainer_wires_context_and_extra_losses(tmp_path) -> None:
 
     assert result.history.loss_extra[0] >= 0.0
     assert result.claim_report["effect_axis_is_physical_time"] is False
+    assert result.claim_report["view_level"] == "view"
+    assert trainer.endpoint.perturbation_ids == ["s1::ctrl", "s2::ctrl", "s1::gene_a", "s2::gene_b"]
+    assert trainer.trainer._embedding_ids_for_pids(["s1::gene_a"]) == ["gene_a"]
+
+
+def test_single_time_trainer_can_use_target_gene_embedding_level(tmp_path) -> None:
+    data = _single_time_adata()
+    data.obs["guide_id"] = ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1", "ctrl_g1", "ctrl_g1", "gb_g1", "gb_g1"]
+    data.obs["target_gene"] = ["ctrl", "ctrl", "gene_a", "gene_a", "ctrl", "ctrl", "gene_b", "gene_b"]
+    problem = build_single_time_problem_from_anndata(
+        data,
+        reference_scope="sample",
+        embedding_level="target_gene",
+    )
+    config = RunConfig(
+        simulation={"n_particles": 4, "n_steps": 1, "store_history": True},
+        training={"epochs": 1, "lambda_count": 0.0, "lambda_weak": 0.0},
+        single_time={"enabled": True},
+    )
+
+    trainer = SingleTimeTrainer(
+        model=_target_gene_model(),
+        config=config,
+        problem=problem,
+        output_dir=str(tmp_path),
+        warmup_epochs=0,
+    )
+
+    assert trainer.endpoint.metadata["measure_to_embedding"]["s1::gene_a"] == "gene_a"
+    assert trainer.trainer._embedding_ids_for_pids(["s1::gene_a", "s2::gene_b"]) == ["gene_a", "gene_b"]
+
+
+def test_single_time_hooks_are_rejected_in_chunked_trainer(tmp_path) -> None:
+    config = RunConfig(
+        simulation={"n_particles": 4, "n_steps": 1, "store_history": True},
+        training={
+            "epochs": 1,
+            "lambda_count": 0.0,
+            "lambda_weak": 0.0,
+            "max_active_perturbations": 1,
+        },
+        single_time={"enabled": True},
+    )
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+    endpoint = problem.to_effect_endpoint_problem(view_level="view")
+    trainer = Trainer(
+        model=_model(),
+        config=config,
+        endpoint=endpoint,
+        supported_pids=endpoint.perturbation_ids,
+        output_dir=str(tmp_path),
+        particle_sampling="measure_weights",
+        context_override_provider=lambda **_: None,
+        extra_loss_callback=lambda **_: (torch.tensor(0.0), {}),
+    )
+    optimizer = trainer._build_optimizer(stage="all")
+
+    with pytest.raises(ValueError, match="full perturbation rollout|chunked trainer"):
+        trainer._one_epoch(
+            optimizer,
+            epoch=0,
+            stage="all",
+            perturbation_ids=endpoint.perturbation_ids,
+        )
+
+
+def test_control_cell_split_is_seeded() -> None:
+    obs = pd.DataFrame(
+        {
+            "cell_id": [f"c{i}" for i in range(12)],
+            "perturbation_id": ["ctrl"] * 6 + ["gene_a"] * 6,
+            "is_control": [True] * 6 + [False] * 6,
+            "sample_id": ["s1"] * 12,
+        },
+        index=[f"cell_{i}" for i in range(12)],
+    )
+    data = ad.AnnData(X=np.ones((12, 3), dtype=np.float32), obs=obs)
+    data.obsm["X_pca"] = np.stack([np.asarray([float(i), 0.0]) for i in range(12)]).astype(np.float32)
+
+    p1 = build_single_time_problem_from_anndata(data, control_split_seed=1, reference_scope="sample")
+    p2 = build_single_time_problem_from_anndata(data, control_split_seed=1, reference_scope="sample")
+    p3 = build_single_time_problem_from_anndata(data, control_split_seed=9, reference_scope="sample")
+    ctrl1 = next(view for view in p1.views if view.is_control)
+    ctrl2 = next(view for view in p2.views if view.is_control)
+    ctrl3 = next(view for view in p3.views if view.is_control)
+
+    assert np.array_equal(ctrl1.source.support, ctrl2.source.support)
+    assert not np.array_equal(ctrl1.source.support, ctrl3.source.support)
 
 
 def test_single_time_regularizer_helpers() -> None:

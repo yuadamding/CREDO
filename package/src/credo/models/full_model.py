@@ -324,14 +324,18 @@ class FullDynamicsModel(nn.Module):
         logw: torch.Tensor,   # [G, N]
         log_m0: torch.Tensor, # [G]
         perturbation_ids: Optional[List[str]] = None,
+        embedding_ids: Optional[List[str]] = None,
         intervention: Optional[CausalAttentionIntervention] = None,
         context_override: Any = None,
     ) -> Tuple[Coefficients, ContextState]:
         """One step of the dynamics: compute context and coefficients."""
         pids = perturbation_ids or self.perturbation_ids
-        a = self.embedding(pids)   # [G, r]
-        delta = self.embedding.residuals(pids)
-        b_g = self.embedding.growth_intercepts(pids)  # [G]
+        embed_pids = embedding_ids or pids
+        if len(embed_pids) != len(pids):
+            raise ValueError("embedding_ids length must match perturbation_ids length.")
+        a = self.embedding(embed_pids)   # [G, r]
+        delta = self.embedding.residuals(embed_pids)
+        b_g = self.embedding.growth_intercepts(embed_pids)  # [G]
 
         if context_override is not None:
             ctx_state = self._coerce_context_override(

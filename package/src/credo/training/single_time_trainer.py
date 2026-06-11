@@ -47,14 +47,31 @@ class SingleTimeTrainer:
         warmup_epochs: int = 50,
     ) -> None:
         self.problem = problem
-        self.endpoint = problem.to_effect_endpoint_problem()
+        single_time_config = config.single_time
+        endpoint_view_level = (
+            single_time_config.view_level
+            if single_time_config.enabled
+            else "view"
+        )
+        self.endpoint = problem.to_effect_endpoint_problem(view_level=endpoint_view_level)
         self._control_embedding_ids = {
             view.embedding_id
             for view in problem.views
             if view.is_control
         }
+        self._control_measure_keys = set(self.endpoint.metadata.get("control_measure_keys", []))
         self._target_ids_by_pid = dict(self.endpoint.metadata.get("target_ids", {}))
-        single_time_config = config.single_time
+        embedding_ids = {
+            str(value)
+            for value in self.endpoint.metadata.get("measure_to_embedding", {}).values()
+        }
+        missing_embeddings = sorted(embedding_ids - set(model.perturbation_ids))
+        if missing_embeddings:
+            raise ValueError(
+                "SingleTimeTrainer endpoint requires model embeddings for "
+                f"{missing_embeddings[:10]}. Construct FullDynamicsModel with the "
+                "SingleTimeProblem catalog embedding IDs."
+            )
         selected_protocol = (
             single_time_config.context_protocol
             if single_time_config.enabled
@@ -66,6 +83,8 @@ class SingleTimeTrainer:
             device=config.resolve_device(),
             protocol=selected_protocol,
             context_tau=single_time_config.context_tau,
+            endpoint=self.endpoint,
+            context_sampling=single_time_config.context_sampling,
         )
         self.trainer = Trainer(
             model=model,
@@ -83,7 +102,19 @@ class SingleTimeTrainer:
 
     @property
     def claim_report(self) -> dict[str, object]:
-        return self.problem.claim_report()
+        report = self.problem.claim_report()
+        report.update(
+            {
+                "view_level": self.endpoint.metadata.get("view_level"),
+                "context_sampling": self.trainer.config.single_time.context_sampling,
+                "counterfactual_source_semantics": self.endpoint.metadata.get(
+                    "counterfactual_source_semantics",
+                ),
+                "measure_key_semantics": "view_level_finite_measure_key",
+                "embedding_id_semantics": "model_perturbation_embedding_key",
+            }
+        )
+        return report
 
     def _context_override_for_training(
         self,
@@ -117,7 +148,11 @@ class SingleTimeTrainer:
 
         if stc.lambda_control_null > 0:
             control_mask = torch.tensor(
-                [pid in self._control_embedding_ids for pid in perturbation_ids],
+                [
+                    pid in self._control_measure_keys
+                    or self.trainer._embedding_ids_by_pid.get(pid, pid) in self._control_embedding_ids
+                    for pid in perturbation_ids
+                ],
                 device=device,
                 dtype=torch.bool,
             )
