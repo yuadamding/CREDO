@@ -22,17 +22,21 @@ def control_null_effect_loss(effect_scores: torch.Tensor, is_control: torch.Tens
 def minimal_effect_action_loss(
     *,
     drift_steps: torch.Tensor | None = None,
+    sigma_steps: torch.Tensor | None = None,
     growth_steps: torch.Tensor | None = None,
     drift_weight: float = 1.0,
+    diffusion_weight: float = 1.0,
     growth_weight: float = 1.0,
 ) -> torch.Tensor:
     """Small-action regularizer for underidentified single-time effect paths."""
-    tensors = [tensor for tensor in (drift_steps, growth_steps) if tensor is not None]
+    tensors = [tensor for tensor in (drift_steps, sigma_steps, growth_steps) if tensor is not None]
     if not tensors:
         return torch.tensor(0.0)
     loss = tensors[0].new_tensor(0.0)
     if drift_steps is not None and drift_weight > 0:
         loss = loss + float(drift_weight) * drift_steps.square().mean()
+    if sigma_steps is not None and diffusion_weight > 0:
+        loss = loss + float(diffusion_weight) * sigma_steps.square().mean()
     if growth_steps is not None and growth_weight > 0:
         loss = loss + float(growth_weight) * growth_steps.square().mean()
     return loss

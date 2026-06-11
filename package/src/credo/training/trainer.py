@@ -22,7 +22,7 @@ import time
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -154,6 +154,7 @@ class TrainingHistory:
     loss_count: List[float] = field(default_factory=list)
     loss_reg: List[float] = field(default_factory=list)
     loss_causal: List[float] = field(default_factory=list)
+    loss_extra: List[float] = field(default_factory=list)
     context_norm: List[float] = field(default_factory=list)
     q_entropy: List[float] = field(default_factory=list)
     freq_entropy: List[float] = field(default_factory=list)
@@ -196,6 +197,7 @@ class TrainingHistory:
             "loss_count": self.loss_count,
             "loss_reg": self.loss_reg,
             "loss_causal": self.loss_causal,
+            "loss_extra": self.loss_extra,
             "context_norm": self.context_norm,
             "q_entropy": self.q_entropy,
             "freq_entropy": self.freq_entropy,
@@ -400,12 +402,18 @@ class Trainer:
         output_dir: str = "outputs",
         ema_decay: float = 0.995,
         warmup_epochs: int = 50,
+        particle_sampling: str = "uniform",
+        context_override_provider: Optional[Callable[..., Any]] = None,
+        extra_loss_callback: Optional[Callable[..., Tuple[torch.Tensor, Dict[str, float]]]] = None,
     ) -> None:
         self.model = model
         self.config = config
         self.endpoint = endpoint
         self.supported_pids = supported_pids
         self.count_data = count_data
+        self.particle_sampling = particle_sampling
+        self.context_override_provider = context_override_provider
+        self.extra_loss_callback = extra_loss_callback
         self.training_devices = config.resolve_training_devices()
         self.device = self.training_devices[0]
         self.dtype = torch.float32
@@ -427,6 +435,7 @@ class Trainer:
         self._needs_rollout_history = (
             (tc.lambda_weak > 0) or (tc.lambda_count > 0) or has_trajectory_reg
             or _uses_global_context_backend(model)
+            or (extra_loss_callback is not None)
         )
         self.precision = tc.precision
         self.autocast_enabled = self.device.startswith("cuda") and self.precision in {"fp16", "bf16"}
@@ -650,6 +659,7 @@ class Trainer:
                 device=self.device,
                 dtype=dtype,
                 seed=self._pid_seed(base_seed, pid),
+                sampling=self.particle_sampling,
             )
             z_parts.append(z_pid)
             logw_parts.append(logw_pid)
@@ -923,9 +933,21 @@ class Trainer:
                 "Global ecological context is not supported with multi-GPU sharding yet. "
                 "Use a single training device so context is computed from the full perturbation set."
             )
+        if self._can_use_multi_gpu() and (
+            self.context_override_provider is not None or self.extra_loss_callback is not None
+        ):
+            raise ValueError(
+                "Custom context overrides or extra rollout losses are not supported with "
+                "the current multi-GPU single-model path."
+            )
         if not self._can_use_multi_gpu():
             batch_size = self._perturbation_batch_size(perturbation_ids)
             if batch_size < len(perturbation_ids):
+                if self.context_override_provider is not None or self.extra_loss_callback is not None:
+                    raise ValueError(
+                        "Custom context overrides or extra rollout losses require full perturbation "
+                        "rollout in the current trainer. Set max_active_perturbations=0."
+                    )
                 if _uses_global_ecological_context(self.model):
                     batching_mode = getattr(
                         self.config.training,
@@ -977,6 +999,7 @@ class Trainer:
             device=self.device,
             dtype=rollout_dtype,
             seed=self.config.training.seed + seed_offset + epoch,
+            sampling=self.particle_sampling,
         )
 
         autocast_ctx = (
@@ -986,12 +1009,26 @@ class Trainer:
         )
 
         with autocast_ctx:
+            context_override = None
+            if self.context_override_provider is not None:
+                context_override = self.context_override_provider(
+                    trainer=self,
+                    model=self.model,
+                    endpoint=self.endpoint,
+                    perturbation_ids=perturbation_ids,
+                    z0=z0,
+                    logw0=logw0,
+                    log_m0=log_m0,
+                    epoch=epoch,
+                    stage=stage,
+                )
             rollout = self.simulator.rollout(
                 z0=z0,
                 logw0=logw0,
                 model=self.model,
                 log_m0=log_m0,
                 perturbation_ids=perturbation_ids,
+                context_override=context_override,
             )
 
         # --- Endpoint geometry-plus-log-mass loss (absolute log-weights) ---
@@ -1048,6 +1085,16 @@ class Trainer:
             lambda_growth_bias=tc.lambda_reg_growth_bias
         )
         loss_causal = self._causal_attention_loss_from_rollout(rollout, perturbation_ids, epoch=epoch)
+        loss_extra = torch.tensor(0.0, device=self.device)
+        extra_metrics: Dict[str, float] = {}
+        if self.extra_loss_callback is not None:
+            loss_extra, extra_metrics = self.extra_loss_callback(
+                trainer=self,
+                rollout=rollout,
+                perturbation_ids=perturbation_ids,
+                epoch=epoch,
+                stage=stage,
+            )
 
         # --- Total ---
         loss = (
@@ -1056,6 +1103,7 @@ class Trainer:
             + tc.lambda_count * loss_count
             + loss_reg
             + loss_causal
+            + loss_extra
         )
 
         optimizer.zero_grad()
@@ -1079,8 +1127,10 @@ class Trainer:
             "loss_count": float(loss_count.item()),
             "loss_reg": float(loss_reg.item()),
             "loss_causal": float(loss_causal.item()),
+            "loss_extra": float(loss_extra.item()),
             **_diagnostics_from_rollout(rollout),
         }
+        metrics.update(extra_metrics)
         metrics["ess_gate_status"] = _ess_gate_status(metrics, tc)
         return metrics
 
@@ -1508,6 +1558,7 @@ class Trainer:
                 perturbation_ids=perturbation_ids,
                 epoch=epoch,
             )
+        loss_extra = torch.tensor(0.0, device=self.device)
 
         loss = (
             tc.lambda_end * loss_end
@@ -1515,6 +1566,7 @@ class Trainer:
             + tc.lambda_count * loss_count
             + loss_reg
             + loss_causal
+            + loss_extra
         )
 
         model_reg = self.model.regularization(lambda_embed=tc.lambda_reg_embed)
@@ -1537,6 +1589,7 @@ class Trainer:
         metrics["loss_count"] = float(loss_count.item())
         metrics["loss_reg"] = float((loss_reg + model_reg).item())
         metrics["loss_causal"] = float(loss_causal.item())
+        metrics["loss_extra"] = float(loss_extra.item())
         metrics["loss_total"] = float((loss + model_reg).item())
         metrics["ess_gate_status"] = _ess_gate_status(metrics, tc)
         return metrics
@@ -1950,6 +2003,7 @@ class Trainer:
             self.history.loss_count.append(metrics["loss_count"])
             self.history.loss_reg.append(metrics["loss_reg"])
             self.history.loss_causal.append(float(metrics.get("loss_causal", 0.0)))
+            self.history.loss_extra.append(float(metrics.get("loss_extra", 0.0)))
             self.history.context_norm.append(float(metrics.get("context_norm", math.nan)))
             self.history.q_entropy.append(float(metrics.get("q_entropy", math.nan)))
             self.history.freq_entropy.append(float(metrics.get("freq_entropy", math.nan)))

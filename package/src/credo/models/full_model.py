@@ -242,32 +242,33 @@ class FullDynamicsModel(nn.Module):
                 return value.to(device=z.device, dtype=z.dtype)
             return value
 
+        diagnostics = None
         if isinstance(context_override, ContextState):
-            return ContextState(
-                q=_move_optional(context_override.q),
-                s=_move_optional(context_override.s),
-                context=_move_optional(context_override.context),
-                mass_g=_move_optional(context_override.mass_g),
-                freq_g=_move_optional(context_override.freq_g),
-                log_mass_g=_move_optional(context_override.log_mass_g),
-                log_total_mass=_move_optional(context_override.log_total_mass),
-                diagnostics=context_override.diagnostics,
-                base_context=_move_optional(context_override.base_context),
-                growth_context=_move_optional(context_override.growth_context),
-            )
-        if isinstance(context_override, dict):
+            context = context_override.context
+            q = context_override.q
+            s = context_override.s
+            base_context = context_override.base_context
+            growth_context = context_override.growth_context
+            diagnostics = context_override.diagnostics
+        elif isinstance(context_override, dict):
             if "context_state" in context_override:
                 state = context_override["context_state"]
                 if not isinstance(state, ContextState):
                     raise TypeError("context_override['context_state'] must be a ContextState.")
-                return state
-            if "context" not in context_override:
-                raise KeyError("context_override dict must contain 'context' or 'context_state'.")
-            context = context_override["context"]
-            q = context_override.get("q")
-            s = context_override.get("s")
-            base_context = context_override.get("base_context")
-            growth_context = context_override.get("growth_context")
+                context = state.context
+                q = state.q
+                s = state.s
+                base_context = state.base_context
+                growth_context = state.growth_context
+                diagnostics = state.diagnostics
+            else:
+                if "context" not in context_override:
+                    raise KeyError("context_override dict must contain 'context' or 'context_state'.")
+                context = context_override["context"]
+                q = context_override.get("q")
+                s = context_override.get("s")
+                base_context = context_override.get("base_context")
+                growth_context = context_override.get("growth_context")
         else:
             context = context_override
             q = None
@@ -311,6 +312,7 @@ class FullDynamicsModel(nn.Module):
             freq_g=freq_g,
             log_mass_g=log_mass_g,
             log_total_mass=log_total_mass,
+            diagnostics=diagnostics,
             base_context=base_context,
             growth_context=growth_context,
         )

@@ -18,6 +18,7 @@ from .core import EndpointProblem, FiniteMeasure, PerturbationCatalog, TimeAxis
 
 
 SingleTimeMassMode = Literal["cell_count", "unit_mass", "obs_column", "unavailable"]
+SingleTimeEmbeddingLevel = Literal["perturbation", "guide", "target_gene", "target_plus_guide_residual"]
 ControlReferenceScope = Literal["auto", "sample", "batch", "global"]
 SingleTimeContextProtocol = Literal[
     "observed_snapshot",
@@ -37,6 +38,9 @@ class SingleTimeView:
     source: FiniteMeasure
     target: FiniteMeasure
     is_control: bool = False
+    guide_id: str | None = None
+    target_gene: str | None = None
+    guide_residual_id: str | None = None
     sample_id: str | None = None
     batch_id: str | None = None
     reference_scope: str = "global"
@@ -144,7 +148,7 @@ class SingleTimeProblem:
     views: list[SingleTimeView]
     catalog: PerturbationCatalog
     context_protocol: SingleTimeContextProtocol = "observed_snapshot"
-    mass_mode: SingleTimeMassMode = "cell_count"
+    mass_mode: SingleTimeMassMode = "unit_mass"
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -173,7 +177,15 @@ class SingleTimeProblem:
 
     @property
     def abundance_claims_allowed(self) -> bool:
-        return self.mass_mode not in {"unit_mass", "unavailable"}
+        return self.abundance_claim_grade == "claim_grade"
+
+    @property
+    def abundance_claim_grade(self) -> Literal["none", "diagnostic", "claim_grade"]:
+        if self.mass_mode in {"unit_mass", "unavailable"}:
+            return "none"
+        if self.mass_mode == "cell_count":
+            return "diagnostic"
+        return "claim_grade"
 
     @property
     def claim_level(self) -> str:
@@ -213,8 +225,21 @@ class SingleTimeProblem:
             "context_protocol": self.context_protocol,
             "mass_mode": self.mass_mode,
             "abundance_claims_allowed": self.abundance_claims_allowed,
+            "abundance_claim_grade": self.abundance_claim_grade,
             "view_level": view_level,
             "embedding_ids": embedding_ids,
+            "target_ids": {
+                key: next(
+                    (
+                        view.target_gene
+                        for view in self.views
+                        if (view.view_id if view_level == "view" else view.embedding_id) == key
+                        and view.target_gene is not None
+                    ),
+                    key,
+                )
+                for key in pids
+            },
         }
         return EndpointProblem(
             initial=initial,
@@ -232,6 +257,7 @@ class SingleTimeProblem:
             "context_protocol": self.context_protocol,
             "mass_mode": self.mass_mode,
             "abundance_claims_allowed": self.abundance_claims_allowed,
+            "abundance_claim_grade": self.abundance_claim_grade,
             "n_views": len(self.views),
             "n_perturbations": len(self.perturbation_ids),
             "control_ids": list(self.catalog.control_ids),
@@ -245,6 +271,8 @@ def _normalise_single_time_obs(
     control_col: str,
     sample_col: str | None,
     batch_col: str | None,
+    guide_col: str | None,
+    target_gene_col: str | None,
 ) -> pd.DataFrame:
     out = obs.copy()
     if perturbation_col not in out:
@@ -252,6 +280,10 @@ def _normalise_single_time_obs(
     if control_col not in out:
         raise KeyError(f"AnnData obs missing control column {control_col!r}.")
     out["perturbation_id"] = out[perturbation_col].astype(str)
+    if guide_col is not None and guide_col in out:
+        out["guide_id"] = out[guide_col].astype(str)
+    if target_gene_col is not None and target_gene_col in out:
+        out["target_gene"] = out[target_gene_col].astype(str)
     if pd.api.types.is_bool_dtype(out[control_col]):
         out["is_control"] = out[control_col].to_numpy(dtype=bool)
     else:
@@ -282,10 +314,13 @@ def build_single_time_problem_from_anndata(
     *,
     latent_key: str = "X_pca",
     perturbation_col: str = "perturbation_id",
+    guide_col: str | None = "guide_id",
+    target_gene_col: str | None = "target_gene",
+    embedding_level: SingleTimeEmbeddingLevel = "perturbation",
     control_col: str = "is_control",
     sample_col: str | None = "sample_id",
     batch_col: str | None = "batch_id",
-    mass_mode: SingleTimeMassMode = "cell_count",
+    mass_mode: SingleTimeMassMode = "unit_mass",
     mass_value_col: str | None = None,
     reference_scope: ControlReferenceScope = "auto",
     context_protocol: SingleTimeContextProtocol = "observed_snapshot",
@@ -317,6 +352,8 @@ def build_single_time_problem_from_anndata(
         control_col=control_col,
         sample_col=sample_col if sample_col in adata.obs else None,
         batch_col=batch_col if batch_col in adata.obs else None,
+        guide_col=guide_col if guide_col is not None and guide_col in adata.obs else None,
+        target_gene_col=target_gene_col if target_gene_col is not None and target_gene_col in adata.obs else None,
     )
     if "sample_id" not in obs and "batch_id" not in obs:
         raise ValueError("Single-time AnnData requires obs['sample_id'] or obs['batch_id'].")
@@ -325,10 +362,10 @@ def build_single_time_problem_from_anndata(
 
     control_ids = sorted(obs.loc[obs["is_control"], "perturbation_id"].astype(str).unique().tolist())
     all_pids = sorted(obs["perturbation_id"].astype(str).unique().tolist())
-    catalog = PerturbationCatalog(all_pids, control_ids)
     ref_builder = ControlReferenceBuilder(control_ids=control_ids, scope=reference_scope)
 
     views: list[SingleTimeView] = []
+    control_embedding_ids: set[str] = set()
     for pid in all_pids:
         target_mask = obs["perturbation_id"].astype(str).eq(pid).to_numpy()
         if int(target_mask.sum()) < int(min_cells):
@@ -343,6 +380,23 @@ def build_single_time_problem_from_anndata(
             sample_sub = obs.loc[sample_mask]
             if len(sample_sub) < int(min_cells):
                 continue
+            guide_values = sorted(sample_sub["guide_id"].astype(str).unique().tolist()) if "guide_id" in obs else []
+            target_values_unique = (
+                sorted(sample_sub["target_gene"].astype(str).unique().tolist())
+                if "target_gene" in obs
+                else []
+            )
+            guide_id = guide_values[0] if len(guide_values) == 1 else None
+            target_gene = target_values_unique[0] if len(target_values_unique) == 1 else None
+            if embedding_level == "guide":
+                embedding_id = guide_id or pid
+            elif embedding_level in {"target_gene", "target_plus_guide_residual"}:
+                embedding_id = target_gene or pid
+            else:
+                embedding_id = pid
+            guide_residual_id = guide_id if embedding_level == "target_plus_guide_residual" else None
+            if pid in control_ids:
+                control_embedding_ids.add(embedding_id)
             sample_id = str(group_value) if group_col == "sample_id" and group_value is not None else None
             batch_id = str(group_value) if group_col == "batch_id" and group_value is not None else None
             if "batch_id" in obs and len(sample_sub) > 0:
@@ -356,9 +410,23 @@ def build_single_time_problem_from_anndata(
                     batch_id=batch_id,
                 )
             except ValueError:
-                if pid in control_ids:
+                if pid not in control_ids:
+                    raise
+                control_indices = np.flatnonzero(sample_mask)
+                if len(control_indices) < 2:
                     continue
-                raise
+                split = max(1, len(control_indices) // 2)
+                source_indices = control_indices[:split]
+                target_indices = control_indices[split:]
+                if len(target_indices) == 0:
+                    continue
+                source_mask = np.zeros(len(obs), dtype=bool)
+                source_mask[source_indices] = True
+                sample_mask = np.zeros(len(obs), dtype=bool)
+                sample_mask[target_indices] = True
+                used_scope = "control_cell_split"
+                used_controls = (pid,)
+                sample_sub = obs.loc[sample_mask]
             target_values = None if mass_value_col is None else obs.loc[sample_mask, mass_value_col].to_numpy()
             source_values = None if mass_value_col is None else obs.loc[source_mask, mass_value_col].to_numpy()
             target = _finite_measure(latent[sample_mask], mass_mode=mass_mode, mass_values=target_values)
@@ -369,10 +437,13 @@ def build_single_time_problem_from_anndata(
                 SingleTimeView(
                     view_id=view_id,
                     perturbation_id=pid,
-                    embedding_id=pid,
+                    embedding_id=embedding_id,
                     source=source,
                     target=target,
                     is_control=pid in control_ids,
+                    guide_id=guide_id,
+                    target_gene=target_gene,
+                    guide_residual_id=guide_residual_id,
                     sample_id=sample_id,
                     batch_id=batch_id,
                     reference_scope=used_scope,
@@ -380,6 +451,8 @@ def build_single_time_problem_from_anndata(
                 )
             )
 
+    catalog_ids = sorted({view.embedding_id for view in views} | control_embedding_ids)
+    catalog = PerturbationCatalog(catalog_ids, sorted(control_embedding_ids))
     return SingleTimeProblem(
         views=views,
         catalog=catalog,
@@ -393,6 +466,7 @@ __all__ = [
     "ControlReferenceBuilder",
     "ControlReferenceScope",
     "SingleTimeContextProtocol",
+    "SingleTimeEmbeddingLevel",
     "SingleTimeMassMode",
     "SingleTimeProblem",
     "SingleTimeView",

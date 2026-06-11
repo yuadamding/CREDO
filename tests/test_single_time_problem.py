@@ -21,7 +21,14 @@ from credo.losses import (
     minimal_effect_action_loss,
     single_time_guide_concordance_loss,
 )
-from credo.models import FullDynamicsModel, SingleTimeCounterfactualEngine, WeightedParticleSimulator
+from credo.models import (
+    FullDynamicsModel,
+    SingleTimeCounterfactualEngine,
+    WeightedParticleSimulator,
+    resolve_single_time_context_tau,
+)
+from credo.models.context import ContextState
+from credo.training import SingleTimeTrainer
 
 
 pytestmark = pytest.mark.unit
@@ -126,9 +133,12 @@ def test_single_time_problem_builds_nonphysical_effect_endpoint() -> None:
     assert endpoint.metadata["effect_axis_is_physical_time"] is False
     assert endpoint.metadata["claim_level"] == "single_time_effect_path"
     assert endpoint.metadata["context_protocol"] == "observed_snapshot"
-    assert endpoint.perturbation_ids == ["gene_a", "gene_b"]
+    assert endpoint.perturbation_ids == ["ctrl", "gene_a", "gene_b"]
+    assert endpoint.metadata["abundance_claim_grade"] == "none"
     assert endpoint.initial["gene_a"].n_atoms == 2
     assert endpoint.terminal["gene_a"].n_atoms == 2
+    assert endpoint.initial["ctrl"].n_atoms == 2
+    assert endpoint.terminal["ctrl"].n_atoms == 2
 
 
 def test_single_time_problem_uses_batch_matching_without_sample_id() -> None:
@@ -139,17 +149,35 @@ def test_single_time_problem_uses_batch_matching_without_sample_id() -> None:
     problem = build_single_time_problem_from_anndata(data, reference_scope="batch")
 
     assert {view.batch_id for view in problem.views} == {"b1", "b2"}
-    assert {view.reference_scope for view in problem.views} == {"batch"}
+    assert {
+        view.reference_scope
+        for view in problem.views
+        if not view.is_control
+    } == {"batch"}
+    assert {
+        view.reference_scope
+        for view in problem.views
+        if view.is_control
+    } == {"control_cell_split"}
 
 
 def test_single_time_unit_mass_disables_abundance_claims() -> None:
-    problem = build_single_time_problem_from_anndata(_single_time_adata(), mass_mode="unit_mass")
+    problem = build_single_time_problem_from_anndata(_single_time_adata())
 
     assert problem.abundance_claims_allowed is False
+    assert problem.abundance_claim_grade == "none"
     assert problem.to_effect_endpoint_problem().metadata["abundance_claims_allowed"] is False
 
 
-def test_single_time_config_rejects_abundance_claims_with_unavailable_mass() -> None:
+def test_single_time_cell_count_is_diagnostic_not_claim_grade() -> None:
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), mass_mode="cell_count")
+
+    assert problem.abundance_claims_allowed is False
+    assert problem.abundance_claim_grade == "diagnostic"
+    assert problem.to_effect_endpoint_problem().metadata["abundance_claim_grade"] == "diagnostic"
+
+
+def test_single_time_config_rejects_abundance_claims_without_claim_grade_mass() -> None:
     with pytest.raises(ValueError, match="abundance_claims"):
         RunConfig(
             single_time={
@@ -158,6 +186,28 @@ def test_single_time_config_rejects_abundance_claims_with_unavailable_mass() -> 
                 "abundance_claims": "enabled",
             }
         )
+    with pytest.raises(ValueError, match="cell_count"):
+        RunConfig(
+            single_time={
+                "enabled": True,
+                "mass_mode": "cell_count",
+                "abundance_claims": "enabled",
+            }
+        )
+
+
+def test_single_time_builder_stores_guide_target_metadata() -> None:
+    data = _single_time_adata()
+    data.obs["guide_id"] = ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1", "ctrl_g1", "ctrl_g1", "gb_g1", "gb_g1"]
+    data.obs["target_gene"] = ["ctrl", "ctrl", "gene_a", "gene_a", "ctrl", "ctrl", "gene_b", "gene_b"]
+
+    problem = build_single_time_problem_from_anndata(data, embedding_level="target_gene")
+    endpoint = problem.to_effect_endpoint_problem()
+
+    gene_a = next(view for view in problem.views if view.embedding_id == "gene_a")
+    assert gene_a.guide_id == "ga_g1"
+    assert gene_a.target_gene == "gene_a"
+    assert endpoint.metadata["target_ids"]["gene_a"] == "gene_a"
 
 
 def test_single_time_counterfactual_uses_same_reference_source_and_noise() -> None:
@@ -179,12 +229,84 @@ def test_single_time_counterfactual_uses_same_reference_source_and_noise() -> No
     assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
 
 
+def test_single_time_context_tau_defaults_match_protocol() -> None:
+    assert resolve_single_time_context_tau("observed_snapshot", "auto") == 1.0
+    assert resolve_single_time_context_tau("source_reference", "auto") == 0.0
+    assert resolve_single_time_context_tau("observed_snapshot", "midpoint") == 0.5
+    assert resolve_single_time_context_tau("observed_snapshot", 0.25) == 0.25
+
+
+def test_context_state_override_recomputes_mass_diagnostics() -> None:
+    model = _model()
+    z = torch.zeros(2, 3, 2)
+    logw = torch.full((2, 3), -np.log(3.0))
+    log_m0 = torch.tensor([0.0, 2.0])
+    override = ContextState(
+        q=torch.tensor([0.5, 0.5]),
+        s=torch.tensor([0.0]),
+        context=torch.tensor([0.5, 0.5, 0.0]),
+        mass_g=torch.ones(2) * 999.0,
+        freq_g=torch.tensor([0.5, 0.5]),
+        log_mass_g=torch.ones(2) * 999.0,
+        log_total_mass=torch.tensor(999.0),
+    )
+
+    _, ctx = model.step(
+        z=z,
+        tau=torch.tensor(0.0),
+        logw=logw,
+        log_m0=log_m0,
+        perturbation_ids=["gene_a", "ctrl"],
+        context_override=override,
+    )
+
+    assert torch.allclose(ctx.log_mass_g, log_m0, atol=1e-6)
+    assert not torch.allclose(ctx.mass_g, override.mass_g)
+
+
+def test_single_time_trainer_wires_context_and_extra_losses(tmp_path) -> None:
+    config = RunConfig(
+        simulation={"n_particles": 4, "n_steps": 2, "store_history": True},
+        training={
+            "epochs": 1,
+            "lambda_count": 0.0,
+            "lambda_weak": 0.0,
+            "lambda_reg_net": 0.0,
+            "lambda_reg_diffusion": 0.0,
+            "lambda_reg_embed": 0.0,
+        },
+        single_time={
+            "enabled": True,
+            "lambda_control_null": 0.1,
+            "lambda_minimal_action": 0.1,
+            "lambda_guide_concordance": 0.1,
+        },
+    )
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+    trainer = SingleTimeTrainer(
+        model=_model(),
+        config=config,
+        problem=problem,
+        output_dir=str(tmp_path),
+        warmup_epochs=0,
+    )
+
+    result = trainer.train(n_epochs=1)
+
+    assert result.history.loss_extra[0] >= 0.0
+    assert result.claim_report["effect_axis_is_physical_time"] is False
+
+
 def test_single_time_regularizer_helpers() -> None:
     effects = torch.tensor([0.1, 2.0, 4.0])
     is_control = torch.tensor([True, False, False])
 
     assert torch.isclose(control_null_effect_loss(effects, is_control), torch.tensor(0.01))
     assert minimal_effect_action_loss(growth_steps=torch.ones(2, 3, 4)).item() == pytest.approx(1.0)
+    assert minimal_effect_action_loss(
+        sigma_steps=torch.ones(2, 3, 4),
+        growth_steps=torch.ones(2, 3, 4),
+    ).item() == pytest.approx(2.0)
     assert single_time_guide_concordance_loss(
         torch.tensor([1.0, 3.0, 10.0]),
         ["gene_a", "gene_a", "gene_b"],

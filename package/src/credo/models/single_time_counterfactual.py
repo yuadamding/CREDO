@@ -8,6 +8,7 @@ import torch
 
 from ..data.single_time import SingleTimeContextProtocol, SingleTimeProblem
 from .full_model import FullDynamicsModel
+from .single_time_context import ContextTau, SingleTimeContextProvider
 from .simulator import CounterfactualResult, _control_embedding_context, initialise_particles_from_measures
 from .weighted_sde import WeightedParticleSimulator
 
@@ -27,34 +28,19 @@ class SingleTimeCounterfactualEngine:
         problem: SingleTimeProblem,
         *,
         protocol: Optional[SingleTimeContextProtocol] = None,
+        context_tau: ContextTau = "auto",
         seed: int = 0,
         context_override: Any = None,
     ) -> Any:
         """Build the static context override for the requested single-time protocol."""
-        selected = protocol or problem.context_protocol
-        if selected == "self_consistent":
-            return None
-        if selected == "clamped_external":
-            if context_override is None:
-                raise ValueError("context_protocol='clamped_external' requires context_override.")
-            return context_override
-        endpoint = problem.to_effect_endpoint_problem()
-        measures = endpoint.terminal if selected == "observed_snapshot" else endpoint.initial
-        z_ctx, lw_ctx, lm_ctx = initialise_particles_from_measures(
-            measures,
-            endpoint.perturbation_ids,
-            self.n_particles,
-            self.device,
-            seed=int(seed) + 50_000,
-        )
-        _, ctx = self.model.step(
-            z=z_ctx,
-            tau=torch.tensor(0.0, dtype=z_ctx.dtype, device=z_ctx.device),
-            logw=lw_ctx,
-            log_m0=lm_ctx,
-            perturbation_ids=endpoint.perturbation_ids,
-        )
-        return ctx
+        return SingleTimeContextProvider(
+            problem=problem,
+            n_particles=self.n_particles,
+            device=self.device,
+            protocol=protocol,
+            context_tau=context_tau,
+            context_override=context_override,
+        ).build(self.model, seed=seed)
 
     @torch.no_grad()
     def run(
@@ -66,6 +52,7 @@ class SingleTimeCounterfactualEngine:
         common_noise: bool = True,
         control_rollout_mode: str = "reference_consistent",
         context_protocol: Optional[SingleTimeContextProtocol] = None,
+        context_tau: ContextTau = "auto",
         context_override: Any = None,
     ) -> List[CounterfactualResult]:
         """Run factual vs. reference branches from the same matched control source."""
@@ -99,6 +86,7 @@ class SingleTimeCounterfactualEngine:
         selected_context_override = self.context_override_from_problem(
             problem,
             protocol=selected_protocol,
+            context_tau=context_tau,
             seed=seed,
             context_override=context_override,
         )
@@ -135,6 +123,7 @@ class SingleTimeCounterfactualEngine:
                 "same_start": True,
                 "same_noise": bool(common_noise),
                 "context_protocol": selected_protocol,
+                "context_tau": context_tau,
                 "initial_seed": int(seed),
                 "noise_seed": noise_seed if common_noise else None,
                 "factual_full_context_reused": True,
