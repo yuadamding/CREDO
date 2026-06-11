@@ -16,8 +16,32 @@ class DataConfig(BaseModel):
     train_level: Literal["gene", "sgrna"] = "gene"
     min_total_mass: Optional[float] = None
     mass_value_col: Optional[str] = None
-    mass_mode: Literal["auto", "count", "per_cell_contribution", "group_total"] = "auto"
+    mass_mode: Literal[
+        "auto",
+        "count",
+        "per_cell_contribution",
+        "group_total",
+        "cell_count",
+        "unit_mass",
+        "unavailable",
+    ] = "auto"
     mass_scope: Literal["full_obs", "subset_only"] = "subset_only"
+
+
+class SingleTimeConfig(BaseModel):
+    enabled: bool = False
+    context_protocol: Literal[
+        "observed_snapshot",
+        "source_reference",
+        "self_consistent",
+        "clamped_external",
+    ] = "observed_snapshot"
+    reference_scope: Literal["auto", "sample", "batch", "global"] = "auto"
+    mass_mode: Literal["cell_count", "unit_mass", "obs_column", "unavailable"] = "cell_count"
+    abundance_claims: Literal["auto", "enabled", "disabled"] = "auto"
+    lambda_control_null: float = 0.0
+    lambda_minimal_action: float = 0.0
+    lambda_guide_concordance: float = 0.0
 
 
 class VAEConfig(BaseModel):
@@ -321,6 +345,7 @@ class RunConfig(BaseModel):
     training: TrainingConfig = Field(default_factory=TrainingConfig)
     trajectory_training: TrajectoryTrainingConfig = Field(default_factory=TrajectoryTrainingConfig)
     eval: EvalConfig = Field(default_factory=EvalConfig)
+    single_time: SingleTimeConfig = Field(default_factory=SingleTimeConfig)
 
     @model_validator(mode="after")
     def _validate_run(self) -> "RunConfig":
@@ -328,6 +353,12 @@ class RunConfig(BaseModel):
             raise ValueError(
                 "lambda_count > 0 is not supported with the current multi-GPU single-model path."
             )
+        if self.single_time.enabled and self.single_time.mass_mode in {"unit_mass", "unavailable"}:
+            if self.single_time.abundance_claims == "enabled":
+                raise ValueError(
+                    "single_time abundance_claims cannot be enabled when mass_mode is "
+                    "'unit_mass' or 'unavailable'."
+                )
         return self
 
     def resolve_device(self) -> str:

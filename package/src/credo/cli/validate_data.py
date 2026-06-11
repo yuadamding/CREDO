@@ -16,6 +16,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="minimal",
         help="Generic CREDO schema profile to validate.",
     )
+    parser.add_argument(
+        "--schema-profile",
+        choices=sorted(SCHEMA_OBS_COLUMNS),
+        dest="schema",
+        help="Alias for --schema; includes the single_time profile.",
+    )
     parser.add_argument("--latent-key", default="X_pca", help="Required obsm latent key.")
     parser.add_argument(
         "--obs-column",

@@ -9,7 +9,7 @@ All mass computations use absolute log-weights and log-space reductions.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import torch
 import torch.nn as nn
@@ -145,6 +145,7 @@ class WeightedParticleSimulator(nn.Module):
         noise_steps: Optional[torch.Tensor] = None,
         return_noise_used: bool = False,
         intervention: Optional[object] = None,
+        context_override: Any = None,
     ) -> ParticleRollout:
         """Run the full Euler-Maruyama rollout.
 
@@ -164,6 +165,10 @@ class WeightedParticleSimulator(nn.Module):
             counterfactuals.
         return_noise_used: if true, attach the exact standard normal
             innovations consumed by the rollout to the returned object.
+        context_override: optional external context used at every step, or a
+            per-step sequence/tensor with length ``K``.  This is intended for
+            clamped single-time effect paths and diagnostics; the default
+            remains self-consistent generated-particle context.
         """
         device = z0.device
         dtype = z0.dtype
@@ -238,6 +243,9 @@ class WeightedParticleSimulator(nn.Module):
             }
             if intervention is not None:
                 step_kwargs["intervention"] = intervention
+            selected_context_override = self._context_override_at_step(context_override, k)
+            if selected_context_override is not None:
+                step_kwargs["context_override"] = selected_context_override
             coeffs, ctx = model.step(**step_kwargs)
 
             v = coeffs.drift      # [G, N, d]
@@ -347,6 +355,32 @@ class WeightedParticleSimulator(nn.Module):
             result.noise_steps = torch.stack(noise_used_list, dim=0)
 
         return result
+
+    @staticmethod
+    def _context_override_at_step(context_override: Any, step_index: int) -> Any:
+        """Select a static or step-indexed context override."""
+        if context_override is None:
+            return None
+        if torch.is_tensor(context_override):
+            if context_override.ndim >= 2:
+                return context_override[step_index]
+            return context_override
+        if isinstance(context_override, dict):
+            if "context_steps" in context_override:
+                selected = dict(context_override)
+                selected["context"] = context_override["context_steps"][step_index]
+                selected.pop("context_steps", None)
+                if "base_context_steps" in context_override:
+                    selected["base_context"] = context_override["base_context_steps"][step_index]
+                    selected.pop("base_context_steps", None)
+                if "growth_context_steps" in context_override:
+                    selected["growth_context"] = context_override["growth_context_steps"][step_index]
+                    selected.pop("growth_context_steps", None)
+                return selected
+            return context_override
+        if isinstance(context_override, (list, tuple)):
+            return context_override[step_index]
+        return context_override
 
     @staticmethod
     def _causal_delta(growth_context: torch.Tensor, context: torch.Tensor) -> torch.Tensor:

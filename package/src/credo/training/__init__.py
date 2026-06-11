@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .trainer import EMA, Trainer, TrainingHistory, WarmupCosineScheduler
+from .single_time_trainer import SingleTimeTrainer, SingleTimeTrainingHistory
 from .manifest import append_run_manifest_record, build_run_manifest, write_run_manifest
 from .trajectory_batch import (
     TrajectoryBatch,
@@ -13,6 +14,8 @@ from .trajectory_trainer import TrajectoryTrainer, TrajectoryTrainingHistory
 
 __all__ = [
     "EMA",
+    "SingleTimeTrainer",
+    "SingleTimeTrainingHistory",
     "Trainer",
     "TrainingHistory",
     "TrajectoryBatch",

@@ -466,6 +466,7 @@ class EndpointProblem:
     terminal: Dict[str, FiniteMeasure]
     time_axis: TimeAxis
     perturbation_ids: List[str]
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         for pid in self.perturbation_ids:

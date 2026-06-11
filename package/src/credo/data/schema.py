@@ -14,17 +14,19 @@ SCHEMA_OBS_COLUMNS = {
     "custom": (),
     "minimal": DEFAULT_OBS_COLUMNS,
     "endpoint": DEFAULT_OBS_COLUMNS,
+    "single_time": ("cell_id", "is_control"),
     "trajectory": ("perturbation_id", "time_label", "sample_id"),
 }
 STRICT_SCHEMA_OBS_COLUMNS = {
     "custom": (),
     "minimal": DEFAULT_OBS_COLUMNS,
     "endpoint": ("perturbation_id", "time_label", "sample_id"),
+    "single_time": ("cell_id", "is_control"),
     "trajectory": ("perturbation_id", "time_label", "sample_id", "physical_time"),
 }
 
 
-SchemaName = Literal["custom", "minimal", "endpoint", "trajectory"]
+SchemaName = Literal["custom", "minimal", "endpoint", "single_time", "trajectory"]
 
 
 def _dedupe_columns(columns: Iterable[str]) -> list[str]:
@@ -84,6 +86,9 @@ def validate_anndata_schema(
         "n_time_labels": None,
         "time_label_counts": {},
         "perturbation_counts": {},
+        "n_controls": None,
+        "n_non_controls": None,
+        "control_column_valid": None,
         "latent_key": latent_key,
         "latent_shape": None,
         "latent_dim": None,
@@ -130,6 +135,10 @@ def validate_anndata_schema(
         report["obs_columns_missing"] = missing
         if missing:
             errors.append("missing obs columns: " + ", ".join(missing))
+        if schema == "single_time" and "perturbation_id" not in data.obs and "guide_id" not in data.obs:
+            errors.append("single_time schema requires obs['perturbation_id'] or obs['guide_id']")
+        if schema == "single_time" and "sample_id" not in data.obs and "batch_id" not in data.obs:
+            errors.append("single_time schema requires obs['sample_id'] or obs['batch_id']")
         present_required = [column for column in required_obs_columns if column in data.obs]
         null_counts = {column: _column_null_count(data.obs[column]) for column in present_required}
         empty_counts = {column: _column_empty_count(data.obs[column]) for column in present_required}
@@ -149,6 +158,29 @@ def validate_anndata_schema(
             perturbation_counts = data.obs["perturbation_id"].astype(str).value_counts(dropna=False)
             report["n_perturbations"] = int(len(perturbation_counts))
             report["perturbation_counts"] = {str(key): int(value) for key, value in perturbation_counts.items()}
+        elif schema == "single_time" and "guide_id" in data.obs:
+            guide_counts = data.obs["guide_id"].astype(str).value_counts(dropna=False)
+            report["n_perturbations"] = int(len(guide_counts))
+            report["perturbation_counts"] = {str(key): int(value) for key, value in guide_counts.items()}
+        if schema == "single_time" and "is_control" in data.obs:
+            control_values = data.obs["is_control"]
+            if pd.api.types.is_bool_dtype(control_values):
+                control_mask = control_values.to_numpy(dtype=bool)
+                report["control_column_valid"] = True
+            else:
+                normalized = control_values.astype(str).str.strip().str.lower()
+                valid = normalized.isin({"true", "false", "1", "0", "yes", "no"})
+                report["control_column_valid"] = bool(valid.all())
+                if not bool(valid.all()):
+                    errors.append("single_time obs['is_control'] must be boolean-like")
+                control_mask = normalized.isin({"true", "1", "yes"}).to_numpy()
+            n_controls = int(control_mask.sum())
+            report["n_controls"] = n_controls
+            report["n_non_controls"] = int(len(control_mask) - n_controls)
+            if n_controls == 0:
+                errors.append("single_time schema requires at least one control cell")
+            if len(control_mask) - n_controls == 0:
+                errors.append("single_time schema requires at least one non-control cell")
         if "time_label" in data.obs:
             time_counts = data.obs["time_label"].astype(str).value_counts(dropna=False)
             report["n_time_labels"] = int(len(time_counts))

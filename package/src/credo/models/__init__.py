@@ -24,6 +24,7 @@ from .expression_vae import (
 )
 from .full_model import FullDynamicsModel
 from .interventions import CausalAttentionIntervention
+from .single_time_counterfactual import SingleTimeCounterfactualEngine
 from .transformer_blocks import FeedForwardBlock, InducedSetAttentionBlock, MassBiasedCrossAttention
 from .transformer_context import MassAwareTransformerContextAggregator
 from .particles import (
@@ -74,6 +75,7 @@ __all__ = [
     "ParticleRollout",
     "PerturbationEmbedding",
     "ProgramEncoder",
+    "SingleTimeCounterfactualEngine",
     "TimeEmbedding",
     "TrajectoryCounterfactualEngine",
     "TrajectoryCounterfactualResult",
