@@ -145,6 +145,42 @@ def test_single_time_schema_and_builder_accept_guide_only_inputs(tmp_path) -> No
     assert {view.embedding_id for view in problem.views} == {"ctrl", "gene_a", "gene_b"}
 
 
+def test_single_time_schema_accepts_custom_column_map(tmp_path) -> None:
+    path = tmp_path / "custom_single_time.h5ad"
+    obs = pd.DataFrame(
+        {
+            "cell_id": ["c0", "c1", "c2", "c3"],
+            "sgrna": ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1"],
+            "gene": ["ctrl", "ctrl", "gene_a", "gene_a"],
+            "nontargeting_flag": [True, True, False, False],
+            "donor": ["s1", "s1", "s1", "s1"],
+        },
+        index=["cell_0", "cell_1", "cell_2", "cell_3"],
+    )
+    data = ad.AnnData(X=np.ones((4, 3), dtype=np.float32), obs=obs)
+    data.obsm["X_pca"] = np.ones((4, 2), dtype=np.float32)
+    data.write_h5ad(path)
+
+    report = validate_anndata_schema(
+        path,
+        schema="single_time",
+        strict=True,
+        obs_columns=["sgrna", "gene"],
+        column_map={
+            "control": "nontargeting_flag",
+            "guide": "sgrna",
+            "sample": "donor",
+        },
+    )
+
+    assert report["ok"] is True
+    assert report["column_map"]["control"] == "nontargeting_flag"
+    assert "donor" in report["obs_columns_required"]
+    assert report["obs_columns_empty_counts"]["donor"] == 0
+    assert report["n_controls"] == 2
+    assert report["n_non_controls"] == 2
+
+
 def test_single_time_view_key_level_preserves_guide_level_views() -> None:
     data = _single_time_adata()
     data.obs["perturbation_id"] = [
@@ -521,6 +557,28 @@ def test_single_time_counterfactual_uses_same_reference_source_and_noise() -> No
     assert torch.equal(result.rollout_perturb.z_steps[0], result.rollout_control.z_steps[0])
     assert torch.equal(result.rollout_perturb.logw_steps[0], result.rollout_control.logw_steps[0])
     assert torch.equal(result.rollout_perturb.noise_steps, result.rollout_control.noise_steps)
+
+
+def test_single_time_counterfactual_reports_context_policy_and_reference_cache() -> None:
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+    engine = SingleTimeCounterfactualEngine(
+        model=_model(),
+        simulator=WeightedParticleSimulator(n_steps=1, store_history=True),
+        n_particles=4,
+    )
+
+    result = engine.run(
+        problem,
+        ["gene_a"],
+        seed=3,
+        context_sampling="epoch_resample",
+        context_gradient_mode="detached_cache",
+    )[0]
+
+    assert result.metadata["context_sampling"] == "epoch_resample"
+    assert result.metadata["context_gradient_mode"] == "detached_cache"
+    assert result.metadata["reference_rollouts_cached_by_embedding"] is True
+    assert result.metadata["reference_rollout_cache_key"] == "gene_a"
 
 
 def test_single_time_context_tau_defaults_match_protocol() -> None:

@@ -246,6 +246,14 @@ class SingleTimeProblem:
             key: _unique_or_none([view.guide_id for view in views_by_key[key]])
             for key in pids
         }
+        measure_to_sample = {
+            key: _unique_or_none([view.sample_id for view in views_by_key[key]])
+            for key in pids
+        }
+        measure_to_batch = {
+            key: _unique_or_none([view.batch_id for view in views_by_key[key]])
+            for key in pids
+        }
         guide_residual_ids = {
             key: _unique_or_none([view.guide_residual_id for view in views_by_key[key]])
             for key in pids
@@ -276,6 +284,8 @@ class SingleTimeProblem:
             "measure_to_original_perturbation": measure_to_original,
             "measure_to_target_gene": measure_to_target,
             "measure_to_guide": measure_to_guide,
+            "measure_to_sample_id": measure_to_sample,
+            "measure_to_batch_id": measure_to_batch,
             "guide_residual_ids": guide_residual_ids,
             "control_measure_keys": control_measure_keys,
             "control_embedding_ids": list(self.catalog.control_ids),

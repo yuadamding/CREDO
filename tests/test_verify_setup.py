@@ -148,3 +148,55 @@ def test_verify_setup_accepts_single_time_schema(tmp_path: Path) -> None:
     assert report["data"]["schema"] == "single_time"
     assert report["data"]["n_controls"] == 2
     assert report["data"]["n_non_controls"] == 2
+
+
+def test_verify_setup_single_time_schema_accepts_custom_columns(tmp_path: Path) -> None:
+    path = tmp_path / "tiny_single_time_custom.h5ad"
+    obs = pd.DataFrame(
+        {
+            "cell_id": ["c0", "c1", "c2", "c3"],
+            "sgrna": ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1"],
+            "gene": ["ctrl", "ctrl", "gene_a", "gene_a"],
+            "nontargeting_flag": [True, True, False, False],
+            "donor": ["s1", "s1", "s1", "s1"],
+        },
+        index=["cell_0", "cell_1", "cell_2", "cell_3"],
+    )
+    data = ad.AnnData(X=np.ones((4, 3), dtype=np.float32), obs=obs)
+    data.obsm["X_pca"] = np.ones((4, 2), dtype=np.float32)
+    data.write_h5ad(path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "verify_setup.py"),
+            "--json",
+            "--check-data",
+            "--data-path",
+            str(path),
+            "--data-schema",
+            "single_time",
+            "--strict-data-schema",
+            "--guide-col",
+            "sgrna",
+            "--target-gene-col",
+            "gene",
+            "--control-col",
+            "nontargeting_flag",
+            "--sample-col",
+            "donor",
+        ],
+        cwd=ROOT,
+        env=_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = json.loads(result.stdout)
+    assert report["ok"] is True
+    assert report["data"]["column_map"]["control"] == "nontargeting_flag"
+    assert "donor" in report["data"]["obs_columns_required"]
+    assert report["data"]["obs_columns_empty_counts"]["donor"] == 0
+    assert report["data"]["n_controls"] == 2
+    assert report["data"]["n_non_controls"] == 2

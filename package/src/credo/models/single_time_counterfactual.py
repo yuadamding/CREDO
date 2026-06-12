@@ -8,7 +8,7 @@ import torch
 
 from ..data.single_time import SingleTimeContextProtocol, SingleTimeProblem
 from .full_model import FullDynamicsModel
-from .single_time_context import ContextTau, SingleTimeContextProvider
+from .single_time_context import ContextGradientMode, ContextTau, SingleTimeContextProvider
 from .simulator import (
     CounterfactualResult,
     _control_embedding_context,
@@ -34,6 +34,8 @@ class SingleTimeCounterfactualEngine:
         *,
         protocol: Optional[SingleTimeContextProtocol] = None,
         context_tau: ContextTau = "auto",
+        context_sampling: str = "fixed",
+        context_gradient_mode: ContextGradientMode = "recompute_no_grad",
         seed: int = 0,
         context_override: Any = None,
     ) -> Any:
@@ -46,6 +48,8 @@ class SingleTimeCounterfactualEngine:
             context_tau=context_tau,
             context_override=context_override,
             endpoint=problem.to_effect_endpoint_problem(view_level="view"),
+            context_sampling=context_sampling,  # type: ignore[arg-type]
+            context_gradient_mode=context_gradient_mode,
         ).build(self.model, seed=seed)
 
     @torch.no_grad()
@@ -59,6 +63,8 @@ class SingleTimeCounterfactualEngine:
         control_rollout_mode: str = "reference_consistent",
         context_protocol: Optional[SingleTimeContextProtocol] = None,
         context_tau: ContextTau = "auto",
+        context_sampling: str = "fixed",
+        context_gradient_mode: ContextGradientMode = "recompute_no_grad",
         context_override: Any = None,
     ) -> List[CounterfactualResult]:
         """Run factual vs. reference branches from the same matched control source."""
@@ -118,6 +124,8 @@ class SingleTimeCounterfactualEngine:
             problem,
             protocol=selected_protocol,
             context_tau=context_tau,
+            context_sampling=context_sampling,
+            context_gradient_mode=context_gradient_mode,
             seed=seed,
             context_override=context_override,
         )
@@ -133,11 +141,10 @@ class SingleTimeCounterfactualEngine:
             context_override=selected_context_override,
         )
 
-        results: list[CounterfactualResult] = []
-        for pid in target_pids:
-            target_embedding_id = embedding_ids_from_endpoint(endpoint, [pid])[0]
+        reference_by_embedding: dict[str, Any] = {}
+        for target_embedding_id in dict.fromkeys(embedding_ids_from_endpoint(endpoint, target_pids)):
             with _control_embedding_context(self.model, target_embedding_id, mode=control_rollout_mode):
-                reference_all = self.simulator.rollout(
+                reference_by_embedding[target_embedding_id] = self.simulator.rollout(
                     z0=z0_all.clone(),
                     logw0=lw0_all.clone(),
                     model=self.model,
@@ -148,6 +155,11 @@ class SingleTimeCounterfactualEngine:
                     return_noise_used=common_noise,
                     context_override=selected_context_override,
                 )
+
+        results: list[CounterfactualResult] = []
+        for pid in target_pids:
+            target_embedding_id = embedding_ids_from_endpoint(endpoint, [pid])[0]
+            reference_all = reference_by_embedding[target_embedding_id]
             idx = all_pids.index(pid)
             metadata = {
                 **endpoint.metadata,
@@ -164,11 +176,13 @@ class SingleTimeCounterfactualEngine:
                 "same_noise": bool(common_noise),
                 "context_protocol": selected_protocol,
                 "context_tau": context_tau,
-                "context_sampling": "fixed",
-                "context_gradient_mode": "recompute_no_grad",
+                "context_sampling": context_sampling,
+                "context_gradient_mode": context_gradient_mode,
                 "initial_seed": int(seed),
                 "noise_seed": noise_seed if common_noise else None,
                 "factual_full_context_reused": True,
+                "reference_rollout_cache_key": target_embedding_id,
+                "reference_rollouts_cached_by_embedding": True,
                 "rollout_control_semantics": control_rollout_mode,
             }
             results.append(

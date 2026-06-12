@@ -25,6 +25,13 @@
 - Added a compact `single_time.effect_vector_components` policy so single-time
   control-null and guide-concordance regularizers can include mass, latent mean
   shift, and optional latent variance shift components.
+- Made single-time reporting more claim-aware with training/report view-level
+  labels, context-policy metadata, diagnostic versus claim-grade mass aliases,
+  guide-concordance evaluability flags, signed latent-shift tables, control-null
+  summaries, particle-weight diagnostics, and run provenance files.
+- Made strict single-time runner schema validation column-map-aware so custom
+  control, guide, target-gene, sample, and batch columns can be validated before
+  problem construction.
 - Kept compatibility shims and tests for existing runner manifests, package
   imports, endpoint summaries, and CREDO semantic invariants.
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import subprocess
 import sys
 import warnings
 from pathlib import Path
@@ -115,6 +117,28 @@ def _parse_effect_vector_components(value: str) -> tuple[str, ...]:
     return components
 
 
+def _single_time_schema_column_map(args: argparse.Namespace) -> dict[str, str | None]:
+    return {
+        "control": args.control_col,
+        "sample": args.sample_col or None,
+        "batch": args.batch_col or None,
+        "guide": args.guide_col or None,
+        "perturbation": args.perturbation_col,
+        "target_gene": args.target_gene_col or None,
+    }
+
+
+def _single_time_extra_schema_columns(args: argparse.Namespace) -> list[str]:
+    columns = [args.control_col]
+    if args.view_key_level in {"guide", "sample_guide"} and args.guide_col:
+        columns.append(args.guide_col)
+    elif args.perturbation_col:
+        columns.append(args.perturbation_col)
+    if args.embedding_level == "target_gene" and args.target_gene_col:
+        columns.append(args.target_gene_col)
+    return list(dict.fromkeys(column for column in columns if column))
+
+
 def _weighted_mean(z: torch.Tensor, logw: torch.Tensor) -> torch.Tensor:
     weights = torch.softmax(logw, dim=0)
     return (weights.unsqueeze(-1) * z).sum(dim=0)
@@ -139,6 +163,96 @@ def _measure_mean_and_var(measure) -> tuple[torch.Tensor, torch.Tensor, torch.Te
     mean = _weighted_mean(support, logw)
     var = _weighted_variance(support, logw)
     return mean, var, logw
+
+
+def _weight_diagnostics(logw: torch.Tensor) -> dict[str, float]:
+    weights = torch.softmax(logw, dim=0)
+    n_particles = max(1, int(weights.numel()))
+    ess = 1.0 / weights.square().sum().clamp_min(1e-30)
+    return {
+        "terminal_ess_frac": float((ess / n_particles).item()),
+        "max_weight_frac": float(weights.max().item()),
+        "logw_range": float((logw.max() - logw.min()).item()),
+    }
+
+
+def _vector_rows(
+    *,
+    base: dict[str, object],
+    values: torch.Tensor,
+    value_column: str,
+) -> list[dict[str, object]]:
+    return [
+        {
+            **base,
+            "latent_dim": int(idx),
+            value_column: float(value.item()),
+        }
+        for idx, value in enumerate(values)
+    ]
+
+
+def _control_null_summary(control_null: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "metric",
+        "n_controls",
+        "mean",
+        "std",
+        "abs_p95",
+    ]
+    if control_null.empty:
+        return pd.DataFrame(columns=columns)
+    rows = []
+    for metric in [
+        "diagnostic_delta_log_mass",
+        "latent_mean_shift_norm",
+        "latent_variance_shift_norm",
+    ]:
+        values = pd.to_numeric(control_null.get(metric), errors="coerce").dropna()
+        if values.empty:
+            rows.append({"metric": metric, "n_controls": 0, "mean": pd.NA, "std": pd.NA, "abs_p95": pd.NA})
+        else:
+            rows.append(
+                {
+                    "metric": metric,
+                    "n_controls": int(values.shape[0]),
+                    "mean": float(values.mean()),
+                    "std": float(values.std()) if values.shape[0] > 1 else pd.NA,
+                    "abs_p95": float(values.abs().quantile(0.95)),
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _git_sha() -> str:
+    repo_root = Path(__file__).resolve().parent.parent
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return "unavailable"
+    return result.stdout.strip() or "unavailable"
+
+
+def _write_single_time_provenance(
+    *,
+    output_dir: Path,
+    config: RunConfig,
+    argv: list[str] | None,
+) -> None:
+    command_parts = ["python", "runners/run_credo_single_time.py", *(argv if argv is not None else sys.argv[1:])]
+    (output_dir / "single_time_command.txt").write_text(
+        " ".join(shlex.quote(str(part)) for part in command_parts) + "\n",
+        encoding="utf-8",
+    )
+    (output_dir / "single_time_git_sha.txt").write_text(_git_sha() + "\n", encoding="utf-8")
+    with (output_dir / "single_time_resolved_config.json").open("w") as handle:
+        json.dump(config.model_dump(mode="json"), handle, indent=2, sort_keys=True)
 
 
 def _write_single_time_effect_outputs(
@@ -168,6 +282,8 @@ def _write_single_time_effect_outputs(
         common_noise=True,
         context_protocol=config.single_time.context_protocol,
         context_tau=context_tau,
+        context_sampling=config.single_time.context_sampling,
+        context_gradient_mode=config.single_time.context_gradient_mode,
     )
     loss_fn = EndpointGeometryMassLoss(
         eps=config.training.sinkhorn_epsilon,
@@ -177,6 +293,11 @@ def _write_single_time_effect_outputs(
 
     effect_rows = []
     endpoint_rows = []
+    mean_shift_rows = []
+    variance_shift_rows = []
+    report_view_level = "view"
+    training_view_level = config.single_time.view_level
+    report_is_posthoc = training_view_level != report_view_level
     for result in results:
         pid = result.perturbation_id
         metadata = result.metadata
@@ -196,6 +317,7 @@ def _write_single_time_effect_outputs(
         ref_var = _weighted_variance(ref_z, ref_logw)
         mean_diff = fact_mean - ref_mean
         var_diff = fact_var - ref_var
+        weight_diag = _weight_diagnostics(fact_logw)
 
         target_mean, target_var, target_logw = _measure_mean_and_var(target)
         pred_logw_abs = fact_logw + factual.log_m0.squeeze(0).detach().float().cpu()
@@ -212,26 +334,50 @@ def _write_single_time_effect_outputs(
             "original_perturbation_id": metadata.get("target_perturbation_id", pid),
             "guide_id": endpoint.metadata.get("measure_to_guide", {}).get(pid),
             "target_gene": endpoint.metadata.get("measure_to_target_gene", {}).get(pid),
+            "sample_id": endpoint.metadata.get("measure_to_sample_id", {}).get(pid),
+            "batch_id": endpoint.metadata.get("measure_to_batch_id", {}).get(pid),
             "embedding_id": metadata.get("target_embedding_id"),
             "is_control": pid in set(endpoint.metadata.get("control_measure_keys", [])),
             "claim_level": endpoint.metadata.get("claim_level"),
             "mass_claim_grade": endpoint.metadata.get("abundance_claim_grade"),
+            "abundance_claim_grade": endpoint.metadata.get("abundance_claim_grade"),
+            "abundance_claimable": endpoint.metadata.get("abundance_claim_grade") == "claim_grade",
+            "training_view_level": training_view_level,
+            "report_view_level": report_view_level,
+            "report_is_posthoc_view_level": report_is_posthoc,
             "context_protocol": config.single_time.context_protocol,
             "context_gradient_mode": config.single_time.context_gradient_mode,
+            "context_sampling": config.single_time.context_sampling,
+            "training_context_sampling": config.single_time.context_sampling,
+            "training_context_gradient_mode": config.single_time.context_gradient_mode,
+            "report_context_sampling": metadata.get("context_sampling"),
+            "report_context_gradient_mode": metadata.get("context_gradient_mode"),
             "effect_axis_is_physical_time": False,
         }
+        delta_log_mass = float((fact_log_mass - ref_log_mass).item())
+        delta_mass = float((fact_log_mass.exp() - ref_log_mass.exp()).item())
+        mass_claimable = base["abundance_claimable"]
         effect_rows.append(
             {
                 **base,
-                "delta_log_mass": float((fact_log_mass - ref_log_mass).item()),
-                "delta_mass": float((fact_log_mass.exp() - ref_log_mass.exp()).item()),
+                "diagnostic_delta_log_mass": delta_log_mass,
+                "diagnostic_delta_mass": delta_mass,
+                "delta_log_mass": delta_log_mass,
+                "delta_mass": delta_mass,
+                "abundance_delta_log_mass_claimable": delta_log_mass if mass_claimable else pd.NA,
+                "abundance_delta_mass_claimable": delta_mass if mass_claimable else pd.NA,
                 "latent_mean_shift_norm": float(mean_diff.norm().item()),
                 "latent_variance_shift_norm": float(var_diff.norm().item()),
                 "terminal_factual_log_mass": float(fact_log_mass.item()),
                 "terminal_reference_log_mass": float(ref_log_mass.item()),
+                **weight_diag,
                 "same_reference_source": metadata.get("same_reference_source"),
                 "same_noise": metadata.get("same_noise"),
             }
+        )
+        mean_shift_rows.extend(_vector_rows(base=base, values=mean_diff, value_column="latent_mean_shift"))
+        variance_shift_rows.extend(
+            _vector_rows(base=base, values=var_diff, value_column="latent_variance_shift")
         )
         endpoint_rows.append(
             {
@@ -256,21 +402,40 @@ def _write_single_time_effect_outputs(
         "original_perturbation_id",
         "guide_id",
         "target_gene",
+        "sample_id",
+        "batch_id",
         "embedding_id",
         "is_control",
         "claim_level",
         "mass_claim_grade",
+        "abundance_claim_grade",
+        "abundance_claimable",
+        "training_view_level",
+        "report_view_level",
+        "report_is_posthoc_view_level",
         "context_protocol",
+        "context_sampling",
         "context_gradient_mode",
+        "training_context_sampling",
+        "training_context_gradient_mode",
+        "report_context_sampling",
+        "report_context_gradient_mode",
         "effect_axis_is_physical_time",
     ]
     effect_columns = base_columns + [
+        "diagnostic_delta_log_mass",
+        "diagnostic_delta_mass",
         "delta_log_mass",
         "delta_mass",
+        "abundance_delta_log_mass_claimable",
+        "abundance_delta_mass_claimable",
         "latent_mean_shift_norm",
         "latent_variance_shift_norm",
         "terminal_factual_log_mass",
         "terminal_reference_log_mass",
+        "terminal_ess_frac",
+        "max_weight_frac",
+        "logw_range",
         "same_reference_source",
         "same_noise",
     ]
@@ -286,8 +451,18 @@ def _write_single_time_effect_outputs(
     ]
     effects = pd.DataFrame(effect_rows, columns=effect_columns)
     endpoints = pd.DataFrame(endpoint_rows, columns=endpoint_columns)
+    mean_shifts = pd.DataFrame(
+        mean_shift_rows,
+        columns=base_columns + ["latent_dim", "latent_mean_shift"],
+    )
+    variance_shifts = pd.DataFrame(
+        variance_shift_rows,
+        columns=base_columns + ["latent_dim", "latent_variance_shift"],
+    )
     effects.to_csv(output_dir / "single_time_effects.csv", index=False)
     endpoints.to_csv(output_dir / "single_time_endpoint_metrics.csv", index=False)
+    mean_shifts.to_csv(output_dir / "single_time_latent_mean_shift_by_dim.csv", index=False)
+    variance_shifts.to_csv(output_dir / "single_time_latent_variance_shift_by_dim.csv", index=False)
 
     if effects.empty:
         control_null = pd.DataFrame(columns=effects.columns)
@@ -295,6 +470,9 @@ def _write_single_time_effect_outputs(
             columns=[
                 "target_gene",
                 "n_views",
+                "n_guides",
+                "n_samples",
+                "guide_concordance_evaluable",
                 "delta_log_mass_std",
                 "latent_mean_shift_norm_std",
                 "latent_variance_shift_norm_std",
@@ -304,28 +482,41 @@ def _write_single_time_effect_outputs(
         control_null = effects.loc[effects["is_control"]].copy()
         guide = effects.loc[~effects["is_control"]].copy()
         guide = guide[guide["target_gene"].notna()]
-        guide_summary = (
-            guide.groupby("target_gene", dropna=False)
-            .agg(
-                n_views=("view_id", "count"),
-                delta_log_mass_std=("delta_log_mass", "std"),
-                latent_mean_shift_norm_std=("latent_mean_shift_norm", "std"),
-                latent_variance_shift_norm_std=("latent_variance_shift_norm", "std"),
+        if not guide.empty:
+            guide_summary = (
+                guide.groupby("target_gene", dropna=False)
+                .agg(
+                    n_views=("view_id", "count"),
+                    n_guides=("guide_id", "nunique"),
+                    n_samples=("sample_id", "nunique"),
+                    delta_log_mass_std=("diagnostic_delta_log_mass", "std"),
+                    latent_mean_shift_norm_std=("latent_mean_shift_norm", "std"),
+                    latent_variance_shift_norm_std=("latent_variance_shift_norm", "std"),
+                )
+                .reset_index()
             )
-            .reset_index()
-            .fillna(0.0)
-            if not guide.empty
-            else pd.DataFrame(
+            guide_summary["guide_concordance_evaluable"] = (
+                (guide_summary["n_views"] >= 2)
+                & ((guide_summary["n_guides"] >= 2) | (guide_summary["n_samples"] >= 2))
+            )
+        else:
+            guide_summary = pd.DataFrame(
                 columns=[
                     "target_gene",
                     "n_views",
+                    "n_guides",
+                    "n_samples",
+                    "guide_concordance_evaluable",
                     "delta_log_mass_std",
                     "latent_mean_shift_norm_std",
                     "latent_variance_shift_norm_std",
                 ]
             )
-        )
     control_null.to_csv(output_dir / "single_time_control_null.csv", index=False)
+    _control_null_summary(control_null).to_csv(
+        output_dir / "single_time_control_null_summary.csv",
+        index=False,
+    )
     guide_summary.to_csv(output_dir / "single_time_guide_concordance.csv", index=False)
 
 
@@ -355,6 +546,8 @@ def main(argv: list[str] | None = None) -> int:
             args.data_path,
             schema="single_time",
             latent_key=args.latent_key,
+            obs_columns=_single_time_extra_schema_columns(args),
+            column_map=_single_time_schema_column_map(args),
             strict=True,
         )
         if not bool(schema_report.get("ok")):
@@ -440,6 +633,7 @@ def main(argv: list[str] | None = None) -> int:
     result = trainer.train(n_epochs=args.epochs)
 
     result.history.to_dataframe().to_csv(output_dir / "training_history.csv", index=False)
+    _write_single_time_provenance(output_dir=output_dir, config=config, argv=argv)
     with (output_dir / "single_time_claim_report.json").open("w") as handle:
         json.dump(result.claim_report, handle, indent=2, sort_keys=True)
     with (output_dir / "single_time_problem_summary.json").open("w") as handle:

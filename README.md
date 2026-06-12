@@ -35,7 +35,11 @@ python scripts/verify_setup.py \
   --data-path ../inputs/single_time/example.h5ad \
   --data-schema single_time \
   --strict-data-schema \
-  --latent-key X_pca
+  --latent-key X_pca \
+  --control-col is_control \
+  --guide-col guide_id \
+  --target-gene-col target_gene \
+  --sample-col sample_id
 credo-validate-data \
   --data-path /path/to/input.h5ad \
   --schema trajectory \
@@ -160,8 +164,14 @@ single_time_effects.csv
 single_time_endpoint_metrics.csv
 single_time_guide_concordance.csv
 single_time_control_null.csv
+single_time_control_null_summary.csv
+single_time_latent_mean_shift_by_dim.csv
+single_time_latent_variance_shift_by_dim.csv
 single_time_claim_report.json
 single_time_problem_summary.json
+single_time_resolved_config.json
+single_time_command.txt
+single_time_git_sha.txt
 ```
 
 These files preserve the single-time claim boundary with columns such as
@@ -169,6 +179,18 @@ These files preserve the single-time claim boundary with columns such as
 `mass_claim_grade`, `delta_log_mass`, latent mean/variance shift norms,
 endpoint geometry-plus-mass metrics, guide concordance summaries, and control
 null diagnostics.
+
+Effect outputs distinguish training and reporting levels with
+`training_view_level`, `report_view_level`, and
+`report_is_posthoc_view_level`. The runner always emits per-view biological
+diagnostics; if training used `--view-level embedding`, those rows are labeled
+as post hoc disaggregated view diagnostics. Mass-effect values are always
+reported as diagnostic finite-measure weight effects, and claim-grade abundance
+aliases are populated only when `abundance_claim_grade == claim_grade`.
+Guide-concordance summaries include `n_views`, `n_guides`, `n_samples`, and
+`guide_concordance_evaluable` so single-view targets are not mistaken for
+perfectly concordant targets. Per-view particle diagnostics include terminal
+ESS fraction, max-weight fraction, and log-weight range.
 
 ## Verify
 

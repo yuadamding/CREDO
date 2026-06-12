@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Iterable, Literal, Mapping
 
 import anndata as ad
 import numpy as np
@@ -64,13 +64,20 @@ def validate_anndata_schema(
     schema: SchemaName = "minimal",
     latent_key: str = "X_pca",
     obs_columns: Iterable[str] | str | None = None,
+    column_map: Mapping[str, str | None] | None = None,
     strict: bool = False,
     max_latent_values_to_check: int = 10_000_000,
 ) -> dict[str, object]:
     """Validate the package-level AnnData contract used by CREDO loaders."""
     if schema not in SCHEMA_OBS_COLUMNS:
         raise ValueError(f"schema must be one of {sorted(SCHEMA_OBS_COLUMNS)}.")
-    base_columns = STRICT_SCHEMA_OBS_COLUMNS[schema] if strict else SCHEMA_OBS_COLUMNS[schema]
+    column_map = dict(column_map or {})
+    if schema == "single_time":
+        cell_col = column_map.get("cell_id") or "cell_id"
+        control_col = column_map.get("control") or "is_control"
+        base_columns = (cell_col, control_col)
+    else:
+        base_columns = STRICT_SCHEMA_OBS_COLUMNS[schema] if strict else SCHEMA_OBS_COLUMNS[schema]
     required_obs_columns = _dedupe_columns([*base_columns, *_normalise_columns(obs_columns)])
     path = Path(data_path)
     report: dict[str, object] = {
@@ -79,6 +86,7 @@ def validate_anndata_schema(
         "schema": schema,
         "schema_version": 1,
         "strict": bool(strict),
+        "column_map": column_map,
         "shape": None,
         "n_cells": None,
         "n_genes": None,
@@ -135,11 +143,45 @@ def validate_anndata_schema(
         report["obs_columns_missing"] = missing
         if missing:
             errors.append("missing obs columns: " + ", ".join(missing))
-        if schema == "single_time" and "perturbation_id" not in data.obs and "guide_id" not in data.obs:
-            errors.append("single_time schema requires obs['perturbation_id'] or obs['guide_id']")
-        if schema == "single_time" and "sample_id" not in data.obs and "batch_id" not in data.obs:
-            errors.append("single_time schema requires obs['sample_id'] or obs['batch_id']")
-        present_required = [column for column in required_obs_columns if column in data.obs]
+        if schema == "single_time":
+            perturbation_col = column_map.get("perturbation") or "perturbation_id"
+            guide_col = column_map.get("guide") or "guide_id"
+            sample_col = column_map.get("sample") or "sample_id"
+            batch_col = column_map.get("batch") or "batch_id"
+            single_time_selected_columns = []
+            if perturbation_col not in data.obs and guide_col not in data.obs:
+                errors.append(
+                    "single_time schema requires a perturbation or guide column "
+                    f"({perturbation_col!r} or {guide_col!r})"
+                )
+            else:
+                single_time_selected_columns.append(
+                    perturbation_col if perturbation_col in data.obs else guide_col,
+                )
+            if sample_col not in data.obs and batch_col not in data.obs:
+                errors.append(
+                    "single_time schema requires a sample or batch column "
+                    f"({sample_col!r} or {batch_col!r})"
+                )
+            else:
+                single_time_selected_columns.append(
+                    sample_col if sample_col in data.obs else batch_col,
+                )
+        else:
+            perturbation_col = "perturbation_id"
+            guide_col = "guide_id"
+            sample_col = "sample_id"
+            batch_col = "batch_id"
+            control_col = "is_control"
+            single_time_selected_columns = []
+        effective_required_obs_columns = _dedupe_columns([*required_obs_columns, *single_time_selected_columns])
+        report["obs_columns_required"] = effective_required_obs_columns
+        present_required = _dedupe_columns(
+            [
+                *[column for column in effective_required_obs_columns if column in data.obs],
+                *single_time_selected_columns,
+            ],
+        )
         null_counts = {column: _column_null_count(data.obs[column]) for column in present_required}
         empty_counts = {column: _column_empty_count(data.obs[column]) for column in present_required}
         report["obs_columns_null_counts"] = null_counts
@@ -154,16 +196,16 @@ def validate_anndata_schema(
         for column, count in empty_counts.items():
             if count and strict:
                 errors.append(f"obs column {column} contains {count} empty values")
-        if "perturbation_id" in data.obs:
-            perturbation_counts = data.obs["perturbation_id"].astype(str).value_counts(dropna=False)
+        if perturbation_col in data.obs:
+            perturbation_counts = data.obs[perturbation_col].astype(str).value_counts(dropna=False)
             report["n_perturbations"] = int(len(perturbation_counts))
             report["perturbation_counts"] = {str(key): int(value) for key, value in perturbation_counts.items()}
-        elif schema == "single_time" and "guide_id" in data.obs:
-            guide_counts = data.obs["guide_id"].astype(str).value_counts(dropna=False)
+        elif schema == "single_time" and guide_col in data.obs:
+            guide_counts = data.obs[guide_col].astype(str).value_counts(dropna=False)
             report["n_perturbations"] = int(len(guide_counts))
             report["perturbation_counts"] = {str(key): int(value) for key, value in guide_counts.items()}
-        if schema == "single_time" and "is_control" in data.obs:
-            control_values = data.obs["is_control"]
+        if schema == "single_time" and control_col in data.obs:
+            control_values = data.obs[control_col]
             if pd.api.types.is_bool_dtype(control_values):
                 control_mask = control_values.to_numpy(dtype=bool)
                 report["control_column_valid"] = True
@@ -172,7 +214,7 @@ def validate_anndata_schema(
                 valid = normalized.isin({"true", "false", "1", "0", "yes", "no"})
                 report["control_column_valid"] = bool(valid.all())
                 if not bool(valid.all()):
-                    errors.append("single_time obs['is_control'] must be boolean-like")
+                    errors.append(f"single_time obs[{control_col!r}] must be boolean-like")
                 control_mask = normalized.isin({"true", "1", "yes"}).to_numpy()
             n_controls = int(control_mask.sum())
             report["n_controls"] = n_controls

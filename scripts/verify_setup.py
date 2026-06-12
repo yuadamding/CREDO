@@ -83,6 +83,7 @@ def _data_report(
     schema: str,
     latent_key: str,
     obs_columns: list[str] | None,
+    column_map: dict[str, str | None] | None,
     strict: bool,
 ) -> dict[str, Any]:
     if not data_path:
@@ -98,6 +99,7 @@ def _data_report(
             schema=schema,
             latent_key=latent_key,
             obs_columns=obs_columns,
+            column_map=column_map,
             strict=strict,
         )
         report["checked"] = True
@@ -152,6 +154,12 @@ def main() -> int:
     )
     parser.add_argument("--strict-data-schema", action="store_true")
     parser.add_argument("--latent-key", default="X_pca")
+    parser.add_argument("--perturbation-col", default="perturbation_id")
+    parser.add_argument("--guide-col", default="guide_id")
+    parser.add_argument("--target-gene-col", default="target_gene")
+    parser.add_argument("--control-col", default="is_control")
+    parser.add_argument("--sample-col", default="sample_id")
+    parser.add_argument("--batch-col", default="batch_id")
     parser.add_argument(
         "--obs-column",
         action="append",
@@ -168,6 +176,18 @@ def main() -> int:
             schema=args.data_schema,
             latent_key=args.latent_key,
             obs_columns=args.obs_column,
+            column_map=(
+                {
+                    "perturbation": args.perturbation_col,
+                    "guide": args.guide_col,
+                    "target_gene": args.target_gene_col,
+                    "control": args.control_col,
+                    "sample": args.sample_col,
+                    "batch": args.batch_col,
+                }
+                if args.data_schema == "single_time"
+                else None
+            ),
             strict=args.strict_data_schema,
         )
         if args.check_data
