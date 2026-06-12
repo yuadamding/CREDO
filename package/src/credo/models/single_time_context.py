@@ -1,7 +1,7 @@
 """Shared context providers for single-time CREDO effect paths."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Literal
 
 import torch
@@ -13,6 +13,30 @@ from .simulator import embedding_ids_from_endpoint, initialise_particles_from_me
 
 
 ContextTau = float | Literal["auto", "source", "target", "midpoint"]
+
+
+def _detach_cached_value(value: Any) -> Any:
+    """Detach tensors before storing fixed context across training epochs."""
+    if torch.is_tensor(value):
+        return value.detach().clone()
+    if is_dataclass(value) and not isinstance(value, type):
+        init_kwargs = {
+            item.name: _detach_cached_value(getattr(value, item.name))
+            for item in fields(value)
+            if item.init
+        }
+        detached = type(value)(**init_kwargs)
+        for item in fields(value):
+            if not item.init:
+                setattr(detached, item.name, _detach_cached_value(getattr(value, item.name)))
+        return detached
+    if isinstance(value, dict):
+        return {key: _detach_cached_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_detach_cached_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_detach_cached_value(item) for item in value)
+    return value
 
 
 def resolve_single_time_context_tau(
@@ -88,15 +112,18 @@ class SingleTimeContextProvider:
             self.device,
             seed=int(seed) + int(self.seed_offset),
         )
-        _, ctx = model.step(
-            z=z_ctx,
-            tau=torch.tensor(tau_value, dtype=z_ctx.dtype, device=z_ctx.device),
-            logw=lw_ctx,
-            log_m0=lm_ctx,
-            perturbation_ids=pids,
-            embedding_ids=embedding_ids_from_endpoint(endpoint, pids),
-        )
+        grad_enabled = self.context_sampling != "fixed"
+        with torch.set_grad_enabled(grad_enabled):
+            _, ctx = model.step(
+                z=z_ctx,
+                tau=torch.tensor(tau_value, dtype=z_ctx.dtype, device=z_ctx.device),
+                logw=lw_ctx,
+                log_m0=lm_ctx,
+                perturbation_ids=pids,
+                embedding_ids=embedding_ids_from_endpoint(endpoint, pids),
+            )
         if self.context_sampling == "fixed":
+            ctx = _detach_cached_value(ctx)
             self._cached_key = cache_key
             self._cached_context = ctx
         return ctx

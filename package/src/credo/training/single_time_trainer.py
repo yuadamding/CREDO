@@ -48,6 +48,28 @@ class SingleTimeTrainer:
     ) -> None:
         self.problem = problem
         single_time_config = config.single_time
+        if int(config.training.max_active_perturbations or 0) > 0:
+            raise ValueError(
+                "SingleTimeTrainer uses custom context and single-time effect losses, "
+                "so it requires full perturbation rollout. Set "
+                "training.max_active_perturbations=0."
+            )
+        if single_time_config.enabled and single_time_config.mass_claim_grade != "auto":
+            if problem.mass_mode != "obs_column":
+                raise ValueError(
+                    "single_time.mass_claim_grade is only valid for "
+                    "SingleTimeProblem mass_mode='obs_column'."
+                )
+            existing_grade = problem.metadata.get("mass_claim_grade")
+            if (
+                existing_grade in {"none", "diagnostic", "claim_grade"}
+                and existing_grade != single_time_config.mass_claim_grade
+            ):
+                raise ValueError(
+                    "single_time.mass_claim_grade conflicts with SingleTimeProblem "
+                    f"metadata mass_claim_grade={existing_grade!r}."
+                )
+            problem.metadata["mass_claim_grade"] = single_time_config.mass_claim_grade
         endpoint_view_level = (
             single_time_config.view_level
             if single_time_config.enabled

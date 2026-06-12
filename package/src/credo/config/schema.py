@@ -41,6 +41,7 @@ class SingleTimeConfig(BaseModel):
     context_tau: float | Literal["auto", "source", "target", "midpoint"] = "auto"
     reference_scope: Literal["auto", "sample", "batch", "global"] = "auto"
     mass_mode: Literal["cell_count", "unit_mass", "obs_column", "unavailable"] = "unit_mass"
+    mass_claim_grade: Literal["auto", "none", "diagnostic", "claim_grade"] = "auto"
     abundance_claims: Literal["auto", "enabled", "disabled"] = "auto"
     lambda_control_null: float = 0.0
     lambda_minimal_action: float = 0.0
@@ -367,6 +368,16 @@ class RunConfig(BaseModel):
                 raise ValueError(
                     "single_time abundance_claims cannot be enabled with mass_mode='cell_count'. "
                     "Captured cell counts are diagnostic unless exposure-adjusted masses are provided."
+                )
+        if self.single_time.enabled and self.single_time.mass_mode == "obs_column":
+            if (
+                self.single_time.abundance_claims == "enabled"
+                and self.single_time.mass_claim_grade != "claim_grade"
+            ):
+                raise ValueError(
+                    "single_time abundance_claims cannot be enabled with mass_mode='obs_column' "
+                    "unless single_time.mass_claim_grade='claim_grade'. Arbitrary obs columns "
+                    "are diagnostic unless their mass provenance is explicit."
                 )
         return self
 

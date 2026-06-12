@@ -19,6 +19,7 @@ from .core import EndpointProblem, FiniteMeasure, PerturbationCatalog, TimeAxis
 
 
 SingleTimeMassMode = Literal["cell_count", "unit_mass", "obs_column", "unavailable"]
+SingleTimeMassClaimGrade = Literal["auto", "none", "diagnostic", "claim_grade"]
 SingleTimeEmbeddingLevel = Literal["perturbation", "guide", "target_gene"]
 SingleTimeEndpointViewLevel = Literal["embedding", "perturbation", "view"]
 ControlReferenceScope = Literal["auto", "sample", "batch", "global"]
@@ -183,9 +184,14 @@ class SingleTimeProblem:
 
     @property
     def abundance_claim_grade(self) -> Literal["none", "diagnostic", "claim_grade"]:
+        explicit_grade = self.metadata.get("mass_claim_grade")
+        if explicit_grade in {"none", "diagnostic", "claim_grade"}:
+            return explicit_grade
         if self.mass_mode in {"unit_mass", "unavailable"}:
             return "none"
         if self.mass_mode == "cell_count":
+            return "diagnostic"
+        if self.mass_mode == "obs_column":
             return "diagnostic"
         return "claim_grade"
 
@@ -313,11 +319,18 @@ def _normalise_single_time_obs(
     target_gene_col: str | None,
 ) -> pd.DataFrame:
     out = obs.copy()
-    if perturbation_col not in out:
-        raise KeyError(f"AnnData obs missing perturbation column {perturbation_col!r}.")
+    effective_perturbation_col = perturbation_col
+    if effective_perturbation_col not in out:
+        if guide_col is not None and guide_col in out:
+            effective_perturbation_col = guide_col
+        else:
+            raise KeyError(
+                f"AnnData obs missing perturbation column {perturbation_col!r}; "
+                "provide perturbation_col or a guide_col present in obs."
+            )
     if control_col not in out:
         raise KeyError(f"AnnData obs missing control column {control_col!r}.")
-    out["perturbation_id"] = out[perturbation_col].astype(str)
+    out["perturbation_id"] = out[effective_perturbation_col].astype(str)
     if guide_col is not None and guide_col in out:
         out["guide_id"] = out[guide_col].astype(str)
     if target_gene_col is not None and target_gene_col in out:
@@ -360,6 +373,7 @@ def build_single_time_problem_from_anndata(
     batch_col: str | None = "batch_id",
     mass_mode: SingleTimeMassMode = "unit_mass",
     mass_value_col: str | None = None,
+    mass_claim_grade: SingleTimeMassClaimGrade = "auto",
     reference_scope: ControlReferenceScope = "auto",
     context_protocol: SingleTimeContextProtocol = "observed_snapshot",
     min_cells: int = 1,
@@ -373,6 +387,8 @@ def build_single_time_problem_from_anndata(
         raise ValueError("Invalid single-time mass_mode.")
     if mass_mode == "obs_column" and not mass_value_col:
         raise ValueError("mass_value_col is required when mass_mode='obs_column'.")
+    if mass_claim_grade not in {"auto", "none", "diagnostic", "claim_grade"}:
+        raise ValueError("mass_claim_grade must be auto, none, diagnostic, or claim_grade.")
     if embedding_level == "target_plus_guide_residual":
         raise NotImplementedError(
             "embedding_level='target_plus_guide_residual' requires a hierarchical "
@@ -504,12 +520,15 @@ def build_single_time_problem_from_anndata(
 
     catalog_ids = sorted({view.embedding_id for view in views} | control_embedding_ids)
     catalog = PerturbationCatalog(catalog_ids, sorted(control_embedding_ids))
+    problem_metadata = dict(metadata or {})
+    if mass_claim_grade != "auto":
+        problem_metadata["mass_claim_grade"] = mass_claim_grade
     return SingleTimeProblem(
         views=views,
         catalog=catalog,
         context_protocol=context_protocol,
         mass_mode=mass_mode,
-        metadata=dict(metadata or {}),
+        metadata=problem_metadata,
     )
 
 
@@ -519,6 +538,7 @@ __all__ = [
     "SingleTimeContextProtocol",
     "SingleTimeEndpointViewLevel",
     "SingleTimeEmbeddingLevel",
+    "SingleTimeMassClaimGrade",
     "SingleTimeMassMode",
     "SingleTimeProblem",
     "SingleTimeView",

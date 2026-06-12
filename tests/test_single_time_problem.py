@@ -95,6 +95,22 @@ def _target_gene_model() -> FullDynamicsModel:
     )
 
 
+def _ecological_model() -> FullDynamicsModel:
+    torch.manual_seed(0)
+    return FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=2,
+        n_programs=2,
+        mediator_dim=1,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+    )
+
+
 def test_single_time_does_not_relax_longitudinal_time_axis() -> None:
     with pytest.raises(ValueError, match="Need at least two time points"):
         TimeAxis(["snapshot"], [0.0])
@@ -110,6 +126,22 @@ def test_single_time_schema_profile_accepts_snapshot_with_sample_id(tmp_path) ->
     assert report["schema"] == "single_time"
     assert report["n_controls"] == 4
     assert report["n_non_controls"] == 4
+
+
+def test_single_time_schema_and_builder_accept_guide_only_inputs(tmp_path) -> None:
+    data = _single_time_adata()
+    data.obs["guide_id"] = ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1", "ctrl_g1", "ctrl_g1", "gb_g1", "gb_g1"]
+    data.obs["target_gene"] = ["ctrl", "ctrl", "gene_a", "gene_a", "ctrl", "ctrl", "gene_b", "gene_b"]
+    del data.obs["perturbation_id"]
+    path = tmp_path / "guide_only.h5ad"
+    data.write_h5ad(path)
+
+    report = validate_anndata_schema(path, schema="single_time")
+    problem = build_single_time_problem_from_anndata(path, embedding_level="target_gene")
+
+    assert report["ok"] is True
+    assert {view.perturbation_id for view in problem.views} == {"ctrl_g1", "ga_g1", "gb_g1"}
+    assert {view.embedding_id for view in problem.views} == {"ctrl", "gene_a", "gene_b"}
 
 
 def test_single_time_schema_profile_rejects_missing_control_flag(tmp_path) -> None:
@@ -209,6 +241,28 @@ def test_single_time_cell_count_is_diagnostic_not_claim_grade() -> None:
     assert problem.to_effect_endpoint_problem().metadata["abundance_claim_grade"] == "diagnostic"
 
 
+def test_single_time_obs_column_mass_is_diagnostic_unless_explicit_claim_grade() -> None:
+    data = _single_time_adata()
+    data.obs["mass_value"] = np.linspace(0.5, 1.2, data.n_obs)
+
+    diagnostic = build_single_time_problem_from_anndata(
+        data,
+        mass_mode="obs_column",
+        mass_value_col="mass_value",
+    )
+    claim_grade = build_single_time_problem_from_anndata(
+        data,
+        mass_mode="obs_column",
+        mass_value_col="mass_value",
+        mass_claim_grade="claim_grade",
+    )
+
+    assert diagnostic.abundance_claim_grade == "diagnostic"
+    assert diagnostic.abundance_claims_allowed is False
+    assert claim_grade.abundance_claim_grade == "claim_grade"
+    assert claim_grade.abundance_claims_allowed is True
+
+
 def test_single_time_config_rejects_abundance_claims_without_claim_grade_mass() -> None:
     with pytest.raises(ValueError, match="abundance_claims"):
         RunConfig(
@@ -226,6 +280,23 @@ def test_single_time_config_rejects_abundance_claims_without_claim_grade_mass() 
                 "abundance_claims": "enabled",
             }
         )
+    with pytest.raises(ValueError, match="obs_column"):
+        RunConfig(
+            single_time={
+                "enabled": True,
+                "mass_mode": "obs_column",
+                "abundance_claims": "enabled",
+            }
+        )
+    config = RunConfig(
+        single_time={
+            "enabled": True,
+            "mass_mode": "obs_column",
+            "mass_claim_grade": "claim_grade",
+            "abundance_claims": "enabled",
+        }
+    )
+    assert config.single_time.mass_claim_grade == "claim_grade"
 
 
 def test_single_time_builder_stores_guide_target_metadata() -> None:
@@ -297,6 +368,8 @@ def test_single_time_context_provider_fixed_cache_reuses_context() -> None:
     ctx2 = provider.build(model, seed=999, perturbation_ids=endpoint.perturbation_ids)
 
     assert ctx1 is ctx2
+    assert ctx1.context.requires_grad is False
+    assert ctx1.q.requires_grad is False
 
 
 def test_context_state_override_recomputes_mass_diagnostics() -> None:
@@ -361,6 +434,84 @@ def test_single_time_trainer_wires_context_and_extra_losses(tmp_path) -> None:
     assert result.claim_report["view_level"] == "view"
     assert trainer.endpoint.perturbation_ids == ["s1::ctrl", "s2::ctrl", "s1::gene_a", "s2::gene_b"]
     assert trainer.trainer._embedding_ids_for_pids(["s1::gene_a"]) == ["gene_a"]
+
+
+def test_single_time_default_ecological_growth_uses_full_rollout(tmp_path) -> None:
+    config = RunConfig(
+        simulation={"n_particles": 4, "n_steps": 1, "store_history": True},
+        training={
+            "epochs": 1,
+            "lambda_count": 0.0,
+            "lambda_weak": 0.0,
+            "lambda_reg_net": 0.0,
+            "lambda_reg_diffusion": 0.0,
+            "lambda_reg_embed": 0.0,
+            "max_active_perturbations": 0,
+        },
+        single_time={"enabled": True},
+    )
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+    trainer = SingleTimeTrainer(
+        model=_ecological_model(),
+        config=config,
+        problem=problem,
+        output_dir=str(tmp_path),
+        warmup_epochs=0,
+    )
+
+    result = trainer.train(n_epochs=1)
+
+    assert result.history.n_active_perturbations[0] == 4
+    assert result.history.perturbation_batch_size[0] == 4
+
+
+def test_single_time_trainer_rejects_chunked_rollout_at_construction(tmp_path) -> None:
+    config = RunConfig(
+        simulation={"n_particles": 4, "n_steps": 1, "store_history": True},
+        training={"max_active_perturbations": 1, "lambda_count": 0.0, "lambda_weak": 0.0},
+        single_time={"enabled": True},
+    )
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+
+    with pytest.raises(ValueError, match="full perturbation rollout"):
+        SingleTimeTrainer(
+            model=_model(),
+            config=config,
+            problem=problem,
+            output_dir=str(tmp_path),
+            warmup_epochs=0,
+        )
+
+
+def test_single_time_trainer_applies_config_mass_claim_grade(tmp_path) -> None:
+    data = _single_time_adata()
+    data.obs["mass_value"] = np.linspace(0.5, 1.2, data.n_obs)
+    problem = build_single_time_problem_from_anndata(
+        data,
+        mass_mode="obs_column",
+        mass_value_col="mass_value",
+    )
+    config = RunConfig(
+        simulation={"n_particles": 4, "n_steps": 1, "store_history": True},
+        training={"epochs": 1, "lambda_count": 0.0, "lambda_weak": 0.0},
+        single_time={
+            "enabled": True,
+            "mass_mode": "obs_column",
+            "mass_claim_grade": "claim_grade",
+            "abundance_claims": "enabled",
+        },
+    )
+
+    trainer = SingleTimeTrainer(
+        model=_model(),
+        config=config,
+        problem=problem,
+        output_dir=str(tmp_path),
+        warmup_epochs=0,
+    )
+
+    assert trainer.endpoint.metadata["abundance_claim_grade"] == "claim_grade"
+    assert trainer.claim_report["abundance_claim_grade"] == "claim_grade"
 
 
 def test_single_time_trainer_can_use_target_gene_embedding_level(tmp_path) -> None:
