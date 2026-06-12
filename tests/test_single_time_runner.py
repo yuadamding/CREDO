@@ -189,8 +189,20 @@ def test_single_time_runner_default_ecology_writes_effect_outputs(tmp_path: Path
         "training_context_sampling",
         "report_context_sampling",
         "terminal_ess_frac",
+        "source_ess_frac",
+        "factual_terminal_ess_frac",
+        "reference_terminal_ess_frac",
+        "weight_diagnostic_status",
         "max_weight_frac",
         "logw_range",
+        "factual_max_weight_frac",
+        "reference_max_weight_frac",
+        "factual_logw_range",
+        "reference_logw_range",
+        "delta_log_mass_semantics",
+        "delta_mass_semantics",
+        "control_null_z_diagnostic_delta_log_mass",
+        "control_null_abs_p95_exceeded_diagnostic_delta_log_mass",
         "latent_mean_shift_norm",
         "latent_variance_shift_norm",
     } <= set(effects.columns)
@@ -199,12 +211,35 @@ def test_single_time_runner_default_ecology_writes_effect_outputs(tmp_path: Path
     assert set(effects["report_is_posthoc_view_level"]) == {False}
     assert set(effects["training_context_sampling"]) == {"epoch_resample"}
     assert set(effects["report_context_sampling"]) == {"epoch_resample"}
+    assert set(effects["delta_log_mass_semantics"]) == {
+        "deprecated_alias_for_diagnostic_finite_measure_weight_effect",
+    }
     assert effects["abundance_delta_log_mass_claimable"].isna().all()
     assert effects["terminal_ess_frac"].between(0.0, 1.0).all()
-    assert {"endpoint_sinkhorn", "mass_error", "endpoint_geom_mass"} <= set(endpoints.columns)
+    assert effects["source_ess_frac"].between(0.0, 1.0).all()
+    assert effects["factual_terminal_ess_frac"].between(0.0, 1.0).all()
+    assert effects["reference_terminal_ess_frac"].between(0.0, 1.0).all()
+    assert set(effects["weight_diagnostic_status"]) <= {"ok", "warn", "fail"}
+    assert {
+        "endpoint_sinkhorn",
+        "mass_error",
+        "endpoint_geom_mass",
+        "factual_endpoint_sinkhorn",
+        "reference_endpoint_sinkhorn",
+        "delta_endpoint_sinkhorn_ref_minus_fact",
+        "factual_mass_error",
+        "reference_mass_error",
+        "delta_mass_error_ref_minus_fact",
+        "factual_target_mean_shift_norm",
+        "reference_target_mean_shift_norm",
+    } <= set(endpoints.columns)
+    assert np.allclose(endpoints["endpoint_sinkhorn"], endpoints["factual_endpoint_sinkhorn"])
+    assert np.allclose(endpoints["mass_error"], endpoints["factual_mass_error"])
     assert set(guide["target_gene"]) == {"gene_a"}
     assert set(guide["guide_concordance_evaluable"]) == {True}
-    assert {"n_views", "n_guides", "n_samples"} <= set(guide.columns)
+    assert set(guide["guide_concordance_claimable"]) == {True}
+    assert set(guide["guide_concordance_is_posthoc"]) == {False}
+    assert {"n_views", "n_guides", "n_samples", "training_view_level", "report_view_level"} <= set(guide.columns)
     assert set(controls["is_control"]) == {True}
     assert set(control_summary["metric"]) == {
         "diagnostic_delta_log_mass",
@@ -278,7 +313,10 @@ def test_single_time_runner_strict_schema_uses_custom_column_map(tmp_path: Path)
     )
 
     effects = pd.read_csv(out_dir / "single_time_effects.csv")
+    guide = pd.read_csv(out_dir / "single_time_guide_concordance.csv")
     assert set(effects["training_view_level"]) == {"embedding"}
     assert set(effects["report_view_level"]) == {"view"}
     assert set(effects["report_is_posthoc_view_level"]) == {True}
     assert set(effects["guide_id"]) == {"ctrl_g1", "ga_g1", "ga_g2"}
+    assert set(guide["guide_concordance_claimable"]) == {False}
+    assert set(guide["guide_concordance_is_posthoc"]) == {True}

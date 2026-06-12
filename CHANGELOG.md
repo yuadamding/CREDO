@@ -29,6 +29,10 @@
   labels, context-policy metadata, diagnostic versus claim-grade mass aliases,
   guide-concordance evaluability flags, signed latent-shift tables, control-null
   summaries, particle-weight diagnostics, and run provenance files.
+- Extended single-time effect artifacts with explicit deprecated-alias semantics
+  for `delta_log_mass`/`delta_mass`, factual/reference endpoint fit deltas,
+  source/factual/reference weight diagnostics, guide-concordance claimability
+  flags, and control-null z-score/p95 annotations.
 - Made strict single-time runner schema validation column-map-aware so custom
   control, guide, target-gene, sample, and batch columns can be validated before
   problem construction.

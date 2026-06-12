@@ -176,21 +176,30 @@ single_time_git_sha.txt
 
 These files preserve the single-time claim boundary with columns such as
 `context_protocol`, `context_gradient_mode`, `effect_axis_is_physical_time`,
-`mass_claim_grade`, `delta_log_mass`, latent mean/variance shift norms,
-endpoint geometry-plus-mass metrics, guide concordance summaries, and control
-null diagnostics.
+`mass_claim_grade`, explicit diagnostic and claimable mass-effect columns,
+latent mean/variance shift norms, factual/reference endpoint
+geometry-plus-mass metrics, guide concordance summaries, and control-null
+diagnostics.
 
 Effect outputs distinguish training and reporting levels with
 `training_view_level`, `report_view_level`, and
 `report_is_posthoc_view_level`. The runner always emits per-view biological
 diagnostics; if training used `--view-level embedding`, those rows are labeled
 as post hoc disaggregated view diagnostics. Mass-effect values are always
-reported as diagnostic finite-measure weight effects, and claim-grade abundance
-aliases are populated only when `abundance_claim_grade == claim_grade`.
-Guide-concordance summaries include `n_views`, `n_guides`, `n_samples`, and
-`guide_concordance_evaluable` so single-view targets are not mistaken for
-perfectly concordant targets. Per-view particle diagnostics include terminal
-ESS fraction, max-weight fraction, and log-weight range.
+reported as diagnostic finite-measure weight effects in
+`diagnostic_delta_log_mass` and `diagnostic_delta_mass`. The legacy
+`delta_log_mass` and `delta_mass` columns remain compatibility aliases and are
+labeled with `*_semantics`; claim-grade abundance columns are populated only
+when `abundance_claim_grade == claim_grade`. Endpoint output includes both
+factual-vs-target and reference-vs-target metrics plus
+`delta_*_ref_minus_fact` improvement columns. Guide-concordance summaries
+include `n_views`, `n_guides`, `n_samples`, `guide_concordance_evaluable`, and
+`guide_concordance_claimable` so post hoc or single-view summaries are not
+mistaken for claim-grade concordance. Per-view particle diagnostics include
+source, factual-terminal, and reference-terminal ESS fraction, max-weight
+fraction, log-weight range, and a coarse `weight_diagnostic_status`. Control
+null outputs also annotate every effect row with metric-specific control-null
+z-scores and absolute-p95 exceedance flags.
 
 ## Verify
 

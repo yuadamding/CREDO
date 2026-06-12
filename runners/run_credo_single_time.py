@@ -22,6 +22,13 @@ from credo.models import FullDynamicsModel, SingleTimeCounterfactualEngine, Weig
 from credo.training import SingleTimeTrainer
 
 
+CONTROL_NULL_METRICS = (
+    "diagnostic_delta_log_mass",
+    "latent_mean_shift_norm",
+    "latent_variance_shift_norm",
+)
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-path", required=True)
@@ -165,15 +172,34 @@ def _measure_mean_and_var(measure) -> tuple[torch.Tensor, torch.Tensor, torch.Te
     return mean, var, logw
 
 
-def _weight_diagnostics(logw: torch.Tensor) -> dict[str, float]:
+def _weight_diagnostics(logw: torch.Tensor, *, prefix: str) -> dict[str, float]:
+    logw = logw.detach().float().reshape(-1)
     weights = torch.softmax(logw, dim=0)
     n_particles = max(1, int(weights.numel()))
     ess = 1.0 / weights.square().sum().clamp_min(1e-30)
     return {
-        "terminal_ess_frac": float((ess / n_particles).item()),
-        "max_weight_frac": float(weights.max().item()),
-        "logw_range": float((logw.max() - logw.min()).item()),
+        f"{prefix}_ess_frac": float((ess / n_particles).item()),
+        f"{prefix}_max_weight_frac": float(weights.max().item()),
+        f"{prefix}_logw_range": float((logw.max() - logw.min()).item()),
     }
+
+
+def _weight_diagnostic_status(diagnostics: dict[str, float]) -> str:
+    ess_values = [
+        float(value)
+        for key, value in diagnostics.items()
+        if key.endswith("_ess_frac") and pd.notna(value)
+    ]
+    max_values = [
+        float(value)
+        for key, value in diagnostics.items()
+        if key.endswith("_max_weight_frac") and pd.notna(value)
+    ]
+    if any(value < 0.05 for value in ess_values) or any(value > 0.50 for value in max_values):
+        return "fail"
+    if any(value < 0.10 for value in ess_values) or any(value > 0.25 for value in max_values):
+        return "warn"
+    return "ok"
 
 
 def _vector_rows(
@@ -203,11 +229,7 @@ def _control_null_summary(control_null: pd.DataFrame) -> pd.DataFrame:
     if control_null.empty:
         return pd.DataFrame(columns=columns)
     rows = []
-    for metric in [
-        "diagnostic_delta_log_mass",
-        "latent_mean_shift_norm",
-        "latent_variance_shift_norm",
-    ]:
+    for metric in CONTROL_NULL_METRICS:
         values = pd.to_numeric(control_null.get(metric), errors="coerce").dropna()
         if values.empty:
             rows.append({"metric": metric, "n_controls": 0, "mean": pd.NA, "std": pd.NA, "abs_p95": pd.NA})
@@ -222,6 +244,35 @@ def _control_null_summary(control_null: pd.DataFrame) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows, columns=columns)
+
+
+def _add_control_null_scores(effects: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Add control-null z-scores and p95 exceedance flags to effect rows."""
+    if effects.empty:
+        control_null = pd.DataFrame(columns=effects.columns)
+        return effects, control_null, _control_null_summary(control_null)
+
+    scored = effects.copy()
+    control_null = scored.loc[scored["is_control"]].copy()
+    summary = _control_null_summary(control_null)
+    summary_by_metric = summary.set_index("metric") if not summary.empty else pd.DataFrame()
+    for metric in CONTROL_NULL_METRICS:
+        z_col = f"control_null_z_{metric}"
+        flag_col = f"control_null_abs_p95_exceeded_{metric}"
+        scored[z_col] = pd.NA
+        scored[flag_col] = pd.NA
+        if summary_by_metric.empty or metric not in summary_by_metric.index:
+            continue
+        mean = summary_by_metric.loc[metric, "mean"]
+        std = summary_by_metric.loc[metric, "std"]
+        abs_p95 = summary_by_metric.loc[metric, "abs_p95"]
+        values = pd.to_numeric(scored.get(metric), errors="coerce")
+        if pd.notna(std) and float(std) > 0:
+            scored[z_col] = (values - float(mean)) / float(std)
+        if pd.notna(abs_p95):
+            scored[flag_col] = values.abs() > float(abs_p95)
+    control_null = scored.loc[scored["is_control"]].copy()
+    return scored, control_null, summary
 
 
 def _git_sha() -> str:
@@ -317,13 +368,38 @@ def _write_single_time_effect_outputs(
         ref_var = _weighted_variance(ref_z, ref_logw)
         mean_diff = fact_mean - ref_mean
         var_diff = fact_var - ref_var
-        weight_diag = _weight_diagnostics(fact_logw)
+        source_logw = factual.logw_steps[0].squeeze(0).detach().float().cpu()
+        weight_diag = {
+            **_weight_diagnostics(source_logw, prefix="source"),
+            **_weight_diagnostics(fact_logw, prefix="factual_terminal"),
+            **_weight_diagnostics(ref_logw, prefix="reference_terminal"),
+        }
+        weight_diag.update(
+            {
+                "terminal_ess_frac": weight_diag["factual_terminal_ess_frac"],
+                "max_weight_frac": weight_diag["factual_terminal_max_weight_frac"],
+                "logw_range": weight_diag["factual_terminal_logw_range"],
+                "factual_max_weight_frac": weight_diag["factual_terminal_max_weight_frac"],
+                "reference_max_weight_frac": weight_diag["reference_terminal_max_weight_frac"],
+                "factual_logw_range": weight_diag["factual_terminal_logw_range"],
+                "reference_logw_range": weight_diag["reference_terminal_logw_range"],
+                "weight_diagnostic_status": _weight_diagnostic_status(weight_diag),
+            }
+        )
 
         target_mean, target_var, target_logw = _measure_mean_and_var(target)
         pred_logw_abs = fact_logw + factual.log_m0.squeeze(0).detach().float().cpu()
         components = loss_fn.component_dict(
             pred_z=fact_z.unsqueeze(0),
             pred_logw_abs=pred_logw_abs.unsqueeze(0),
+            target_support={pid: torch.as_tensor(target.support, dtype=torch.float32)},
+            target_logw={pid: target_logw},
+            perturbation_ids=[pid],
+        )[1][pid]
+        ref_logw_abs = ref_logw + reference.log_m0.squeeze(0).detach().float().cpu()
+        ref_components = loss_fn.component_dict(
+            pred_z=ref_z.unsqueeze(0),
+            pred_logw_abs=ref_logw_abs.unsqueeze(0),
             target_support={pid: torch.as_tensor(target.support, dtype=torch.float32)},
             target_logw={pid: target_logw},
             perturbation_ids=[pid],
@@ -364,6 +440,8 @@ def _write_single_time_effect_outputs(
                 "diagnostic_delta_mass": delta_mass,
                 "delta_log_mass": delta_log_mass,
                 "delta_mass": delta_mass,
+                "delta_log_mass_semantics": "deprecated_alias_for_diagnostic_finite_measure_weight_effect",
+                "delta_mass_semantics": "deprecated_alias_for_diagnostic_finite_measure_weight_effect",
                 "abundance_delta_log_mass_claimable": delta_log_mass if mass_claimable else pd.NA,
                 "abundance_delta_mass_claimable": delta_mass if mass_claimable else pd.NA,
                 "latent_mean_shift_norm": float(mean_diff.norm().item()),
@@ -379,21 +457,55 @@ def _write_single_time_effect_outputs(
         variance_shift_rows.extend(
             _vector_rows(base=base, values=var_diff, value_column="latent_variance_shift")
         )
+        factual_endpoint_geom_mass = float(components["total"].detach().cpu().item())
+        factual_endpoint_sinkhorn = float(components["geom"].detach().cpu().item())
+        factual_endpoint_mass_penalty = float(components["mass"].detach().cpu().item())
+        factual_mass_error = float(
+            (components["log_mass_pred"] - components["log_mass_target"]).detach().cpu().item()
+        )
+        reference_endpoint_geom_mass = float(ref_components["total"].detach().cpu().item())
+        reference_endpoint_sinkhorn = float(ref_components["geom"].detach().cpu().item())
+        reference_endpoint_mass_penalty = float(ref_components["mass"].detach().cpu().item())
+        reference_mass_error = float(
+            (ref_components["log_mass_pred"] - ref_components["log_mass_target"]).detach().cpu().item()
+        )
+        factual_target_mean_shift_norm = float((fact_mean - target_mean).norm().item())
+        reference_target_mean_shift_norm = float((ref_mean - target_mean).norm().item())
+        factual_target_variance_shift_norm = float((fact_var - target_var).norm().item())
+        reference_target_variance_shift_norm = float((ref_var - target_var).norm().item())
         endpoint_rows.append(
             {
                 **base,
-                "endpoint_geom_mass": float(components["total"].detach().cpu().item()),
-                "endpoint_sinkhorn": float(components["geom"].detach().cpu().item()),
-                "endpoint_mass_penalty": float(components["mass"].detach().cpu().item()),
-                "mass_error": float(
-                    (
-                        components["log_mass_pred"] - components["log_mass_target"]
-                    ).detach().cpu().item()
-                ),
+                "endpoint_geom_mass": factual_endpoint_geom_mass,
+                "endpoint_sinkhorn": factual_endpoint_sinkhorn,
+                "endpoint_mass_penalty": factual_endpoint_mass_penalty,
+                "mass_error": factual_mass_error,
+                "factual_endpoint_geom_mass": factual_endpoint_geom_mass,
+                "factual_endpoint_sinkhorn": factual_endpoint_sinkhorn,
+                "factual_endpoint_mass_penalty": factual_endpoint_mass_penalty,
+                "factual_mass_error": factual_mass_error,
+                "reference_endpoint_geom_mass": reference_endpoint_geom_mass,
+                "reference_endpoint_sinkhorn": reference_endpoint_sinkhorn,
+                "reference_endpoint_mass_penalty": reference_endpoint_mass_penalty,
+                "reference_mass_error": reference_mass_error,
+                "delta_endpoint_geom_mass_ref_minus_fact": reference_endpoint_geom_mass - factual_endpoint_geom_mass,
+                "delta_endpoint_sinkhorn_ref_minus_fact": reference_endpoint_sinkhorn - factual_endpoint_sinkhorn,
+                "delta_mass_error_ref_minus_fact": reference_mass_error - factual_mass_error,
                 "target_log_mass": float(components["log_mass_target"].detach().cpu().item()),
                 "pred_log_mass": float(components["log_mass_pred"].detach().cpu().item()),
-                "target_mean_shift_norm": float((fact_mean - target_mean).norm().item()),
-                "target_variance_shift_norm": float((fact_var - target_var).norm().item()),
+                "reference_pred_log_mass": float(ref_components["log_mass_pred"].detach().cpu().item()),
+                "target_mean_shift_norm": factual_target_mean_shift_norm,
+                "target_variance_shift_norm": factual_target_variance_shift_norm,
+                "factual_target_mean_shift_norm": factual_target_mean_shift_norm,
+                "reference_target_mean_shift_norm": reference_target_mean_shift_norm,
+                "delta_target_mean_shift_norm_ref_minus_fact": (
+                    reference_target_mean_shift_norm - factual_target_mean_shift_norm
+                ),
+                "factual_target_variance_shift_norm": factual_target_variance_shift_norm,
+                "reference_target_variance_shift_norm": reference_target_variance_shift_norm,
+                "delta_target_variance_shift_norm_ref_minus_fact": (
+                    reference_target_variance_shift_norm - factual_target_variance_shift_norm
+                ),
             }
         )
 
@@ -427,15 +539,37 @@ def _write_single_time_effect_outputs(
         "diagnostic_delta_mass",
         "delta_log_mass",
         "delta_mass",
+        "delta_log_mass_semantics",
+        "delta_mass_semantics",
         "abundance_delta_log_mass_claimable",
         "abundance_delta_mass_claimable",
         "latent_mean_shift_norm",
         "latent_variance_shift_norm",
         "terminal_factual_log_mass",
         "terminal_reference_log_mass",
+        "source_ess_frac",
+        "source_max_weight_frac",
+        "source_logw_range",
+        "factual_terminal_ess_frac",
+        "factual_terminal_max_weight_frac",
+        "factual_terminal_logw_range",
+        "reference_terminal_ess_frac",
+        "reference_terminal_max_weight_frac",
+        "reference_terminal_logw_range",
         "terminal_ess_frac",
         "max_weight_frac",
         "logw_range",
+        "factual_max_weight_frac",
+        "reference_max_weight_frac",
+        "factual_logw_range",
+        "reference_logw_range",
+        "weight_diagnostic_status",
+        "control_null_z_diagnostic_delta_log_mass",
+        "control_null_abs_p95_exceeded_diagnostic_delta_log_mass",
+        "control_null_z_latent_mean_shift_norm",
+        "control_null_abs_p95_exceeded_latent_mean_shift_norm",
+        "control_null_z_latent_variance_shift_norm",
+        "control_null_abs_p95_exceeded_latent_variance_shift_norm",
         "same_reference_source",
         "same_noise",
     ]
@@ -444,12 +578,31 @@ def _write_single_time_effect_outputs(
         "endpoint_sinkhorn",
         "endpoint_mass_penalty",
         "mass_error",
+        "factual_endpoint_geom_mass",
+        "factual_endpoint_sinkhorn",
+        "factual_endpoint_mass_penalty",
+        "factual_mass_error",
+        "reference_endpoint_geom_mass",
+        "reference_endpoint_sinkhorn",
+        "reference_endpoint_mass_penalty",
+        "reference_mass_error",
+        "delta_endpoint_geom_mass_ref_minus_fact",
+        "delta_endpoint_sinkhorn_ref_minus_fact",
+        "delta_mass_error_ref_minus_fact",
         "target_log_mass",
         "pred_log_mass",
+        "reference_pred_log_mass",
         "target_mean_shift_norm",
         "target_variance_shift_norm",
+        "factual_target_mean_shift_norm",
+        "reference_target_mean_shift_norm",
+        "delta_target_mean_shift_norm_ref_minus_fact",
+        "factual_target_variance_shift_norm",
+        "reference_target_variance_shift_norm",
+        "delta_target_variance_shift_norm_ref_minus_fact",
     ]
     effects = pd.DataFrame(effect_rows, columns=effect_columns)
+    effects, control_null, control_summary = _add_control_null_scores(effects)
     endpoints = pd.DataFrame(endpoint_rows, columns=endpoint_columns)
     mean_shifts = pd.DataFrame(
         mean_shift_rows,
@@ -459,27 +612,23 @@ def _write_single_time_effect_outputs(
         variance_shift_rows,
         columns=base_columns + ["latent_dim", "latent_variance_shift"],
     )
-    effects.to_csv(output_dir / "single_time_effects.csv", index=False)
-    endpoints.to_csv(output_dir / "single_time_endpoint_metrics.csv", index=False)
-    mean_shifts.to_csv(output_dir / "single_time_latent_mean_shift_by_dim.csv", index=False)
-    variance_shifts.to_csv(output_dir / "single_time_latent_variance_shift_by_dim.csv", index=False)
-
+    guide_columns = [
+        "target_gene",
+        "n_views",
+        "n_guides",
+        "n_samples",
+        "guide_concordance_evaluable",
+        "guide_concordance_claimable",
+        "guide_concordance_is_posthoc",
+        "training_view_level",
+        "report_view_level",
+        "delta_log_mass_std",
+        "latent_mean_shift_norm_std",
+        "latent_variance_shift_norm_std",
+    ]
     if effects.empty:
-        control_null = pd.DataFrame(columns=effects.columns)
-        guide_summary = pd.DataFrame(
-            columns=[
-                "target_gene",
-                "n_views",
-                "n_guides",
-                "n_samples",
-                "guide_concordance_evaluable",
-                "delta_log_mass_std",
-                "latent_mean_shift_norm_std",
-                "latent_variance_shift_norm_std",
-            ]
-        )
+        guide_summary = pd.DataFrame(columns=guide_columns)
     else:
-        control_null = effects.loc[effects["is_control"]].copy()
         guide = effects.loc[~effects["is_control"]].copy()
         guide = guide[guide["target_gene"].notna()]
         if not guide.empty:
@@ -499,21 +648,22 @@ def _write_single_time_effect_outputs(
                 (guide_summary["n_views"] >= 2)
                 & ((guide_summary["n_guides"] >= 2) | (guide_summary["n_samples"] >= 2))
             )
-        else:
-            guide_summary = pd.DataFrame(
-                columns=[
-                    "target_gene",
-                    "n_views",
-                    "n_guides",
-                    "n_samples",
-                    "guide_concordance_evaluable",
-                    "delta_log_mass_std",
-                    "latent_mean_shift_norm_std",
-                    "latent_variance_shift_norm_std",
-                ]
+            guide_summary["guide_concordance_is_posthoc"] = bool(report_is_posthoc)
+            guide_summary["guide_concordance_claimable"] = (
+                guide_summary["guide_concordance_evaluable"].astype(bool)
+                & (not bool(report_is_posthoc))
             )
+            guide_summary["training_view_level"] = training_view_level
+            guide_summary["report_view_level"] = report_view_level
+            guide_summary = guide_summary.reindex(columns=guide_columns)
+        else:
+            guide_summary = pd.DataFrame(columns=guide_columns)
+    effects.to_csv(output_dir / "single_time_effects.csv", index=False)
+    endpoints.to_csv(output_dir / "single_time_endpoint_metrics.csv", index=False)
+    mean_shifts.to_csv(output_dir / "single_time_latent_mean_shift_by_dim.csv", index=False)
+    variance_shifts.to_csv(output_dir / "single_time_latent_variance_shift_by_dim.csv", index=False)
     control_null.to_csv(output_dir / "single_time_control_null.csv", index=False)
-    _control_null_summary(control_null).to_csv(
+    control_summary.to_csv(
         output_dir / "single_time_control_null_summary.csv",
         index=False,
     )

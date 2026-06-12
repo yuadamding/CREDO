@@ -141,10 +141,26 @@ class SingleTimeCounterfactualEngine:
             context_override=selected_context_override,
         )
 
+        context_override_id = "provided" if context_override is not None else "none"
+
+        def _reference_cache_key(target_embedding_id: str) -> str:
+            parts = [
+                str(target_embedding_id),
+                str(control_rollout_mode),
+                str(selected_protocol),
+                str(context_tau),
+                str(context_sampling),
+                str(context_gradient_mode),
+                context_override_id,
+                "control_reference",
+            ]
+            return "|".join(parts)
+
         reference_by_embedding: dict[str, Any] = {}
         for target_embedding_id in dict.fromkeys(embedding_ids_from_endpoint(endpoint, target_pids)):
+            cache_key = _reference_cache_key(target_embedding_id)
             with _control_embedding_context(self.model, target_embedding_id, mode=control_rollout_mode):
-                reference_by_embedding[target_embedding_id] = self.simulator.rollout(
+                reference_by_embedding[cache_key] = self.simulator.rollout(
                     z0=z0_all.clone(),
                     logw0=lw0_all.clone(),
                     model=self.model,
@@ -159,7 +175,8 @@ class SingleTimeCounterfactualEngine:
         results: list[CounterfactualResult] = []
         for pid in target_pids:
             target_embedding_id = embedding_ids_from_endpoint(endpoint, [pid])[0]
-            reference_all = reference_by_embedding[target_embedding_id]
+            reference_cache_key = _reference_cache_key(target_embedding_id)
+            reference_all = reference_by_embedding[reference_cache_key]
             idx = all_pids.index(pid)
             metadata = {
                 **endpoint.metadata,
@@ -181,7 +198,8 @@ class SingleTimeCounterfactualEngine:
                 "initial_seed": int(seed),
                 "noise_seed": noise_seed if common_noise else None,
                 "factual_full_context_reused": True,
-                "reference_rollout_cache_key": target_embedding_id,
+                "reference_rollout_cache_key": reference_cache_key,
+                "reference_rollout_cache_embedding_id": target_embedding_id,
                 "reference_rollouts_cached_by_embedding": True,
                 "rollout_control_semantics": control_rollout_mode,
             }

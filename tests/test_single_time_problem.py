@@ -578,7 +578,9 @@ def test_single_time_counterfactual_reports_context_policy_and_reference_cache()
     assert result.metadata["context_sampling"] == "epoch_resample"
     assert result.metadata["context_gradient_mode"] == "detached_cache"
     assert result.metadata["reference_rollouts_cached_by_embedding"] is True
-    assert result.metadata["reference_rollout_cache_key"] == "gene_a"
+    assert result.metadata["reference_rollout_cache_embedding_id"] == "gene_a"
+    assert result.metadata["reference_rollout_cache_key"].startswith("gene_a|reference_consistent|")
+    assert "epoch_resample|detached_cache" in result.metadata["reference_rollout_cache_key"]
 
 
 def test_single_time_context_tau_defaults_match_protocol() -> None:
