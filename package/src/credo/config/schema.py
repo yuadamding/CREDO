@@ -32,6 +32,10 @@ class SingleTimeConfig(BaseModel):
     enabled: bool = False
     view_level: Literal["view", "embedding"] = "view"
     view_key_level: Literal["perturbation", "guide", "sample_perturbation", "sample_guide"] = "sample_perturbation"
+    effect_vector_components: tuple[
+        Literal["delta_log_mass", "latent_mean_shift", "latent_variance_shift"],
+        ...,
+    ] = ("delta_log_mass", "latent_mean_shift")
     context_protocol: Literal[
         "observed_snapshot",
         "source_reference",
@@ -48,6 +52,14 @@ class SingleTimeConfig(BaseModel):
     lambda_control_null: float = 0.0
     lambda_minimal_action: float = 0.0
     lambda_guide_concordance: float = 0.0
+
+    @model_validator(mode="after")
+    def _validate_effect_components(self) -> "SingleTimeConfig":
+        if not self.effect_vector_components:
+            raise ValueError("single_time.effect_vector_components must not be empty.")
+        if len(set(self.effect_vector_components)) != len(self.effect_vector_components):
+            raise ValueError("single_time.effect_vector_components contains duplicates.")
+        return self
 
 
 class VAEConfig(BaseModel):

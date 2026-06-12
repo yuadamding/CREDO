@@ -360,6 +360,32 @@ def test_single_time_config_rejects_abundance_claims_without_claim_grade_mass() 
     assert config.single_time.mass_claim_grade == "claim_grade"
 
 
+def test_single_time_config_validates_effect_vector_components() -> None:
+    config = RunConfig(
+        single_time={
+            "enabled": True,
+            "effect_vector_components": [
+                "delta_log_mass",
+                "latent_mean_shift",
+                "latent_variance_shift",
+            ],
+        },
+    )
+    assert config.single_time.effect_vector_components == (
+        "delta_log_mass",
+        "latent_mean_shift",
+        "latent_variance_shift",
+    )
+
+    with pytest.raises(ValueError, match="contains duplicates"):
+        RunConfig(
+            single_time={
+                "enabled": True,
+                "effect_vector_components": ["delta_log_mass", "delta_log_mass"],
+            },
+        )
+
+
 def test_single_time_builder_stores_guide_target_metadata() -> None:
     data = _single_time_adata()
     data.obs["guide_id"] = ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1", "ctrl_g1", "ctrl_g1", "gb_g1", "gb_g1"]
@@ -373,6 +399,97 @@ def test_single_time_builder_stores_guide_target_metadata() -> None:
     assert gene_a.target_gene == "gene_a"
     assert endpoint.metadata["target_ids"]["s1::gene_a"] == "gene_a"
     assert endpoint.metadata["measure_to_guide"]["s1::gene_a"] == "ga_g1"
+
+
+def test_single_time_multiple_control_guides_share_target_gene_control_embedding() -> None:
+    obs = pd.DataFrame(
+        {
+            "cell_id": [f"c{i}" for i in range(12)],
+            "guide_id": [
+                "ctrl_g1",
+                "ctrl_g1",
+                "ctrl_g2",
+                "ctrl_g2",
+                "ga_g1",
+                "ga_g1",
+                "ctrl_g1",
+                "ctrl_g1",
+                "ctrl_g2",
+                "ctrl_g2",
+                "ga_g2",
+                "ga_g2",
+            ],
+            "target_gene": [
+                "control",
+                "control",
+                "control",
+                "control",
+                "gene_a",
+                "gene_a",
+                "control",
+                "control",
+                "control",
+                "control",
+                "gene_a",
+                "gene_a",
+            ],
+            "is_control": [True, True, True, True, False, False, True, True, True, True, False, False],
+            "sample_id": ["s1"] * 6 + ["s2"] * 6,
+        },
+        index=[f"cell_{i}" for i in range(12)],
+    )
+    data = ad.AnnData(X=np.ones((12, 3), dtype=np.float32), obs=obs)
+    data.obsm["X_pca"] = np.arange(24, dtype=np.float32).reshape(12, 2)
+
+    problem = build_single_time_problem_from_anndata(
+        data,
+        perturbation_col="guide_id",
+        guide_col="guide_id",
+        target_gene_col="target_gene",
+        embedding_level="target_gene",
+        view_key_level="sample_guide",
+        reference_scope="sample",
+    )
+    endpoint = problem.to_effect_endpoint_problem(view_level="view")
+
+    assert problem.catalog.control_ids == ["control"]
+    assert {"s1::ctrl_g1", "s1::ctrl_g2", "s2::ctrl_g1", "s2::ctrl_g2"} <= set(
+        endpoint.metadata["control_measure_keys"],
+    )
+    assert endpoint.metadata["measure_to_embedding"]["s1::ctrl_g1"] == "control"
+    assert endpoint.metadata["measure_to_embedding"]["s2::ga_g2"] == "gene_a"
+    assert endpoint.metadata["target_ids"]["s1::ga_g1"] == "gene_a"
+
+
+def test_single_time_guide_views_can_use_target_gene_level_perturbation_col() -> None:
+    data = _single_time_adata()
+    data.obs["guide_id"] = ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1", "ctrl_g1", "ctrl_g1", "gb_g1", "gb_g1"]
+    data.obs["target_gene"] = [
+        "non_targeting",
+        "non_targeting",
+        "gene_a",
+        "gene_a",
+        "non_targeting",
+        "non_targeting",
+        "gene_b",
+        "gene_b",
+    ]
+    problem = build_single_time_problem_from_anndata(
+        data,
+        perturbation_col="target_gene",
+        guide_col="guide_id",
+        target_gene_col="target_gene",
+        embedding_level="target_gene",
+        view_key_level="sample_guide",
+        reference_scope="sample",
+    )
+    endpoint = problem.to_effect_endpoint_problem(view_level="view")
+
+    assert problem.catalog.control_ids == ["non_targeting"]
+    assert endpoint.metadata["measure_to_original_perturbation"]["s1::ga_g1"] == "gene_a"
+    assert endpoint.metadata["measure_to_guide"]["s1::ga_g1"] == "ga_g1"
+    assert endpoint.metadata["measure_to_embedding"]["s1::ctrl_g1"] == "non_targeting"
+    assert endpoint.metadata["target_ids"]["s2::gb_g1"] == "gene_b"
 
 
 def test_single_time_target_plus_guide_residual_is_rejected_until_modeled() -> None:
@@ -654,6 +771,38 @@ def test_single_time_trainer_can_use_target_gene_embedding_level(tmp_path) -> No
 
     assert trainer.endpoint.metadata["measure_to_embedding"]["s1::gene_a"] == "gene_a"
     assert trainer.trainer._embedding_ids_for_pids(["s1::gene_a", "s2::gene_b"]) == ["gene_a", "gene_b"]
+
+
+def test_single_time_trainer_warns_when_guide_views_are_pooled_by_embedding(tmp_path) -> None:
+    data = _single_time_adata()
+    data.obs["guide_id"] = ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1", "ctrl_g1", "ctrl_g1", "gb_g1", "gb_g1"]
+    data.obs["target_gene"] = ["ctrl", "ctrl", "gene_a", "gene_a", "ctrl", "ctrl", "gene_b", "gene_b"]
+    problem = build_single_time_problem_from_anndata(
+        data,
+        reference_scope="sample",
+        embedding_level="target_gene",
+        view_key_level="sample_guide",
+    )
+    config = RunConfig(
+        simulation={"n_particles": 4, "n_steps": 1, "store_history": True},
+        training={"epochs": 1, "lambda_count": 0.0, "lambda_weak": 0.0},
+        single_time={
+            "enabled": True,
+            "view_level": "embedding",
+            "view_key_level": "sample_guide",
+        },
+    )
+
+    with pytest.warns(RuntimeWarning, match="pools them by embedding"):
+        trainer = SingleTimeTrainer(
+            model=_target_gene_model(),
+            config=config,
+            problem=problem,
+            output_dir=str(tmp_path),
+            warmup_epochs=0,
+        )
+
+    assert trainer.endpoint.metadata["view_level"] == "embedding"
 
 
 def test_single_time_hooks_are_rejected_in_chunked_trainer(tmp_path) -> None:

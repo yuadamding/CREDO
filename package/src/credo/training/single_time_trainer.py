@@ -1,6 +1,7 @@
 """Training adapter for single-time CREDO effect-path problems."""
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
@@ -75,6 +76,18 @@ class SingleTimeTrainer:
             if single_time_config.enabled
             else "view"
         )
+        if (
+            single_time_config.enabled
+            and single_time_config.view_key_level in {"guide", "sample_guide"}
+            and endpoint_view_level == "embedding"
+        ):
+            warnings.warn(
+                "single_time.view_key_level preserves guide-level finite measures, "
+                "but single_time.view_level='embedding' pools them by embedding. "
+                "Use view_level='view' for guide-level effect and concordance outputs.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         self.endpoint = problem.to_effect_endpoint_problem(view_level=endpoint_view_level)
         self._control_embedding_ids = {
             view.embedding_id
@@ -130,6 +143,9 @@ class SingleTimeTrainer:
             {
                 "view_level": self.endpoint.metadata.get("view_level"),
                 "view_key_level": self.endpoint.metadata.get("view_key_level"),
+                "effect_vector_components": list(
+                    self.trainer.config.single_time.effect_vector_components,
+                ),
                 "context_sampling": self.trainer.config.single_time.context_sampling,
                 "context_gradient_mode": self.trainer.config.single_time.context_gradient_mode,
                 "counterfactual_source_semantics": self.endpoint.metadata.get(
@@ -217,16 +233,34 @@ class SingleTimeTrainer:
         weights = torch.softmax(logw, dim=1)
         return (weights.unsqueeze(-1) * z).sum(dim=1)
 
+    @staticmethod
+    def _weighted_variance(z: torch.Tensor, logw: torch.Tensor) -> torch.Tensor:
+        weights = torch.softmax(logw, dim=1)
+        mean = (weights.unsqueeze(-1) * z).sum(dim=1)
+        return (weights.unsqueeze(-1) * (z - mean.unsqueeze(1)).square()).sum(dim=1)
+
     def _effect_vectors_from_rollout(
         self,
         rollout,
         delta_log_mass: torch.Tensor,
     ) -> torch.Tensor:
-        """Summarize single-time effects by mass and latent-state displacement."""
+        """Summarize single-time effects for control-null and guide-concordance losses."""
+        components = self.trainer.config.single_time.effect_vector_components
         initial_mean = self._weighted_mean(rollout.z_steps[0], rollout.logw_steps[0])
         terminal_mean = self._weighted_mean(rollout.terminal_z, rollout.terminal_logw)
         mean_shift = terminal_mean - initial_mean
-        return torch.cat([delta_log_mass.unsqueeze(-1), mean_shift], dim=1)
+        vectors = []
+        if "delta_log_mass" in components:
+            vectors.append(delta_log_mass.unsqueeze(-1))
+        if "latent_mean_shift" in components:
+            vectors.append(mean_shift)
+        if "latent_variance_shift" in components:
+            initial_var = self._weighted_variance(rollout.z_steps[0], rollout.logw_steps[0])
+            terminal_var = self._weighted_variance(rollout.terminal_z, rollout.terminal_logw)
+            vectors.append(terminal_var - initial_var)
+        if not vectors:
+            raise ValueError("single_time.effect_vector_components produced no effect vector.")
+        return torch.cat(vectors, dim=1)
 
     def train(self, stage: str = "all", n_epochs: Optional[int] = None) -> SingleTimeTrainingHistory:
         history = self.trainer.train(stage=stage, n_epochs=n_epochs)

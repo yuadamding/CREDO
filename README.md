@@ -30,6 +30,12 @@ python scripts/verify_setup.py \
   --data-schema trajectory \
   --strict-data-schema \
   --latent-key X_pca
+python scripts/verify_setup.py \
+  --check-data \
+  --data-path ../inputs/single_time/example.h5ad \
+  --data-schema single_time \
+  --strict-data-schema \
+  --latent-key X_pca
 credo-validate-data \
   --data-path /path/to/input.h5ad \
   --schema trajectory \
@@ -37,6 +43,15 @@ credo-validate-data \
   --latent-key X_pca \
   --json
 ```
+
+## When to Use Each Mode
+
+| Data setting | Entry point | Claim boundary |
+| --- | --- | --- |
+| P4/P60 endpoint Perturb-seq | `runners/run_credo_hnscc_full.py` | Finite-measure endpoint transport, mass calibration, and same-start counterfactuals over the observed interval. |
+| Multi-time trajectory | `runners/run_credo_trajectory.py` or `runners/run_credo_lps_3time.py` | Continuous global-time rollout through observed checkpoint finite measures. |
+| True one-timepoint Perturb-seq | `runners/run_credo_single_time.py` | Control-referenced static effect paths on a non-physical effect axis. |
+| Pseudotime-only snapshot | Diagnostic only | Not a first-class physical-time CREDO mode. Do not claim temporal drift or growth from pseudotime alone. |
 
 ## Smoke Runs
 
@@ -79,6 +94,8 @@ python runners/run_credo_single_time.py \
   --view-level view \
   --mass-mode unit_mass \
   --context-protocol observed_snapshot \
+  --effect-vector-components delta_log_mass,latent_mean_shift,latent_variance_shift \
+  --strict-data-schema \
   --epochs 2 \
   --n-particles 32 \
   --n-steps 4
@@ -103,6 +120,55 @@ does not infer physical temporal dynamics from one snapshot. Use
 `--view-key-level sample_guide` to preserve sample-specific guide-level finite
 measures while learning target-gene embeddings, or `guide` to pool guides
 across samples with a global reference.
+
+For guide-level single-time Perturb-seq, the recommended convention is:
+
+```text
+--perturbation-col guide_id
+--guide-col guide_id
+--target-gene-col target_gene
+--embedding-level target_gene
+--view-key-level sample_guide
+--view-level view
+```
+
+`view_key_level` controls how finite-measure views are constructed; `view_level`
+controls whether endpoint training preserves those views or pools them by
+embedding. Setting `--view-key-level guide` or `sample_guide` together with
+`--view-level embedding` is allowed, but it pools away guide-level endpoint
+views and is reported with a warning.
+
+Single-time context gradient modes have distinct claim semantics:
+
+| Mode | Meaning |
+| --- | --- |
+| `recompute_no_grad` | Reuse fixed sampled context particles and recompute learned context features without gradients. This is the default static observed-context covariate mode. |
+| `recompute_with_grad` | Reuse fixed sampled context particles while allowing gradients through learned context feature maps. |
+| `detached_cache` | Freeze both sampled particles and computed context features. Use mainly for diagnostics. |
+
+Single-time control-null and guide-concordance regularizers use
+`--effect-vector-components`. The default is
+`delta_log_mass,latent_mean_shift` for compatibility; add
+`latent_variance_shift` when dispersion effects should enter the regularized
+effect vector. Richer program/prototype components are intentionally left for a
+future typed identity/effect-vector layer.
+
+The single-time runner writes biological effect artifacts after training:
+
+```text
+single_time_effects.csv
+single_time_endpoint_metrics.csv
+single_time_guide_concordance.csv
+single_time_control_null.csv
+single_time_claim_report.json
+single_time_problem_summary.json
+```
+
+These files preserve the single-time claim boundary with columns such as
+`context_protocol`, `context_gradient_mode`, `effect_axis_is_physical_time`,
+`mass_claim_grade`, `delta_log_mass`, latent mean/variance shift norms,
+endpoint geometry-plus-mass metrics, guide concordance summaries, and control
+null diagnostics.
 
 ## Verify
 

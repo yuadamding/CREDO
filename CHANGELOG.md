@@ -18,6 +18,13 @@
 - Hardened single-time CREDO with explicit guide-level view keys, fixed-particle
   context recomputation policy, vector-valued effect regularizers, and a compact
   single-time runner.
+- Added `single_time` setup-verification schema support, single-time runner
+  strict schema validation, guide-view pooling warnings, and post-training
+  single-time biological effect artifacts for effect, endpoint, guide
+  concordance, and control-null diagnostics.
+- Added a compact `single_time.effect_vector_components` policy so single-time
+  control-null and guide-concordance regularizers can include mass, latent mean
+  shift, and optional latent variance shift components.
 - Kept compatibility shims and tests for existing runner manifests, package
   imports, endpoint summaries, and CREDO semantic invariants.
 

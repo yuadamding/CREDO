@@ -23,7 +23,7 @@ OPTIONAL_IMPORTS = (
     "geomloss",
     "scipy",
 )
-DATA_SCHEMA_CHOICES = ("custom", "endpoint", "minimal", "trajectory")
+DATA_SCHEMA_CHOICES = ("custom", "endpoint", "minimal", "single_time", "trajectory")
 
 
 def _module_status(name: str) -> dict[str, Any]:

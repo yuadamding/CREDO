@@ -106,3 +106,45 @@ def test_verify_setup_check_data_uses_credo_schema_validator(tmp_path: Path) -> 
     assert report["data"]["schema"] == "trajectory"
     assert report["data"]["strict"] is True
     assert report["data"]["latent_row_count_matches_obs"] is True
+
+
+def test_verify_setup_accepts_single_time_schema(tmp_path: Path) -> None:
+    path = tmp_path / "tiny_single_time.h5ad"
+    obs = pd.DataFrame(
+        {
+            "cell_id": ["c0", "c1", "c2", "c3"],
+            "guide_id": ["ctrl_g1", "ctrl_g1", "ga_g1", "ga_g1"],
+            "target_gene": ["ctrl", "ctrl", "gene_a", "gene_a"],
+            "is_control": [True, True, False, False],
+            "sample_id": ["s1", "s1", "s1", "s1"],
+        },
+        index=["cell_0", "cell_1", "cell_2", "cell_3"],
+    )
+    data = ad.AnnData(X=np.ones((4, 3), dtype=np.float32), obs=obs)
+    data.obsm["X_pca"] = np.ones((4, 2), dtype=np.float32)
+    data.write_h5ad(path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "verify_setup.py"),
+            "--json",
+            "--check-data",
+            "--data-path",
+            str(path),
+            "--data-schema",
+            "single_time",
+            "--strict-data-schema",
+        ],
+        cwd=ROOT,
+        env=_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = json.loads(result.stdout)
+    assert report["ok"] is True
+    assert report["data"]["schema"] == "single_time"
+    assert report["data"]["n_controls"] == 2
+    assert report["data"]["n_non_controls"] == 2
