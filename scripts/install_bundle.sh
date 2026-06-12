@@ -39,6 +39,11 @@ default_data_path() {
   printf '%s\n' "${candidates[0]}"
 }
 DATA_PATH="${DATA_PATH:-$(default_data_path)}"
+VERIFY_CHECK_DATA="${VERIFY_CHECK_DATA:-auto}"
+VERIFY_DATA_SCHEMA="${VERIFY_DATA_SCHEMA:-custom}"
+VERIFY_LATENT_KEY="${VERIFY_LATENT_KEY:-X_pca}"
+VERIFY_STRICT_DATA_SCHEMA="${VERIFY_STRICT_DATA_SCHEMA:-0}"
+VERIFY_OBS_COLUMNS="${VERIFY_OBS_COLUMNS:-}"
 
 create_env() {
   local condarc_tmp=""
@@ -84,4 +89,25 @@ if [[ "$INSTALL_TORCH" == "1" || ( "$INSTALL_TORCH" == "auto" && "$torch_ok" != 
   "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python -m pip install --no-cache-dir --force-reinstall --index-url "$TORCH_INDEX_URL" "$TORCH_SPEC"
 fi
 "$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python -m pip install --no-cache-dir -e package
-"$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python scripts/verify_setup.py --data-path "$DATA_PATH"
+verify_args=(scripts/verify_setup.py)
+if [[ "$VERIFY_CHECK_DATA" == "1" || "$VERIFY_CHECK_DATA" == "true" || ( "$VERIFY_CHECK_DATA" == "auto" && -f "$DATA_PATH" ) ]]; then
+  verify_args+=(
+    --check-data
+    --data-path "$DATA_PATH"
+    --data-schema "$VERIFY_DATA_SCHEMA"
+    --latent-key "$VERIFY_LATENT_KEY"
+  )
+  if [[ "$VERIFY_STRICT_DATA_SCHEMA" == "1" || "$VERIFY_STRICT_DATA_SCHEMA" == "true" ]]; then
+    verify_args+=(--strict-data-schema)
+  fi
+  if [[ -n "$VERIFY_OBS_COLUMNS" ]]; then
+    IFS=',' read -r -a verify_obs_columns <<<"$VERIFY_OBS_COLUMNS"
+    for column in "${verify_obs_columns[@]}"; do
+      column="${column#"${column%%[![:space:]]*}"}"
+      column="${column%"${column##*[![:space:]]}"}"
+      [[ -n "$column" ]] || continue
+      verify_args+=(--obs-column "$column")
+    done
+  fi
+fi
+"$CONDA_BIN" run --no-capture-output -n "$ENV_NAME" python "${verify_args[@]}"

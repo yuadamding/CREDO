@@ -8,7 +8,7 @@ import torch
 
 
 def control_null_effect_loss(effect_scores: torch.Tensor, is_control: torch.Tensor) -> torch.Tensor:
-    """Penalize nonzero effects for held-out or leave-one-control references."""
+    """Penalize nonzero scalar or vector effects for control references."""
     if effect_scores.ndim == 0:
         effect_scores = effect_scores.reshape(1)
     mask = is_control.to(device=effect_scores.device, dtype=torch.bool)
@@ -43,9 +43,11 @@ def minimal_effect_action_loss(
 
 
 def guide_concordance_effect_loss(effect_scores: torch.Tensor, target_ids: Sequence[str]) -> torch.Tensor:
-    """Penalize guide-level effects that disagree within target genes."""
-    if effect_scores.ndim != 1:
-        raise ValueError("effect_scores must be a 1D tensor.")
+    """Penalize guide-level scalar or vector effects that disagree within target genes."""
+    if effect_scores.ndim == 0:
+        effect_scores = effect_scores.reshape(1)
+    if effect_scores.ndim < 1:
+        raise ValueError("effect_scores must have a group dimension.")
     if len(target_ids) != int(effect_scores.shape[0]):
         raise ValueError("target_ids must have one entry per effect score.")
     by_target: dict[str, list[int]] = defaultdict(list)
@@ -56,7 +58,7 @@ def guide_concordance_effect_loss(effect_scores: torch.Tensor, target_ids: Seque
         if len(indices) < 2:
             continue
         values = effect_scores[torch.as_tensor(indices, device=effect_scores.device)]
-        losses.append((values - values.mean()).square().mean())
+        losses.append((values - values.mean(dim=0, keepdim=True)).square().mean())
     if not losses:
         return effect_scores.new_tensor(0.0)
     return torch.stack(losses).mean()

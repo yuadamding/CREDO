@@ -24,7 +24,7 @@ from .expression_vae import (
 )
 from .full_model import FullDynamicsModel
 from .interventions import CausalAttentionIntervention
-from .single_time_context import SingleTimeContextProvider, resolve_single_time_context_tau
+from .single_time_context import ContextGradientMode, SingleTimeContextProvider, resolve_single_time_context_tau
 from .single_time_counterfactual import SingleTimeCounterfactualEngine
 from .transformer_blocks import FeedForwardBlock, InducedSetAttentionBlock, MassBiasedCrossAttention
 from .transformer_context import MassAwareTransformerContextAggregator
@@ -59,6 +59,7 @@ __all__ = [
     "CausalEcologicalAttentionContext",
     "ContextAggregator",
     "ContextDiagnostics",
+    "ContextGradientMode",
     "ContextState",
     "CounterfactualEngine",
     "CounterfactualResult",

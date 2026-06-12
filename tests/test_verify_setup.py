@@ -6,6 +6,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+import anndata as ad
+import numpy as np
+import pandas as pd
 import pytest
 
 
@@ -35,6 +38,7 @@ def test_verify_setup_without_data_succeeds() -> None:
     assert report["ok"] is True
     assert report["data"]["checked"] is False
     assert report["environment"]["required_imports"]["credo"]["ok"] is True
+    assert report["environment"]["required_imports"]["credo"]["version"] == "2.0.1"
 
 
 def test_verify_setup_check_data_requires_existing_path(tmp_path: Path) -> None:
@@ -60,3 +64,45 @@ def test_verify_setup_check_data_requires_existing_path(tmp_path: Path) -> None:
     assert report["ok"] is False
     assert report["data"]["checked"] is True
     assert "Missing data file" in report["data"]["error"]
+
+
+def test_verify_setup_check_data_uses_credo_schema_validator(tmp_path: Path) -> None:
+    path = tmp_path / "tiny_trajectory.h5ad"
+    obs = pd.DataFrame(
+        {
+            "perturbation_id": ["ctrl", "gene_a"],
+            "time_label": ["t0", "t1"],
+            "sample_id": ["s0", "s1"],
+            "physical_time": [0.0, 1.0],
+        },
+        index=["cell_0", "cell_1"],
+    )
+    data = ad.AnnData(X=np.ones((2, 3), dtype=np.float32), obs=obs)
+    data.obsm["X_pca"] = np.ones((2, 2), dtype=np.float32)
+    data.write_h5ad(path)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "scripts" / "verify_setup.py"),
+            "--json",
+            "--check-data",
+            "--data-path",
+            str(path),
+            "--data-schema",
+            "trajectory",
+            "--strict-data-schema",
+        ],
+        cwd=ROOT,
+        env=_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    report = json.loads(result.stdout)
+    assert report["ok"] is True
+    assert report["data"]["checked"] is True
+    assert report["data"]["schema"] == "trajectory"
+    assert report["data"]["strict"] is True
+    assert report["data"]["latent_row_count_matches_obs"] is True

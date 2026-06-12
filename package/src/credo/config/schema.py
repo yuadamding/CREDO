@@ -31,6 +31,7 @@ class DataConfig(BaseModel):
 class SingleTimeConfig(BaseModel):
     enabled: bool = False
     view_level: Literal["view", "embedding"] = "view"
+    view_key_level: Literal["perturbation", "guide", "sample_perturbation", "sample_guide"] = "sample_perturbation"
     context_protocol: Literal[
         "observed_snapshot",
         "source_reference",
@@ -38,6 +39,7 @@ class SingleTimeConfig(BaseModel):
         "clamped_external",
     ] = "observed_snapshot"
     context_sampling: Literal["fixed", "epoch_resample"] = "fixed"
+    context_gradient_mode: Literal["detached_cache", "recompute_no_grad", "recompute_with_grad"] = "recompute_no_grad"
     context_tau: float | Literal["auto", "source", "target", "midpoint"] = "auto"
     reference_scope: Literal["auto", "sample", "batch", "global"] = "auto"
     mass_mode: Literal["cell_count", "unit_mass", "obs_column", "unavailable"] = "unit_mass"

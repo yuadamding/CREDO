@@ -13,6 +13,11 @@
   diagnostics.
 - Upgraded run manifests to schema v2 with command, working directory, output
   directory, config hash, and explicit git availability/dirty-state reporting.
+- Routed setup verification scripts through the package AnnData schema
+  validator so install/data smoke checks match `credo-validate-data`.
+- Hardened single-time CREDO with explicit guide-level view keys, fixed-particle
+  context recomputation policy, vector-valued effect regularizers, and a compact
+  single-time runner.
 - Kept compatibility shims and tests for existing runner manifests, package
   imports, endpoint summaries, and CREDO semantic invariants.
 

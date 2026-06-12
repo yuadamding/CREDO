@@ -31,6 +31,7 @@ from .single_time import (
     SingleTimeMassMode,
     SingleTimeProblem,
     SingleTimeView,
+    SingleTimeViewKeyLevel,
     build_single_time_problem_from_anndata,
 )
 from .trajectory_view import TrajectoryLike, TrajectoryView, embedding_id_for_measure_key
@@ -88,6 +89,7 @@ __all__ = [
     "SingleTimeMassMode",
     "SingleTimeProblem",
     "SingleTimeView",
+    "SingleTimeViewKeyLevel",
     "TimeAxis",
     "TrajectoryProblem",
     "TrajectoryLike",

@@ -165,6 +165,7 @@ class SingleTimeCounterfactualEngine:
                 "context_protocol": selected_protocol,
                 "context_tau": context_tau,
                 "context_sampling": "fixed",
+                "context_gradient_mode": "recompute_no_grad",
                 "initial_seed": int(seed),
                 "noise_seed": noise_seed if common_noise else None,
                 "factual_full_context_reused": True,

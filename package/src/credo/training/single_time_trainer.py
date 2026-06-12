@@ -107,6 +107,7 @@ class SingleTimeTrainer:
             context_tau=single_time_config.context_tau,
             endpoint=self.endpoint,
             context_sampling=single_time_config.context_sampling,
+            context_gradient_mode=single_time_config.context_gradient_mode,
         )
         self.trainer = Trainer(
             model=model,
@@ -128,7 +129,9 @@ class SingleTimeTrainer:
         report.update(
             {
                 "view_level": self.endpoint.metadata.get("view_level"),
+                "view_key_level": self.endpoint.metadata.get("view_key_level"),
                 "context_sampling": self.trainer.config.single_time.context_sampling,
+                "context_gradient_mode": self.trainer.config.single_time.context_gradient_mode,
                 "counterfactual_source_semantics": self.endpoint.metadata.get(
                     "counterfactual_source_semantics",
                 ),
@@ -166,7 +169,8 @@ class SingleTimeTrainer:
 
         log_mass0 = rollout.log_m0.to(device=device, dtype=rollout.terminal_logw.dtype)
         log_mass_terminal = log_mass0 + torch.logsumexp(rollout.terminal_logw, dim=1)
-        effect_scores = log_mass_terminal - log_mass0
+        delta_log_mass = log_mass_terminal - log_mass0
+        effect_scores = self._effect_vectors_from_rollout(rollout, delta_log_mass)
 
         if stc.lambda_control_null > 0:
             control_mask = torch.tensor(
@@ -207,6 +211,22 @@ class SingleTimeTrainer:
 
         metrics["loss_single_time"] = float(loss.detach().item())
         return loss, metrics
+
+    @staticmethod
+    def _weighted_mean(z: torch.Tensor, logw: torch.Tensor) -> torch.Tensor:
+        weights = torch.softmax(logw, dim=1)
+        return (weights.unsqueeze(-1) * z).sum(dim=1)
+
+    def _effect_vectors_from_rollout(
+        self,
+        rollout,
+        delta_log_mass: torch.Tensor,
+    ) -> torch.Tensor:
+        """Summarize single-time effects by mass and latent-state displacement."""
+        initial_mean = self._weighted_mean(rollout.z_steps[0], rollout.logw_steps[0])
+        terminal_mean = self._weighted_mean(rollout.terminal_z, rollout.terminal_logw)
+        mean_shift = terminal_mean - initial_mean
+        return torch.cat([delta_log_mass.unsqueeze(-1), mean_shift], dim=1)
 
     def train(self, stage: str = "all", n_epochs: Optional[int] = None) -> SingleTimeTrainingHistory:
         history = self.trainer.train(stage=stage, n_epochs=n_epochs)

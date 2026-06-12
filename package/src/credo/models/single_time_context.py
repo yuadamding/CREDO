@@ -13,6 +13,7 @@ from .simulator import embedding_ids_from_endpoint, initialise_particles_from_me
 
 
 ContextTau = float | Literal["auto", "source", "target", "midpoint"]
+ContextGradientMode = Literal["detached_cache", "recompute_no_grad", "recompute_with_grad"]
 
 
 def _detach_cached_value(value: Any) -> Any:
@@ -73,9 +74,15 @@ class SingleTimeContextProvider:
     context_override: Any = None
     endpoint: EndpointProblem | None = None
     context_sampling: Literal["fixed", "epoch_resample"] = "fixed"
+    context_gradient_mode: ContextGradientMode = "recompute_no_grad"
     seed_offset: int = 50_000
     _cached_key: tuple[Any, ...] | None = field(default=None, init=False, repr=False)
     _cached_context: Any = field(default=None, init=False, repr=False)
+    _cached_particles: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+    )
 
     def build(
         self,
@@ -93,6 +100,15 @@ class SingleTimeContextProvider:
             return self.context_override
         if self.context_sampling not in {"fixed", "epoch_resample"}:
             raise ValueError("context_sampling must be 'fixed' or 'epoch_resample'.")
+        if self.context_gradient_mode not in {
+            "detached_cache",
+            "recompute_no_grad",
+            "recompute_with_grad",
+        }:
+            raise ValueError(
+                "context_gradient_mode must be detached_cache, recompute_no_grad, "
+                "or recompute_with_grad."
+            )
 
         endpoint = self.endpoint or self.problem.to_effect_endpoint_problem()
         pids = perturbation_ids or endpoint.perturbation_ids
@@ -101,18 +117,37 @@ class SingleTimeContextProvider:
             raise KeyError(f"Context perturbation_ids missing from single-time endpoint: {missing}")
         tau_value = resolve_single_time_context_tau(selected, self.context_tau)
         cache_key = (selected, float(tau_value), tuple(pids), int(self.n_particles))
-        if self.context_sampling == "fixed" and self._cached_key == cache_key:
+        if (
+            self.context_sampling == "fixed"
+            and self.context_gradient_mode == "detached_cache"
+            and self._cached_key == cache_key
+            and self._cached_context is not None
+        ):
             return self._cached_context
 
         measures = endpoint.terminal if selected == "observed_snapshot" else endpoint.initial
-        z_ctx, lw_ctx, lm_ctx = initialise_particles_from_measures(
-            measures,
-            pids,
-            self.n_particles,
-            self.device,
-            seed=int(seed) + int(self.seed_offset),
-        )
-        grad_enabled = self.context_sampling != "fixed"
+        if (
+            self.context_sampling == "fixed"
+            and self._cached_key == cache_key
+            and self._cached_particles is not None
+        ):
+            z_ctx, lw_ctx, lm_ctx = self._cached_particles
+        else:
+            z_ctx, lw_ctx, lm_ctx = initialise_particles_from_measures(
+                measures,
+                pids,
+                self.n_particles,
+                self.device,
+                seed=int(seed) + int(self.seed_offset),
+            )
+            if self.context_sampling == "fixed":
+                self._cached_key = cache_key
+                self._cached_particles = (
+                    z_ctx.detach().clone(),
+                    lw_ctx.detach().clone(),
+                    lm_ctx.detach().clone(),
+                )
+        grad_enabled = self.context_gradient_mode == "recompute_with_grad"
         with torch.set_grad_enabled(grad_enabled):
             _, ctx = model.step(
                 z=z_ctx,
@@ -122,14 +157,14 @@ class SingleTimeContextProvider:
                 perturbation_ids=pids,
                 embedding_ids=embedding_ids_from_endpoint(endpoint, pids),
             )
-        if self.context_sampling == "fixed":
+        if self.context_sampling == "fixed" and self.context_gradient_mode == "detached_cache":
             ctx = _detach_cached_value(ctx)
-            self._cached_key = cache_key
             self._cached_context = ctx
         return ctx
 
 
 __all__ = [
+    "ContextGradientMode",
     "ContextTau",
     "SingleTimeContextProvider",
     "resolve_single_time_context_tau",

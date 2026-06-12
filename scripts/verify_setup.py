@@ -6,6 +6,7 @@ import importlib
 import importlib.metadata
 import json
 import platform
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -22,18 +23,34 @@ OPTIONAL_IMPORTS = (
     "geomloss",
     "scipy",
 )
+DATA_SCHEMA_CHOICES = ("custom", "endpoint", "minimal", "trajectory")
 
 
 def _module_status(name: str) -> dict[str, Any]:
     try:
         module = importlib.import_module(name)
     except Exception as exc:  # pragma: no cover - exercised by missing local deps
-        return {"ok": False, "version": None, "error": f"{type(exc).__name__}: {exc}"}
+        return {
+            "ok": False,
+            "version": None,
+            "distribution_version": None,
+            "module_version": None,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
     try:
-        version = importlib.metadata.version(name)
+        distribution_version = importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
-        version = getattr(module, "__version__", None)
-    return {"ok": True, "version": version, "error": None}
+        distribution_version = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        module_version = getattr(module, "__version__", None)
+    return {
+        "ok": True,
+        "version": module_version or distribution_version,
+        "distribution_version": distribution_version,
+        "module_version": module_version,
+        "error": None,
+    }
 
 
 def _environment_report() -> dict[str, Any]:
@@ -60,30 +77,31 @@ def _environment_report() -> dict[str, Any]:
     return report
 
 
-def _data_report(data_path: str | None) -> dict[str, Any]:
+def _data_report(
+    data_path: str | None,
+    *,
+    schema: str,
+    latent_key: str,
+    obs_columns: list[str] | None,
+    strict: bool,
+) -> dict[str, Any]:
     if not data_path:
         return {"checked": False, "ok": False, "error": "--check-data requires --data-path"}
     path = Path(data_path)
     if not path.exists():
         return {"checked": True, "ok": False, "path": str(path), "error": f"Missing data file: {path}"}
     try:
-        import anndata as ad
+        from credo.data.schema import validate_anndata_schema
 
-        adata = ad.read_h5ad(path, backed="r")
-        try:
-            return {
-                "checked": True,
-                "ok": True,
-                "path": str(path),
-                "shape": list(adata.shape),
-                "has_X_pca": "X_pca" in adata.obsm,
-                "has_X_umap": "X_umap" in adata.obsm,
-                "has_X_pca_latest_sct": "X_pca_latest_sct" in adata.obsm,
-                "has_X_umap_latest": "X_umap_latest" in adata.obsm,
-            }
-        finally:
-            if hasattr(adata, "file") and adata.file is not None:
-                adata.file.close()
+        report = validate_anndata_schema(
+            path,
+            schema=schema,
+            latent_key=latent_key,
+            obs_columns=obs_columns,
+            strict=strict,
+        )
+        report["checked"] = True
+        return report
     except Exception as exc:
         return {"checked": True, "ok": False, "path": str(path), "error": f"{type(exc).__name__}: {exc}"}
 
@@ -105,11 +123,19 @@ def _print_human(report: dict[str, Any]) -> None:
         print("data_path", data.get("path"))
         print("data_ok", data.get("ok"))
         if data.get("ok"):
+            print("schema", data.get("schema"))
+            print("strict", data.get("strict"))
             print("shape", data.get("shape"))
-            for key in ("has_X_pca", "has_X_umap", "has_X_pca_latest_sct", "has_X_umap_latest"):
-                print(key, data.get(key))
+            print("latent_key", data.get("latent_key"))
+            print("latent_shape", data.get("latent_shape"))
+            print("obs_columns_required", data.get("obs_columns_required"))
+            print("obs_columns_missing", data.get("obs_columns_missing"))
+            print("required_columns_non_empty", data.get("required_columns_non_empty"))
         else:
-            print("data_error", data.get("error"))
+            if data.get("error"):
+                print("data_error", data.get("error"))
+            for error in data.get("errors", []):
+                print("data_error", error)
     else:
         print("data_check", "skipped")
 
@@ -118,11 +144,35 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-path", default=None)
     parser.add_argument("--check-data", action="store_true")
+    parser.add_argument(
+        "--data-schema",
+        choices=DATA_SCHEMA_CHOICES,
+        default="custom",
+        help="AnnData schema profile for --check-data. Defaults to a package-surface smoke check.",
+    )
+    parser.add_argument("--strict-data-schema", action="store_true")
+    parser.add_argument("--latent-key", default="X_pca")
+    parser.add_argument(
+        "--obs-column",
+        action="append",
+        default=None,
+        help="Additional required obs column for --check-data. May be repeated.",
+    )
     parser.add_argument("--json", action="store_true", dest="as_json")
     args = parser.parse_args()
 
     report = {"environment": _environment_report()}
-    report["data"] = _data_report(args.data_path) if args.check_data else {"checked": False}
+    report["data"] = (
+        _data_report(
+            args.data_path,
+            schema=args.data_schema,
+            latent_key=args.latent_key,
+            obs_columns=args.obs_column,
+            strict=args.strict_data_schema,
+        )
+        if args.check_data
+        else {"checked": False}
+    )
 
     required_ok = all(status["ok"] for status in report["environment"]["required_imports"].values())
     data_ok = (not args.check_data) or bool(report["data"].get("ok"))

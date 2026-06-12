@@ -12,6 +12,7 @@ from credo.cli.validate_data import main as validate_data_main
 from credo.config.schema import RunConfig
 from credo.data import (
     SingleTimeProblem,
+    SingleTimeViewKeyLevel,
     TimeAxis,
     build_single_time_problem_from_anndata,
     validate_anndata_schema,
@@ -144,6 +145,65 @@ def test_single_time_schema_and_builder_accept_guide_only_inputs(tmp_path) -> No
     assert {view.embedding_id for view in problem.views} == {"ctrl", "gene_a", "gene_b"}
 
 
+def test_single_time_view_key_level_preserves_guide_level_views() -> None:
+    data = _single_time_adata()
+    data.obs["perturbation_id"] = [
+        "ctrl",
+        "ctrl",
+        "gene_a",
+        "gene_a",
+        "ctrl",
+        "ctrl",
+        "gene_a",
+        "gene_a",
+    ]
+    data.obs["guide_id"] = [
+        "ctrl_g1",
+        "ctrl_g1",
+        "ga_g1",
+        "ga_g1",
+        "ctrl_g1",
+        "ctrl_g1",
+        "ga_g2",
+        "ga_g2",
+    ]
+    data.obs["target_gene"] = ["ctrl", "ctrl", "gene_a", "gene_a", "ctrl", "ctrl", "gene_a", "gene_a"]
+
+    sample_perturbation = build_single_time_problem_from_anndata(
+        data,
+        embedding_level="target_gene",
+        view_key_level="sample_perturbation",
+        reference_scope="sample",
+    )
+    pooled_perturbation = build_single_time_problem_from_anndata(
+        data,
+        embedding_level="target_gene",
+        view_key_level="perturbation",
+        reference_scope="global",
+    )
+    pooled_guide = build_single_time_problem_from_anndata(
+        data,
+        embedding_level="target_gene",
+        view_key_level="guide",
+        reference_scope="global",
+    )
+    sample_guide = build_single_time_problem_from_anndata(
+        data,
+        embedding_level="target_gene",
+        view_key_level="sample_guide",
+        reference_scope="sample",
+    )
+
+    assert "guide" in SingleTimeViewKeyLevel.__args__
+    assert {view.view_id for view in sample_perturbation.views if not view.is_control} == {"s1::gene_a", "s2::gene_a"}
+    assert {view.view_id for view in pooled_perturbation.views if not view.is_control} == {"gene_a"}
+    assert {view.view_id for view in pooled_guide.views if not view.is_control} == {"ga_g1", "ga_g2"}
+    assert {view.view_id for view in sample_guide.views if not view.is_control} == {"s1::ga_g1", "s2::ga_g2"}
+    assert {view.embedding_id for view in sample_guide.views if not view.is_control} == {"gene_a"}
+    assert sample_guide.metadata["view_key_level"] == "sample_guide"
+    assert sample_guide.to_effect_endpoint_problem().metadata["view_key_level"] == "sample_guide"
+
+
 def test_single_time_schema_profile_rejects_missing_control_flag(tmp_path) -> None:
     path = tmp_path / "missing_control.h5ad"
     data = _single_time_adata()
@@ -186,6 +246,7 @@ def test_single_time_problem_builds_nonphysical_effect_endpoint() -> None:
     assert endpoint.perturbation_ids == ["s1::ctrl", "s2::ctrl", "s1::gene_a", "s2::gene_b"]
     assert endpoint.metadata["abundance_claim_grade"] == "none"
     assert endpoint.metadata["view_level"] == "view"
+    assert endpoint.metadata["view_key_level"] == "sample_perturbation"
     assert endpoint.metadata["measure_to_embedding"]["s1::gene_a"] == "gene_a"
     assert endpoint.metadata["measure_to_original_perturbation"]["s1::gene_a"] == "gene_a"
     assert endpoint.initial["s1::gene_a"].n_atoms == 2
@@ -361,6 +422,7 @@ def test_single_time_context_provider_fixed_cache_reuses_context() -> None:
         n_particles=4,
         protocol="observed_snapshot",
         context_sampling="fixed",
+        context_gradient_mode="detached_cache",
     )
     model = _model()
 
@@ -370,6 +432,37 @@ def test_single_time_context_provider_fixed_cache_reuses_context() -> None:
     assert ctx1 is ctx2
     assert ctx1.context.requires_grad is False
     assert ctx1.q.requires_grad is False
+
+
+def test_single_time_context_provider_fixed_recomputes_context_without_grad() -> None:
+    problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
+    endpoint = problem.to_effect_endpoint_problem(view_level="view")
+    provider = SingleTimeContextProvider(
+        problem=problem,
+        endpoint=endpoint,
+        n_particles=4,
+        protocol="observed_snapshot",
+        context_sampling="fixed",
+        context_gradient_mode="recompute_no_grad",
+    )
+    model = _model()
+    calls = {"step": 0}
+    original_step = model.step
+
+    def wrapped_step(*args, **kwargs):
+        calls["step"] += 1
+        return original_step(*args, **kwargs)
+
+    model.step = wrapped_step  # type: ignore[method-assign]
+
+    ctx1 = provider.build(model, seed=1, perturbation_ids=endpoint.perturbation_ids)
+    ctx2 = provider.build(model, seed=999, perturbation_ids=endpoint.perturbation_ids)
+
+    assert calls["step"] == 2
+    assert ctx1 is not ctx2
+    assert provider._cached_particles is not None
+    assert ctx1.context.requires_grad is False
+    assert ctx2.context.requires_grad is False
 
 
 def test_context_state_override_recomputes_mass_diagnostics() -> None:
@@ -448,7 +541,12 @@ def test_single_time_default_ecological_growth_uses_full_rollout(tmp_path) -> No
             "lambda_reg_embed": 0.0,
             "max_active_perturbations": 0,
         },
-        single_time={"enabled": True},
+        single_time={
+            "enabled": True,
+            "context_protocol": "observed_snapshot",
+            "lambda_control_null": 0.1,
+            "lambda_minimal_action": 0.1,
+        },
     )
     problem = build_single_time_problem_from_anndata(_single_time_adata(), reference_scope="sample")
     trainer = SingleTimeTrainer(
@@ -458,11 +556,28 @@ def test_single_time_default_ecological_growth_uses_full_rollout(tmp_path) -> No
         output_dir=str(tmp_path),
         warmup_epochs=0,
     )
+    calls = {"context": 0, "extra": 0}
+    original_context = trainer.trainer.context_override_provider
+    original_extra = trainer.trainer.extra_loss_callback
+
+    def context_wrapper(**kwargs):
+        calls["context"] += 1
+        return original_context(**kwargs)
+
+    def extra_wrapper(**kwargs):
+        calls["extra"] += 1
+        return original_extra(**kwargs)
+
+    trainer.trainer.context_override_provider = context_wrapper
+    trainer.trainer.extra_loss_callback = extra_wrapper
 
     result = trainer.train(n_epochs=1)
 
     assert result.history.n_active_perturbations[0] == 4
     assert result.history.perturbation_batch_size[0] == 4
+    assert calls == {"context": 1, "extra": 1}
+    assert result.history.loss_extra[0] > 0.0
+    assert trainer.context_provider.protocol == "observed_snapshot"
 
 
 def test_single_time_trainer_rejects_chunked_rollout_at_construction(tmp_path) -> None:
@@ -613,3 +728,11 @@ def test_single_time_regularizer_helpers() -> None:
         torch.tensor([1.0, 3.0, 10.0]),
         ["gene_a", "gene_a", "gene_b"],
     ).item() == pytest.approx(1.0)
+    assert control_null_effect_loss(
+        torch.tensor([[0.1, 0.2], [2.0, 3.0]]),
+        torch.tensor([True, False]),
+    ).item() == pytest.approx(0.025)
+    assert single_time_guide_concordance_loss(
+        torch.tensor([[1.0, 1.0], [3.0, 5.0], [10.0, 0.0]]),
+        ["gene_a", "gene_a", "gene_b"],
+    ).item() == pytest.approx(2.5)

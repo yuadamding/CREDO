@@ -10,7 +10,7 @@ tests. It intentionally excludes `.h5ad` data, checkpoints, and run outputs.
 | Path | Purpose |
 | --- | --- |
 | `package/` | Installable Python package under `credo`. |
-| `runners/` | HNSCC endpoint, generic trajectory, LPS trajectory, and summary entry points. |
+| `runners/` | HNSCC endpoint, generic trajectory, LPS trajectory, single-time, and summary entry points. |
 | `analysis/` | Counterfactual biology and signature utilities. |
 | `scripts/` | Setup verification, LPS input building, and randomized stress tests. |
 | `tests/` | Unit, regression, smoke, and randomized tests. |
@@ -26,7 +26,10 @@ python scripts/verify_setup.py
 python scripts/verify_setup.py --json
 python scripts/verify_setup.py \
   --check-data \
-  --data-path ../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad
+  --data-path /path/to/input.h5ad \
+  --data-schema trajectory \
+  --strict-data-schema \
+  --latent-key X_pca
 credo-validate-data \
   --data-path /path/to/input.h5ad \
   --schema trajectory \
@@ -61,6 +64,24 @@ python runners/run_credo_lps_3time.py \
   --n-particles 32 \
   --steps-per-interval 2 \
   --ecology-off
+
+python runners/run_credo_single_time.py \
+  --data-path ../inputs/single_time/example.h5ad \
+  --output-dir runs/single_time_smoke \
+  --latent-key X_pca \
+  --perturbation-col guide_id \
+  --guide-col guide_id \
+  --target-gene-col target_gene \
+  --control-col is_control \
+  --sample-col sample_id \
+  --embedding-level target_gene \
+  --view-key-level sample_guide \
+  --view-level view \
+  --mass-mode unit_mass \
+  --context-protocol observed_snapshot \
+  --epochs 2 \
+  --n-particles 32 \
+  --n-steps 4
 ```
 
 Trajectory mass semantics are explicit:
@@ -76,6 +97,13 @@ summaries should pass `--claim-grade` with either explicit floor JSON or
 `--practical-null-floor-profile hnscc_claim_grade`; the applied profile is
 written to `practical_null_floors_used.json`.
 
+Single-time CREDO estimates control-referenced static effect paths on a
+non-physical axis from constructed control reference to observed snapshot. It
+does not infer physical temporal dynamics from one snapshot. Use
+`--view-key-level sample_guide` to preserve sample-specific guide-level finite
+measures while learning target-gene embeddings, or `guide` to pool guides
+across samples with a global reference.
+
 ## Verify
 
 ```bash
@@ -90,10 +118,10 @@ python scripts/stress_test_trajectory_production.py \
 ## Public Imports
 
 ```python
-from credo.data import EndpointProblem, TrajectoryProblem, TrajectoryView
+from credo.data import EndpointProblem, SingleTimeProblem, TrajectoryProblem, TrajectoryView
 from credo.losses import MultiTimeEndpointLoss
-from credo.models import FullDynamicsModel, WeightedParticleSimulator
-from credo.training import Trainer, TrajectoryTrainer
+from credo.models import FullDynamicsModel, SingleTimeCounterfactualEngine, WeightedParticleSimulator
+from credo.training import SingleTimeTrainer, Trainer, TrajectoryTrainer
 ```
 
 Compatibility facades such as `credo.data.problems`,
@@ -117,6 +145,10 @@ Compatibility facades such as `credo.data.problems`,
   keeps sample-aware `measure_key`s separate from perturbation `embedding_id`s,
   rolls out one continuous global-time trajectory, and evaluates downstream
   checkpoint finite-measure losses.
+- Single-time training consumes `SingleTimeProblem`, keeps finite-measure
+  `view_id`s separate from perturbation embeddings, labels outputs as
+  non-physical effect-axis diagnostics, and caches sampled fixed-context
+  particles while recomputing learned context features by default.
 - Biology tables separate priority-class readiness from axis readiness and gate
   expansion, depletion, plasticity, ecology, TNF, CIS-like, and TSK/pEMT claims
   with explicit mass semantics, replicate/fold/sample support, guide
