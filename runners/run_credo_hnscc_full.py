@@ -154,6 +154,15 @@ def parse_args() -> argparse.Namespace:
     parser.set_defaults(transformer_growth_only=True)
     parser.add_argument("--lr-transformer", type=float, default=1e-4)
     parser.add_argument("--transformer-weight-decay", type=float, default=1e-4)
+    parser.add_argument(
+        "--freeze-transformer-context-after-epoch",
+        type=int,
+        default=0,
+        help=(
+            "Absolute epoch at which transformer context_agg parameters are frozen "
+            "and held in eval mode. Use 0 to keep transformer context trainable."
+        ),
+    )
     parser.add_argument("--n-particles", type=int, default=128)
     parser.add_argument("--n-steps", type=int, default=16)
     parser.add_argument("--eval-particles", type=int, default=384)
@@ -933,6 +942,7 @@ def main() -> None:
             stage_c_epochs=args.stage_c_epochs,
             stage_d_epochs=args.stage_d_epochs,
             max_active_perturbations=args.max_active_perturbations,
+            freeze_transformer_context_after_epoch=args.freeze_transformer_context_after_epoch,
             control_ref_warmup_epochs=args.control_ref_warmup_epochs,
             seed=args.seed,
             early_stop_patience=args.epochs,

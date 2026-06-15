@@ -227,6 +227,7 @@ class TrainingConfig(BaseModel):
     stage_d_epochs: int = 150
     max_active_perturbations: int = 0
     global_context_batching: Literal["full_context_cache", "error", "local_ablation"] = "full_context_cache"
+    freeze_transformer_context_after_epoch: int = 0
     control_ref_warmup_epochs: int = 150
     seed: int = 0
     epochs: int = 300
@@ -260,6 +261,8 @@ class TrainingConfig(BaseModel):
                 "global_context_batching='local_ablation' is reserved for explicit "
                 "diagnostics and is not implemented in the claim-grade trainer."
             )
+        if self.freeze_transformer_context_after_epoch < 0:
+            raise ValueError("freeze_transformer_context_after_epoch must be >= 0.")
         if self.lr_transformer <= 0:
             raise ValueError("lr_transformer must be > 0.")
         if self.lr_causal_attention <= 0:

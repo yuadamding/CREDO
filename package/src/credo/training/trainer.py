@@ -425,6 +425,7 @@ class Trainer:
         self._weak_loss_replicas: Dict[str, WeakFormLoss] = {}
         self._target_cache: Dict[str, Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]] = {}
         self._count_tensor_cache: Dict[str, Dict[str, torch.Tensor]] = {}
+        self._transformer_context_frozen = False
         embedding_map = endpoint.metadata.get("measure_to_embedding")
         if not isinstance(embedding_map, dict):
             embedding_map = endpoint.metadata.get("embedding_ids")
@@ -942,6 +943,39 @@ class Trainer:
         optimizer_cls = torch.optim.AdamW if tc.optimizer == "adamw" else torch.optim.Adam
         return optimizer_cls(param_groups, weight_decay=0.0)
 
+    def _maybe_freeze_transformer_context(self, absolute_epoch: int, stage: str) -> None:
+        freeze_epoch = int(getattr(self.config.training, "freeze_transformer_context_after_epoch", 0) or 0)
+        if (
+            freeze_epoch <= 0
+            or self._transformer_context_frozen
+            or getattr(self.model, "context_kind", "mlp") != "transformer"
+            or absolute_epoch < freeze_epoch
+        ):
+            return
+
+        context_agg = getattr(self.model, "context_agg", None)
+        if context_agg is None:
+            return
+        n_params = 0
+        for param in context_agg.parameters():
+            n_params += int(param.numel())
+            param.requires_grad_(False)
+        context_agg.eval()
+        self._transformer_context_frozen = True
+        self._model_replicas.clear()
+        print(
+            f"[{stage}] Freezing transformer context at epoch {absolute_epoch} "
+            f"({n_params} parameters)"
+        )
+
+    def _apply_frozen_transformer_context_eval(self, model: Optional[FullDynamicsModel] = None) -> None:
+        if not self._transformer_context_frozen:
+            return
+        target = model if model is not None else self.model
+        context_agg = getattr(target, "context_agg", None)
+        if context_agg is not None:
+            context_agg.eval()
+
     def _one_epoch(
         self,
         optimizer: torch.optim.Optimizer,
@@ -1007,6 +1041,7 @@ class Trainer:
         tc = self.config.training
         sc = self.config.simulation
         self.model.train()
+        self._apply_frozen_transformer_context_eval()
 
         torch.manual_seed(self.config.training.seed + seed_offset + epoch)
 
@@ -1175,6 +1210,7 @@ class Trainer:
         sc = self.config.simulation
 
         self.model.train()
+        self._apply_frozen_transformer_context_eval()
         torch.manual_seed(self.config.training.seed + seed_offset + epoch)
 
         rollout_dtype = self.compute_dtype if self.autocast_enabled else self.dtype
@@ -1646,6 +1682,7 @@ class Trainer:
             raise NotImplementedError("Multi-GPU single-model training currently supports fp32/bf16, not fp16.")
 
         self.model.train()
+        self._apply_frozen_transformer_context_eval()
         torch.manual_seed(self.config.training.seed + seed_offset + epoch)
 
         rollout_dtype = self.compute_dtype if self.autocast_enabled else self.dtype
@@ -1658,6 +1695,7 @@ class Trainer:
         for device, _, _ in shards:
             models[device] = self._get_model_for_device(device)
             models[device].train()
+            self._apply_frozen_transformer_context_eval(models[device])
 
         z0_full, logw0_full, log_m0_full = initialise_particles(
             self.endpoint,
@@ -1976,6 +2014,8 @@ class Trainer:
             self.model.unfreeze_embeddings()
             self.model.unfreeze_ecology()
 
+        self._maybe_freeze_transformer_context(start_epoch, stage)
+
         control_ref_warmup = 0
         if (
             stage == "all"
@@ -2007,11 +2047,12 @@ class Trainer:
         last_epoch = start_epoch - 1
 
         for epoch in range(epochs):
+            absolute_epoch = start_epoch + epoch
             if control_ref_warmup > 0 and epoch == control_ref_warmup:
                 self.model.unfreeze_control_reference()
                 print(f"[{stage}] Released control reference at epoch {epoch}")
 
-            absolute_epoch = start_epoch + epoch
+            self._maybe_freeze_transformer_context(absolute_epoch, stage)
             last_epoch = absolute_epoch
             metrics = self._one_epoch(
                 optimizer,
