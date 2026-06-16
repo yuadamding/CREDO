@@ -31,6 +31,7 @@ from .trainer import (
     _ess_gate_status,
     _uses_global_context_backend,
 )
+from .pruning import TrainingPruned
 from .trajectory_batch import initialise_particles_from_trajectory
 from .trajectory_eval import rollout_metrics_by_key_time
 
@@ -597,6 +598,10 @@ class TrajectoryTrainer:
                     self.ema.restore()
 
             # Intermediate reporting / pruning for setting search (read-only).
+            # On a prune request, persist the pruned checkpoint/history and raise
+            # TrainingPruned so the trial is reported as pruned rather than scored
+            # as a short completed run (and checkpoint_last is not written with a
+            # misleading final epoch).
             if self.reporter is not None:
                 self.reporter.report(epoch, metrics)
                 if self.reporter.should_prune():
@@ -605,7 +610,7 @@ class TrajectoryTrainer:
                     self.history.to_dataframe().to_csv(
                         self.output_dir / "training_history.csv", index=False
                     )
-                    break
+                    raise TrainingPruned(epoch)
 
             if epoch % max(1, tc.log_every) == 0 or epoch == tc.epochs:
                 self.history.to_dataframe().to_csv(self.output_dir / "training_history.csv", index=False)

@@ -47,9 +47,24 @@ class ConstraintThresholds:
     control_null_max: float = math.inf
     guide_concordance_max: float = math.inf
     require_heldout_provenance: bool = True
+    # Claim-grade requirements (default off so cheap screening stays permissive).
+    # CREDO is a finite-measure model: a claim-grade endpoint run must have a
+    # finite mass diagnostic, and counterfactual/guide claims need their
+    # diagnostics actually evaluated, not silently absent.
+    require_mass_metric: bool = False
+    require_control_null: bool = False
+    require_guide_concordance: bool = False
 
 
 DEFAULT_THRESHOLDS = ConstraintThresholds()
+
+# Stricter profile for final, claim-grade biological model selection.
+CLAIM_GRADE_THRESHOLDS = ConstraintThresholds(
+    require_heldout_provenance=True,
+    require_mass_metric=True,
+    require_control_null=True,
+    require_guide_concordance=True,
+)
 
 
 @dataclass
@@ -167,14 +182,23 @@ def hard_constraints(
         "converged_ok": bool(metrics.converged) and not metrics.diverged,
         # A missing/NaN core fit metric must not pass as feasible (crashed trial).
         "fit_metrics_finite": _finite(metrics.endpoint_geom_mass),
+        # Finite-measure claim-grade selection requires a finite mass diagnostic.
+        "mass_metric_finite": (not thresholds.require_mass_metric)
+        or _finite(metrics.log_mass_error),
         # Intra-trajectory minimum, not just terminal -- a mid-rollout collapse
         # below the floor is infeasible even if the terminal step recovered.
         "ess_ok": ess >= thresholds.ess_floor,
         "max_weight_ok": _nan_to(metrics.max_weight_frac_mean, 1.0) <= thresholds.max_weight_ceiling,
-        "control_null_ok": metrics.control_null_gap is None
-        or metrics.control_null_gap <= thresholds.control_null_max,
-        "guide_concordance_ok": metrics.guide_concordance_gap is None
-        or metrics.guide_concordance_gap <= thresholds.guide_concordance_max,
+        # When required, a missing diagnostic (gap is None) is infeasible -- a
+        # claim cannot rest on an un-evaluated control-null / guide-concordance.
+        "control_null_ok": _gap_ok(
+            metrics.control_null_gap, thresholds.control_null_max, thresholds.require_control_null
+        ),
+        "guide_concordance_ok": _gap_ok(
+            metrics.guide_concordance_gap,
+            thresholds.guide_concordance_max,
+            thresholds.require_guide_concordance,
+        ),
         "semantic_ok": _frozen_ok(spec),
     }
     if thresholds.require_heldout_provenance:
@@ -226,7 +250,16 @@ def _finite(value: Optional[float]) -> bool:
     return value is not None and math.isfinite(float(value))
 
 
+def _gap_ok(gap: Optional[float], max_value: float, required: bool) -> bool:
+    """Diagnostic-gap feasibility. When the diagnostic is required, a missing
+    value (``None``) is infeasible; otherwise a missing value passes (screening)."""
+    if gap is None:
+        return not required
+    return float(gap) <= max_value
+
+
 __all__ = [
+    "CLAIM_GRADE_THRESHOLDS",
     "ConstraintThresholds",
     "DEFAULT_PRUNER_WEIGHTS",
     "DEFAULT_THRESHOLDS",

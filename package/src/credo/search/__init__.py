@@ -32,6 +32,7 @@ from .metrics import (
     metrics_from_history,
 )
 from .objective import (
+    CLAIM_GRADE_THRESHOLDS,
     ConstraintThresholds,
     DEFAULT_THRESHOLDS,
     Standardizer,
@@ -68,6 +69,7 @@ from .manifests import (
 
 __all__ = [
     "ABLATION_ONLY",
+    "CLAIM_GRADE_THRESHOLDS",
     "CREDOTrialMetrics",
     "CREDOTrialResult",
     "CREDOTrialSpec",

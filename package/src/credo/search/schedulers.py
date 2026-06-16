@@ -58,7 +58,17 @@ def suggest_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
     dropped (the suggested value wins) so callers cannot trigger a duplicate
     keyword-argument error by passing a default for a searched field.
     """
+    import dataclasses
+
     from .space import CREDOTrialSpec  # local import to avoid cycle at module load
+
+    valid = {f.name for f in dataclasses.fields(CREDOTrialSpec)}
+    unknown = set(base) - valid
+    if unknown:
+        raise ValueError(
+            f"Unknown CREDOTrialSpec base keys: {sorted(unknown)}. "
+            f"Valid fields: {sorted(valid)}."
+        )
 
     suggested = {
         "hidden_dim": trial.suggest_categorical("hidden_dim", [128, 256, 512, 768]),

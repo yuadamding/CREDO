@@ -16,6 +16,9 @@ from typing import Any, Iterable
 from .metrics import CREDOTrialResult
 from .space import CREDOTrialSpec
 
+# Bump when the flattened trial-record schema changes (field names/prefixes).
+SEARCH_SCHEMA_VERSION = "credo.search.v1"
+
 
 def spec_sha256(spec: CREDOTrialSpec) -> str:
     """Deterministic content hash of a trial spec (for dedup / cache keys)."""
@@ -27,6 +30,7 @@ def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
     """Flatten a :class:`CREDOTrialResult` into one JSON-serializable row."""
     spec = result.spec
     record: dict[str, Any] = {
+        "schema_version": SEARCH_SCHEMA_VERSION,
         "spec_sha256": spec_sha256(spec),
         "run_dir": result.run_dir,
         "checkpoint_path": result.checkpoint_path,
@@ -57,17 +61,32 @@ def append_trial_record(path: str | Path, result: CREDOTrialResult) -> Path:
     return out
 
 
-def write_trial_dir(root: str | Path, result: CREDOTrialResult, *, index: int | None = None) -> Path:
+def write_trial_dir(
+    root: str | Path,
+    result: CREDOTrialResult,
+    *,
+    index: int | None = None,
+    trial_id: str | None = None,
+) -> Path:
     """Write one trial as its own directory (parallel-safe source of truth).
 
-    Layout: ``<root>/trial_<idx?>_<spec_sha8>/result.json``. Each worker writes a
-    distinct directory atomically (temp file + rename), so concurrent trials do
-    not contend on a shared file. Use :func:`reduce_trial_dirs` to materialize a
-    combined JSONL cache.
+    Layout: ``<root>/trial_<idx?>_<trial_id?>_<spec_sha8>/result.json``. Each
+    worker writes a distinct directory atomically (temp file + rename), so
+    concurrent trials do not contend on a shared file. Pass a unique ``index``
+    and/or ``trial_id`` (e.g. Optuna ``trial.number`` or a UUID) so that
+    re-runs of the same spec hash -- different seed/fold or a retry -- do NOT
+    overwrite each other (the spec hash alone is not unique across seeds/folds).
+    Use :func:`reduce_trial_dirs` to materialize a combined JSONL cache.
     """
     record = trial_record(result)
     sha8 = str(record["spec_sha256"])[:8]
-    name = f"trial_{index:06d}_{sha8}" if index is not None else f"trial_{sha8}"
+    parts = ["trial"]
+    if index is not None:
+        parts.append(f"{index:06d}")
+    if trial_id is not None:
+        parts.append(str(trial_id))
+    parts.append(sha8)
+    name = "_".join(parts)
     trial_dir = Path(root) / name
     trial_dir.mkdir(parents=True, exist_ok=True)
     target = trial_dir / "result.json"

@@ -47,6 +47,7 @@ from ..models.full_model import FullDynamicsModel
 from ..models.weighted_sde import WeightedParticleSimulator
 from ..models.simulator import _stable_seed_offset, initialise_particles
 from .manifest import append_run_manifest_record, build_run_manifest, write_run_manifest
+from .pruning import TrainingPruned
 
 
 # ---------------------------------------------------------------------------
@@ -2170,16 +2171,18 @@ class Trainer:
                 self._divergence_counter = 0
 
             # Intermediate reporting / pruning for setting search. The reporter
-            # is read-only w.r.t. training; on a prune request we stop early and
-            # record the epoch (the search adapter translates that into a pruned
-            # trial). Does not run on the multi-GPU path's separate epoch loop.
+            # is read-only w.r.t. training; on a prune request we persist the
+            # pruned checkpoint/history and raise TrainingPruned so the trial is
+            # reported as pruned (never scored as a short completed run). Does not
+            # run on the multi-GPU path's separate epoch loop.
             if self.reporter is not None:
                 self.reporter.report(absolute_epoch, metrics)
                 if self.reporter.should_prune():
                     self._pruned_epoch = absolute_epoch
                     self._save_checkpoint(absolute_epoch, "pruned", ema=ema)
+                    self.history.to_dataframe().to_csv(self.output_dir / "history.csv", index=False)
                     print(f"[{stage}] Pruned by reporter at epoch {absolute_epoch}")
-                    break
+                    raise TrainingPruned(absolute_epoch)
 
             if epoch % tc.log_every == 0:
                 elapsed = time.time() - start

@@ -382,6 +382,116 @@ def test_write_trial_dir_is_parallel_safe_source_of_truth(tmp_path) -> None:
     assert records[0]["spec.seed"] == 5
 
 
+def test_run_credo_trial_translates_trainer_prune_signal() -> None:
+    # A trainer raises a duck-typed pruned exception (marker _credo_pruned) so
+    # credo.training need not import credo.search; run_credo_trial must translate
+    # it into TrialPrunedError (a pruned trial, not a short completed one).
+    class _TrainerPruned(RuntimeError):
+        _credo_pruned = True
+        epoch = 3
+
+    def train_fn(cfg, spec, reporter):
+        raise _TrainerPruned()
+
+    with pytest.raises(TrialPrunedError):
+        run_credo_trial(CREDOTrialSpec(), train_fn=train_fn, output_dir="/tmp/tp")
+
+
+def test_metrics_from_epoch_prefers_validation_endpoint_loss() -> None:
+    from credo.search.metrics import metrics_from_epoch
+
+    m = metrics_from_epoch(
+        {
+            "loss_end": 10.0,
+            "val_endpoint_loss": 1.0,
+            "validation_source": "held_out",
+            "loss_total": 10.0,
+        }
+    )
+    # Pruning ranks on the held-out endpoint loss, not the training loss.
+    assert m.endpoint_geom_mass == pytest.approx(1.0)
+    assert m.train_endpoint_geom_mass == pytest.approx(10.0)
+    assert m.validation_source == "held_out"
+
+    # Falls back to training loss when no validation signal is present.
+    m2 = metrics_from_epoch({"loss_end": 5.0, "loss_total": 5.0})
+    assert m2.endpoint_geom_mass == pytest.approx(5.0)
+
+
+def test_claim_grade_constraints_require_mass_and_diagnostics() -> None:
+    from credo.search import CLAIM_GRADE_THRESHOLDS
+
+    spec = CREDOTrialSpec()
+    base = dict(
+        endpoint_geom_mass=0.3,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    # Missing mass + missing diagnostics: feasible for screening, NOT claim-grade.
+    sparse = CREDOTrialMetrics(**base)
+    assert constraints_satisfied(hard_constraints(sparse, spec, DEFAULT_THRESHOLDS)) is True
+
+    cg = hard_constraints(sparse, spec, CLAIM_GRADE_THRESHOLDS)
+    assert cg["mass_metric_finite"] is False
+    assert cg["control_null_ok"] is False
+    assert cg["guide_concordance_ok"] is False
+    assert constraints_satisfied(cg) is False
+
+    # A fully-specified claim-grade trial passes.
+    complete = CREDOTrialMetrics(
+        **base,
+        log_mass_error=0.1,
+        control_null_gap=0.0,
+        guide_concordance_gap=0.0,
+        heldout_score=0.2,
+        validation_source="held_out",
+    )
+    assert constraints_satisfied(hard_constraints(complete, spec, CLAIM_GRADE_THRESHOLDS)) is True
+
+
+def test_suggest_spec_rejects_unknown_base_key() -> None:
+    from credo.search.schedulers import suggest_spec
+
+    class _FakeTrial:
+        def suggest_categorical(self, name, choices):
+            return choices[0]
+
+        def suggest_int(self, name, low, high):
+            return low
+
+        def suggest_float(self, name, low, high, log=False):
+            return low
+
+    with pytest.raises(ValueError, match="Unknown CREDOTrialSpec base keys"):
+        suggest_spec(_FakeTrial(), {"not_a_real_field": 1})
+
+
+def test_write_trial_dir_is_unique_per_trial_id(tmp_path) -> None:
+    from credo.search import reduce_trial_dirs, write_trial_dir
+
+    metrics = CREDOTrialMetrics(
+        endpoint_geom_mass=0.2,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    # Same spec, two trials (e.g. reruns) must not overwrite each other.
+    result = run_credo_trial(
+        CREDOTrialSpec(seed=1), train_fn=lambda c, s, r: metrics, output_dir=str(tmp_path / "r")
+    )
+    d1 = write_trial_dir(tmp_path / "trials", result, trial_id="a")
+    d2 = write_trial_dir(tmp_path / "trials", result, trial_id="b")
+    assert d1 != d2 and d1.exists() and d2.exists()
+
+    records = load_trial_records(reduce_trial_dirs(tmp_path / "trials", tmp_path / "all.jsonl"))
+    assert len(records) == 2
+    assert records[0]["schema_version"] == "credo.search.v1"
+
+
 def test_schedulers_import_without_optuna() -> None:
     # Importing the adapters must not require optuna to be installed.
     import credo.search.schedulers as sched

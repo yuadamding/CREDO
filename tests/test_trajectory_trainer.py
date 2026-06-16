@@ -301,6 +301,8 @@ def test_trajectory_trainer_reporter_reports_and_prunes(tmp_path) -> None:
         def should_prune(self):
             return len(self.calls) >= 2  # prune after the second report
 
+    from credo.training.pruning import TrainingPruned
+
     reporter = _Reporter()
     trainer = TrajectoryTrainer(
         model=_model(),
@@ -312,12 +314,16 @@ def test_trajectory_trainer_reporter_reports_and_prunes(tmp_path) -> None:
         ema_decay=0.0,
         reporter=reporter,
     )
-    trainer.train()
+    # Pruning raises TrainingPruned (so the trial is reported as pruned, not
+    # scored as a short completed run) after persisting the pruned checkpoint.
+    with pytest.raises(TrainingPruned):
+        trainer.train()
 
-    # The reporter was invoked each epoch and pruning stopped training early.
     assert len(reporter.calls) == 2
     assert trainer._pruned_epoch == 2
     assert (tmp_path / "checkpoint_pruned.pt").exists()
+    # checkpoint_last (the "completed" marker) must NOT be written for a pruned run.
+    assert not (tmp_path / "checkpoint_last.pt").exists()
     # The per-epoch mapping carries the diagnostics the optimizer needs.
     _, first_metrics = reporter.calls[0]
     assert "loss_end" in first_metrics

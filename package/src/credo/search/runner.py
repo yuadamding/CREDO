@@ -37,7 +37,7 @@ from .objective import (
     hard_constraints,
     objective_vector,
 )
-from .pruning import NoOpReporter, SearchReporter
+from .pruning import NoOpReporter, SearchReporter, TrialPrunedError
 from .space import CREDOTrialSpec, spec_to_run_config
 
 
@@ -67,7 +67,18 @@ def run_credo_trial(
     reporter = reporter or NoOpReporter()
     cfg = build_config(spec, output_dir=output_dir, device=device, latent_dim=latent_dim)
 
-    metrics = train_fn(cfg, spec, reporter)
+    try:
+        metrics = train_fn(cfg, spec, reporter)
+    except TrialPrunedError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - translate the trainer's prune signal
+        # The trainers raise a duck-typed pruned exception (marker attribute
+        # _credo_pruned) so credo.training need not import credo.search. Translate
+        # it into the search-native TrialPrunedError; re-raise anything else.
+        if getattr(exc, "_credo_pruned", False):
+            raise TrialPrunedError(getattr(exc, "epoch", None)) from exc
+        raise
+
     if not isinstance(metrics, CREDOTrialMetrics):
         raise TypeError(
             "train_fn must return a CREDOTrialMetrics; got "
