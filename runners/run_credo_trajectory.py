@@ -42,6 +42,7 @@ from credo.models.expression_vae import (
     standardize_latent,
 )
 from credo.training.trajectory_trainer import TrajectoryTrainer
+from credo.training.manifest import build_run_manifest
 
 
 def _parse_csv(text: str) -> list[str]:
@@ -694,39 +695,47 @@ def _dependency_versions() -> dict[str, str | None]:
     return versions
 
 
-def write_run_manifest(args: argparse.Namespace, output_dir: str | Path) -> None:
-    from credo import __version__ as credo_version
-
+def write_run_manifest(
+    args: argparse.Namespace,
+    output_dir: str | Path,
+    *,
+    config: dict | None = None,
+    supported_pids: list[str] | None = None,
+) -> None:
     out = Path(output_dir)
     out.mkdir(parents=True, exist_ok=True)
-    manifest = {
-        "package_version": credo_version,
-        "git_sha": _git_sha(),
-        "git_dirty": _git_dirty(),
-        "python": sys.version,
-        "platform": platform.platform(),
-        "torch": torch.__version__,
-        "torch_cuda_version": torch.version.cuda,
-        "cuda_available": bool(torch.cuda.is_available()),
-        "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-        "dependency_versions": _dependency_versions(),
-        "requested_mass_mode": getattr(args, "mass_mode", None),
-        "resolved_mass_mode": getattr(args, "resolved_mass_mode", None),
-        "mass_mode_resolution_reason": getattr(args, "mass_mode_resolution_reason", None),
-        "cv_folds": getattr(args, "cv_folds", 0),
-        "cv_fold_index": getattr(args, "cv_fold_index", 0),
-        "validation_sample_ids_resolved": getattr(args, "validation_sample_ids_resolved", None),
-        "adata_n_obs": getattr(args, "adata_n_obs", None),
-        "adata_n_vars": getattr(args, "adata_n_vars", None),
-        "adata_obs_columns": getattr(args, "adata_obs_columns", None),
-        "adata_var_names_sha256": getattr(args, "adata_var_names_sha256", None),
-        "command": " ".join(sys.argv),
-        "args": {
-            key: str(value) if isinstance(value, Path) else value
-            for key, value in vars(args).items()
-        },
-    }
-    (out / "run_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+    # Route through the shared schema-v2 builder so the trajectory runner emits the
+    # same provenance fields as the endpoint trainer (manifest_schema_version, cwd,
+    # output_dir, config_sha256, git_available, ess_thresholds, ...), then augment
+    # with the trajectory-runner-specific input/resolution details.
+    manifest = build_run_manifest(
+        config=config or {},
+        supported_pids=supported_pids or [],
+        output_dir=str(out),
+        n_epochs=getattr(args, "epochs", None),
+    )
+    manifest.update(
+        {
+            "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
+            "requested_mass_mode": getattr(args, "mass_mode", None),
+            "resolved_mass_mode": getattr(args, "resolved_mass_mode", None),
+            "mass_mode_resolution_reason": getattr(args, "mass_mode_resolution_reason", None),
+            "cv_folds": getattr(args, "cv_folds", 0),
+            "cv_fold_index": getattr(args, "cv_fold_index", 0),
+            "validation_sample_ids_resolved": getattr(args, "validation_sample_ids_resolved", None),
+            "adata_n_obs": getattr(args, "adata_n_obs", None),
+            "adata_n_vars": getattr(args, "adata_n_vars", None),
+            "adata_obs_columns": getattr(args, "adata_obs_columns", None),
+            "adata_var_names_sha256": getattr(args, "adata_var_names_sha256", None),
+            "args": {
+                key: str(value) if isinstance(value, Path) else value
+                for key, value in vars(args).items()
+            },
+        }
+    )
+    (out / "run_manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True, default=str), encoding="utf-8"
+    )
 
 
 def write_input_manifests(study: PerturbSeqDynamicsData, output_dir: str | Path) -> None:
@@ -813,7 +822,6 @@ def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     study = build_study_from_anndata(args)
     study, validation_study = split_validation_samples(study, args)
-    write_run_manifest(args, args.output_dir)
     write_input_manifests(study, args.output_dir)
     labels = [args.source_label] + _parse_csv(args.target_labels)
     by_sample = args.key_mode == "sample_aware"
@@ -824,6 +832,14 @@ def main(argv: list[str] | None = None) -> None:
         else None
     )
     cfg = build_config(args, latent_dim=study.latent_dim)
+    # Emit the schema-v2 run manifest now that the resolved config and the
+    # supported perturbation set are known (config_sha256 hashes the resolved cfg).
+    write_run_manifest(
+        args,
+        args.output_dir,
+        config=cfg.model_dump(),
+        supported_pids=list(trajectory.perturbation_ids),
+    )
 
     model = FullDynamicsModel(
         perturbation_ids=trajectory.perturbation_ids,

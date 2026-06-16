@@ -244,6 +244,44 @@ def test_trajectory_trainer_evaluate_uses_eval_particles(tmp_path) -> None:
     assert seen[-1] == (7, False)
 
 
+def test_trajectory_trainer_records_validation_source(tmp_path) -> None:
+    study = _toy_study()
+    trajectory = study.to_sparse_trajectory_problem(
+        by_sample=True,
+        time_labels=["90m", "6h", "10h"],
+    )
+    cfg = _tiny_config(tmp_path)
+
+    # No validation trajectory -> self-eval on the training view, with a warning
+    # that held-out validation (the configured default) is unavailable.
+    trainer = TrajectoryTrainer(
+        model=_model(),
+        config=cfg,
+        trajectory=trajectory,
+        source_label="90m",
+        target_labels=["6h", "10h"],
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+    )
+    with pytest.warns(RuntimeWarning, match="train_self_eval"):
+        result = trainer.evaluate(epoch=0)
+    assert result["metrics"]["validation_source"] == "train_self_eval"
+
+    # With a held-out validation trajectory -> labeled held_out.
+    trainer_val = TrajectoryTrainer(
+        model=_model(),
+        config=cfg,
+        trajectory=trajectory,
+        source_label="90m",
+        target_labels=["6h", "10h"],
+        validation_trajectory=trajectory,
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+    )
+    result_val = trainer_val.evaluate(epoch=0)
+    assert result_val["metrics"]["validation_source"] == "held_out"
+
+
 def test_trajectory_trainer_count_data_key_order_must_match(tmp_path) -> None:
     study = _toy_study()
     trajectory = study.to_sparse_trajectory_problem(

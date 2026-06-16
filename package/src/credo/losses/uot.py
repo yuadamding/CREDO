@@ -80,9 +80,15 @@ def sinkhorn_divergence_normalized(
     """Debiased Sinkhorn divergence on probability measures.  Always >= 0."""
     log_a = torch.log(a.clamp(min=1e-30))
     log_b = torch.log(b.clamp(min=1e-30))
-    C_xy = _pairwise_sq_euclidean(x, y)
-    C_xx = _pairwise_sq_euclidean(x, x)
-    C_yy = _pairwise_sq_euclidean(y, y)
+    # Match the geomloss SamplesLoss(loss="sinkhorn", p=2, blur=eps**0.5) convention
+    # used by the default backend: cost C(x, y) = 0.5 * ||x - y||^2 and entropic
+    # strength eps. Without the 0.5 the manual fallback uses the full squared
+    # distance and returns a geometry term that is ~2x the geomloss backend, so the
+    # reported divergence (and the geometry-vs-mass balance set by tau) would depend
+    # on whether geomloss happens to be installed. See test_geometry_backend_invariance.
+    C_xy = 0.5 * _pairwise_sq_euclidean(x, y)
+    C_xx = 0.5 * _pairwise_sq_euclidean(x, x)
+    C_yy = 0.5 * _pairwise_sq_euclidean(y, y)
     ot_xy = _balanced_sinkhorn_cost(log_a, log_b, C_xy, eps, max_iter)
     ot_xx = _balanced_sinkhorn_cost(log_a, log_a, C_xx, eps, max_iter)
     ot_yy = _balanced_sinkhorn_cost(log_b, log_b, C_yy, eps, max_iter)

@@ -11,6 +11,7 @@ from credo.losses.uot import (
     endpoint_geometry_mass_loss,
     sinkhorn_divergence,
     sinkhorn_divergence_components,
+    sinkhorn_divergence_normalized,
 )
 
 
@@ -64,6 +65,64 @@ def test_uotloss_class_alias_matches_new_module() -> None:
 
 def test_endpoint_module_is_public_import_home() -> None:
     assert PublicEndpointGeometryMassLoss is EndpointGeometryMassLoss
+
+
+def test_geometry_backend_invariance() -> None:
+    """geomloss and the manual log-domain fallback must agree on the geometry term.
+
+    Before the cost-convention fix the manual fallback used the full squared
+    Euclidean cost while geomloss (p=2) uses 0.5*||x-y||^2, so the two backends
+    differed by a factor of ~2 and the reported divergence depended on whether
+    geomloss was installed. They should now agree to within solver tolerance.
+    """
+    pytest.importorskip("geomloss")
+    torch.manual_seed(0)
+    x = torch.randn(48, 3)
+    y = torch.randn(40, 3) + 0.4
+    a = torch.softmax(torch.randn(48), dim=0)
+    b = torch.softmax(torch.randn(40), dim=0)
+    eps = 0.3
+
+    geom_loss = EndpointGeometryMassLoss(eps=eps, use_geomloss=True, max_iter=500)
+    fallback = EndpointGeometryMassLoss(eps=eps, use_geomloss=False, max_iter=500)
+    assert geom_loss._geomloss_fn is not None  # geomloss actually active
+
+    g_geomloss = geom_loss._geometry(x, a, y, b)
+    g_fallback = fallback._geometry(x, a, y, b)
+
+    assert float(g_geomloss) > 0 and float(g_fallback) > 0
+    ratio = float(g_geomloss) / float(g_fallback)
+    # Regression guard against the ~2x scale mismatch (would give ratio ~0.5 or ~2.0).
+    assert 0.8 < ratio < 1.25, f"backend geometry mismatch, ratio={ratio:.3f}"
+    assert torch.allclose(g_geomloss, g_fallback, rtol=0.15, atol=1e-3)
+
+
+def test_sinkhorn_divergence_self_is_zero_and_nonnegative() -> None:
+    """Debiasing must give self-divergence ~ 0 and a non-negative divergence."""
+    torch.manual_seed(1)
+    x = torch.randn(30, 4)
+    a = torch.softmax(torch.randn(30), dim=0)
+
+    self_div = sinkhorn_divergence_normalized(x, a, x, a, eps=0.5, max_iter=500)
+    assert float(self_div) >= 0.0
+    assert float(self_div) < 1e-4  # ~0 by construction of the debiased divergence
+
+    y = torch.randn(28, 4) + 1.0
+    b = torch.softmax(torch.randn(28), dim=0)
+    div = sinkhorn_divergence_normalized(x, a, y, b, eps=0.5, max_iter=500)
+    assert float(div) >= 0.0
+
+
+def test_sinkhorn_divergence_increases_with_separation() -> None:
+    """Geometry must grow as the target measure is translated away."""
+    torch.manual_seed(2)
+    x = torch.randn(32, 3)
+    a = torch.softmax(torch.randn(32), dim=0)
+    b = torch.softmax(torch.randn(32), dim=0)
+
+    near = sinkhorn_divergence_normalized(x, a, x + 0.5, b, eps=0.5, max_iter=500)
+    far = sinkhorn_divergence_normalized(x, a, x + 4.0, b, eps=0.5, max_iter=500)
+    assert float(far) > float(near)
 
 
 def test_missing_endpoint_target_fails_by_default() -> None:

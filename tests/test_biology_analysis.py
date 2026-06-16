@@ -26,6 +26,59 @@ def _biology_module():
     return extract_biology_effects
 
 
+def _counterfactual_biology_module():
+    analysis_dir = str(ROOT / "analysis")
+    if analysis_dir not in sys.path:
+        sys.path.insert(0, analysis_dir)
+    import run_counterfactual_biology
+
+    return run_counterfactual_biology
+
+
+def test_counterfactual_biology_build_model_honors_transformer_config() -> None:
+    mod = _counterfactual_biology_module()
+    config = {
+        "supported_perturbations": ["gene_a", "ctrl"],
+        "control_ids": ["ctrl"],
+        "shared_guide_embedding": False,
+        "resolved_n_programs": 3,
+        "program_assignment_scale": 1.0,
+        "config": {
+            "model": {
+                "embedding_dim": 6,
+                "n_programs": 3,
+                "mediator_dim": 5,
+                "hidden_dim": 12,
+                "depth": 1,
+                "time_frequencies": 2,
+                "sigma_min": 1e-3,
+                "r_max": 2.0,
+                "n_payoff_ranks": 2,
+                "ecological_growth": True,
+                "use_growth_intercept": True,
+                "control_mode": "soft_ref",
+                "control_ref_penalty": 5e-4,
+                "context_kind": "transformer",
+                "transformer_token_dim": 16,
+                "transformer_heads": 2,
+                "transformer_within_layers": 1,
+                "transformer_cross_layers": 1,
+                "transformer_inducing": 4,
+                "transformer_dropout": 0.0,
+                "mass_attention_temperature": 0.75,
+                "transformer_growth_only": True,
+            }
+        },
+    }
+
+    model = mod._build_model(config, latent_dim=4, program_centroids=None, device="cpu")
+
+    assert model.context_kind == "transformer"
+    assert model.transformer_growth_only is True
+    assert model.context_agg.token_in[0].out_features == 16
+    assert model.meanfield_context_agg is not None
+
+
 def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> None:
     with_root = tmp_path / "with"
     shared_root = tmp_path / "shared"

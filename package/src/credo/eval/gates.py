@@ -60,7 +60,11 @@ def ess_gate_status(
         return "not_available"
     if terminal_min < ess_fail_frac or min_over_time < ess_fail_frac or max_weight > ess_max_weight_frac_fail:
         return "fail"
-    if terminal_min < ess_claim_grade_min_frac:
+    # Apply the claim-grade floor to the intra-trajectory minimum as well as the
+    # terminal minimum: a run whose weights collapse mid-rollout (below the
+    # claim-grade floor) must be blocked from claim-grade even if the terminal
+    # step recovers above the floor.
+    if min(terminal_min, min_over_time) < ess_claim_grade_min_frac:
         return "claim_grade_blocked"
     if terminal_min < ess_warn_frac or min_over_time < ess_warn_frac:
         return "warn"
@@ -96,7 +100,7 @@ def ess_claim_gate(
         failed.append("terminal_ess_frac_min")
     if not min_over_time_available and not math.isfinite(terminal_min):
         failed.append("min_ess_frac_over_time_missing")
-    elif min_over_time_available and min_over_time < ess_fail_frac:
+    elif min_over_time_available and min_over_time < ess_claim_grade_min_frac:
         failed.append("min_ess_frac_over_time")
     if not math.isfinite(max_weight):
         failed.append("max_weight_frac_over_time_missing")

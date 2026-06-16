@@ -472,3 +472,26 @@ def test_vae_fallback_gene_selection_uses_fit_mask_not_targets() -> None:
     mask = _column_mask_for_vae(adata, args, selection_mask=source_mask)
 
     assert adata.var_names[mask].tolist() == ["source_var"]
+
+
+def test_trajectory_runner_manifest_is_schema_v2(tmp_path) -> None:
+    """The trajectory runner must emit the schema-v2 manifest (CHANGELOG claim)."""
+    import argparse
+
+    from credo.config.schema import RunConfig
+    from runners.run_credo_trajectory import write_run_manifest
+
+    args = argparse.Namespace(epochs=5, mass_mode="count", output_dir=str(tmp_path))
+    cfg = RunConfig(output_dir=str(tmp_path), device="cpu")
+    write_run_manifest(args, tmp_path, config=cfg.model_dump(), supported_pids=["ctrl", "g1"])
+
+    manifest = json.loads((tmp_path / "run_manifest.json").read_text())
+    assert manifest["manifest_schema_version"] == 2
+    for key in ("cwd", "output_dir", "config_sha256", "git_available", "ess_thresholds"):
+        assert key in manifest, f"missing schema-v2 field: {key}"
+    assert len(manifest["config_sha256"]) == 64
+    assert manifest["n_epochs"] == 5
+    assert manifest["supported_perturbation_count"] == 2
+    # Trajectory-runner-specific provenance is still preserved.
+    assert "args" in manifest
+    assert manifest["requested_mass_mode"] == "count"

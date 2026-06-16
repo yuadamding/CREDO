@@ -328,15 +328,25 @@ def _weight_diagnostics_from_tensors(
 
 
 def _ess_gate_status(metrics: Dict[str, float], training_config) -> str:
+    # Kept consistent with credo.eval.gates.ess_gate_status: the claim-grade floor
+    # is applied to the intra-trajectory minimum (min_ess_frac_mean) as well as the
+    # terminal minimum, so a mid-rollout weight collapse blocks claim-grade.
     terminal_min = metrics.get("terminal_ess_frac_min", math.nan)
+    min_over_time = metrics.get("min_ess_frac_mean", terminal_min)
     max_weight = metrics.get("max_weight_frac_mean", math.nan)
     if not math.isfinite(terminal_min) or not math.isfinite(max_weight):
         return "not_available"
-    if terminal_min < training_config.ess_fail_frac or max_weight > training_config.ess_max_weight_frac_fail:
+    if not math.isfinite(min_over_time):
+        min_over_time = terminal_min
+    if (
+        terminal_min < training_config.ess_fail_frac
+        or min_over_time < training_config.ess_fail_frac
+        or max_weight > training_config.ess_max_weight_frac_fail
+    ):
         return "fail"
-    if terminal_min < training_config.ess_claim_grade_min_frac:
+    if min(terminal_min, min_over_time) < training_config.ess_claim_grade_min_frac:
         return "claim_grade_blocked"
-    if terminal_min < training_config.ess_warn_frac:
+    if terminal_min < training_config.ess_warn_frac or min_over_time < training_config.ess_warn_frac:
         return "warn"
     return "pass"
 

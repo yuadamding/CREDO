@@ -183,23 +183,49 @@ def _program_centroids(config: dict, obs: pd.DataFrame, latent: np.ndarray, spli
 
 
 def _build_model(config: dict, latent_dim: int, program_centroids: np.ndarray | None, device: str) -> FullDynamicsModel:
+    model_cfg = config.get("config", {}).get("model", {}) if isinstance(config.get("config"), dict) else {}
+
+    def cfg(name: str, default):
+        return model_cfg.get(name, config.get(name, default))
+
     model = FullDynamicsModel(
         perturbation_ids=list(config["supported_perturbations"]),
         control_ids=list(config["control_ids"]),
         latent_dim=latent_dim,
-        embedding_dim=int(config.get("embedding_dim", 8)),
-        n_programs=int(config.get("resolved_n_programs", config.get("n_programs", 8))),
-        mediator_dim=int(config.get("mediator_dim", 8)),
-        hidden_dim=int(config.get("hidden_dim", 128)),
-        depth=int(config.get("depth", 3)),
+        embedding_dim=int(cfg("embedding_dim", 8)),
+        n_programs=int(config.get("resolved_n_programs", cfg("n_programs", 8))),
+        mediator_dim=int(cfg("mediator_dim", 8)),
+        hidden_dim=int(cfg("hidden_dim", 128)),
+        depth=int(cfg("depth", 3)),
         activation_checkpointing=False,
-        ecological_growth=bool(config.get("ecological_growth", True)),
-        use_growth_intercept=bool(config.get("use_growth_intercept", True)),
+        n_time_freqs=int(cfg("time_frequencies", 4)),
+        sigma_min=float(cfg("sigma_min", 1e-3)),
+        r_max=float(cfg("r_max", 3.0)),
+        n_payoff_ranks=int(cfg("n_payoff_ranks", 4)),
+        ecological_growth=bool(cfg("ecological_growth", True)),
+        use_growth_intercept=bool(cfg("use_growth_intercept", True)),
         shared_guide_embedding=bool(config.get("shared_guide_embedding", False)),
         program_centroids=program_centroids,
         program_assignment_scale=float(config.get("program_assignment_scale") or 1.0),
-        control_mode=str(config.get("control_mode", "soft_ref")),
-        control_ref_penalty=float(config.get("lambda_control_ref", 5e-4)),
+        control_mode=str(cfg("control_mode", config.get("control_mode", "soft_ref"))),
+        control_ref_penalty=float(cfg("control_ref_penalty", config.get("lambda_control_ref", 5e-4))),
+        context_kind=str(cfg("context_kind", "mlp")),
+        transformer_token_dim=int(cfg("transformer_token_dim", 64)),
+        transformer_heads=int(cfg("transformer_heads", 4)),
+        transformer_within_layers=int(cfg("transformer_within_layers", 1)),
+        transformer_cross_layers=int(cfg("transformer_cross_layers", 1)),
+        transformer_inducing=int(cfg("transformer_inducing", 8)),
+        transformer_dropout=float(cfg("transformer_dropout", 0.05)),
+        mass_attention_temperature=float(cfg("mass_attention_temperature", 0.5)),
+        transformer_growth_only=bool(cfg("transformer_growth_only", True)),
+        causal_token_dim=int(cfg("causal_token_dim", 64)),
+        causal_heads=int(cfg("causal_heads", 4)),
+        causal_n_mediators=int(cfg("causal_n_mediators", 12)),
+        causal_dropout=float(cfg("causal_dropout", 0.05)),
+        causal_mass_attention_temperature=float(cfg("causal_mass_attention_temperature", 0.5)),
+        causal_growth_only=bool(cfg("causal_growth_only", True)),
+        causal_sparse_edges=bool(cfg("causal_sparse_edges", True)),
+        causal_residual_policy=str(cfg("causal_residual_policy", "edges_only")),
     ).to(device)
     return model
 

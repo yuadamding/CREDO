@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -578,6 +579,7 @@ class TrajectoryTrainer:
 
             val = self.evaluate(epoch=epoch, use_ema=False)
             metrics["val_endpoint_loss"] = val["metrics"].get("loss_end", math.nan)
+            metrics["validation_source"] = val["metrics"].get("validation_source")
             self.history.append(epoch, metrics)
 
             if metrics["val_endpoint_loss"] < self._best_val:
@@ -595,9 +597,33 @@ class TrajectoryTrainer:
         self.history.to_dataframe().to_csv(self.output_dir / "training_history.csv", index=False)
         return self.history
 
+    def _warn_train_self_eval_once(self) -> None:
+        """Warn (once) when held-out validation was requested but is unavailable."""
+        if getattr(self, "_warned_train_self_eval", False):
+            return
+        self._warned_train_self_eval = True
+        requested = getattr(self.config.trajectory_training, "validation_source", "heldout")
+        if requested in ("heldout", "all"):
+            warnings.warn(
+                "TrajectoryTrainer: trajectory_training.validation_source="
+                f"{requested!r} requested held-out validation, but no validation "
+                "trajectory was provided. Validation metrics and best-checkpoint "
+                "selection are computed on the TRAINING view "
+                "(validation_source='train_self_eval'); reported 'val_*' values are "
+                "NOT held out.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+
     @torch.no_grad()
     def evaluate(self, *, epoch: int = 0, use_ema: bool = False) -> dict[str, object]:
-        view = self.val_view or self.view
+        if self.val_view is not None:
+            view = self.val_view
+            validation_source = "held_out"
+        else:
+            view = self.view
+            validation_source = "train_self_eval"
+            self._warn_train_self_eval_once()
         if use_ema and self.ema is not None:
             self.ema.apply_shadow()
         try:
@@ -609,6 +635,7 @@ class TrajectoryTrainer:
                 training=False,
             )
             _, _, metrics, pred_df = self._loss_for_rollout(view, rollout, epoch=epoch)
+            metrics["validation_source"] = validation_source
             pred_df.to_csv(self.output_dir / "predicted_metrics_by_key_time.csv", index=False)
             pd.DataFrame([{"epoch": epoch, **metrics}]).to_csv(
                 self.output_dir / "validation_history.csv",

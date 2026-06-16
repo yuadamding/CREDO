@@ -41,6 +41,35 @@ def test_ess_gate_status_matches_claim_grade_thresholds() -> None:
     )
 
 
+def test_ess_gate_blocks_intra_trajectory_collapse_below_claim_floor() -> None:
+    """A terminal-recovered run that collapsed mid-trajectory must be blocked.
+
+    terminal ESS (0.15) is above the claim-grade floor (0.10) but the
+    intra-trajectory minimum (0.08) is below it; the run must not be reported as
+    claim-grade-allowed. Previously this returned 'warn' (lenient-allowed).
+    """
+    kwargs = {
+        "ess_warn_frac": 0.2,
+        "ess_fail_frac": 0.05,
+        "ess_claim_grade_min_frac": 0.1,
+        "ess_max_weight_frac_fail": 0.5,
+    }
+    metrics = {
+        "terminal_ess_frac_min": 0.15,
+        "min_ess_frac_over_time": 0.08,
+        "max_weight_frac_over_time": 0.2,
+    }
+
+    assert ess_gate_status(metrics, **kwargs) == "claim_grade_blocked"
+
+    gate = ess_claim_gate(metrics, **kwargs)
+    assert gate["ess_gate_status"] == "claim_grade_blocked"
+    assert gate["ess_claim_grade_allowed"] is False
+    assert gate["ess_claim_grade_allowed_lenient"] is False
+    assert gate["ess_claim_grade_allowed_strict"] is False
+    assert "min_ess_frac_over_time" in gate["ess_failed_gates"]
+
+
 def test_ess_claim_gate_payload_blocks_low_ess_rows() -> None:
     gate = ess_claim_gate({"terminal_ess_frac_min": 0.08, "max_weight_frac_mean": 0.2})
 
