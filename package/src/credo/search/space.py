@@ -19,10 +19,11 @@ pure black-box function of a validated config.
 from __future__ import annotations
 
 from dataclasses import dataclass, fields
-from typing import Optional
+from typing import Literal, Optional
 
 from ..config.schema import (
     EvalConfig,
+    LatentConfig,
     ModelConfig,
     RunConfig,
     SimulationConfig,
@@ -90,7 +91,7 @@ class CREDOTrialSpec:
     """
 
     # --- dataset / problem identity (provided, not searched) ---
-    dataset_kind: str = "endpoint"  # "endpoint" | "trajectory" | "single_time"
+    dataset_kind: Literal["endpoint", "trajectory", "single_time"] = "endpoint"
     data_id: str = "dataset"
     seed: int = 0
     fold_id: Optional[str] = None
@@ -103,9 +104,9 @@ class CREDOTrialSpec:
     depth: int = 3
 
     # --- context backend / variant (ABLATION_ONLY) ---
-    context_kind: str = "mlp"
+    context_kind: Literal["mlp", "transformer", "causal_attention"] = "mlp"
     ecological_growth: bool = True
-    training_schedule: str = "staged"
+    training_schedule: Literal["joint", "staged"] = "staged"
 
     # --- optimization (SEARCHABLE) ---
     epochs: int = 300
@@ -135,6 +136,50 @@ class CREDOTrialSpec:
     same_start_counterfactuals: bool = True
     mass_faithful_context: bool = True
     global_context_batching: str = "full_context_cache"
+
+    def __post_init__(self) -> None:
+        # Numeric sanity only. Frozen-semantic strings are validated by
+        # assert_frozen_semantics (not here) so callers can still construct an
+        # intentionally-invalid spec to test that guard.
+        for name in (
+            "embedding_dim",
+            "n_programs",
+            "mediator_dim",
+            "hidden_dim",
+            "depth",
+            "epochs",
+            "n_particles",
+            "n_steps",
+            "eval_particles",
+        ):
+            value = getattr(self, name)
+            if int(value) <= 0:
+                raise ValueError(f"{name} must be a positive integer, got {value!r}.")
+        for name in (
+            "lr_net",
+            "lr_embed",
+            "lr_transformer",
+            "lr_causal_attention",
+            "sinkhorn_epsilon",
+            "sinkhorn_tau",
+        ):
+            value = getattr(self, name)
+            if float(value) <= 0.0:
+                raise ValueError(f"{name} must be > 0, got {value!r}.")
+        for name in (
+            "weight_decay",
+            "lambda_end",
+            "lambda_weak",
+            "lambda_count",
+            "lambda_aux",
+            "lambda_reg_net",
+            "lambda_reg_embed",
+            "lambda_reg_growth_bias",
+            "lambda_reg_diffusion",
+        ):
+            value = getattr(self, name)
+            if float(value) < 0.0:
+                raise ValueError(f"{name} must be >= 0, got {value!r}.")
 
 
 def _known_fields() -> set[str]:
@@ -216,6 +261,8 @@ def spec_to_run_config(
         global_context_batching=spec.global_context_batching,
     )
 
+    latent = LatentConfig(dim=int(latent_dim)) if latent_dim is not None else LatentConfig()
+
     cfg = RunConfig(
         run_id=f"{spec.data_id}:{spec.fold_id or 'all'}:seed{spec.seed}",
         data_id=spec.data_id,
@@ -226,9 +273,8 @@ def spec_to_run_config(
         simulation=simulation,
         training=training,
         eval=eval_cfg,
+        latent=latent,
     )
-    if latent_dim is not None:
-        cfg.latent.dim = int(latent_dim)
     return cfg
 
 

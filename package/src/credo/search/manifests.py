@@ -41,12 +41,59 @@ def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
 
 
 def append_trial_record(path: str | Path, result: CREDOTrialResult) -> Path:
-    """Append one trial record as a JSONL line."""
+    """Append one trial record as a JSONL line.
+
+    NOTE: this is a single-writer convenience. Concurrent search workers
+    (multiprocess Optuna/Ray) can interleave appends and corrupt the file. For
+    parallel sweeps, have each worker call :func:`write_trial_dir` (one atomic
+    file per trial) and build the JSONL with :func:`reduce_trial_dirs` afterward,
+    or use Optuna RDB storage as the source of truth.
+    """
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(trial_record(result), sort_keys=True, default=str))
         handle.write("\n")
+    return out
+
+
+def write_trial_dir(root: str | Path, result: CREDOTrialResult, *, index: int | None = None) -> Path:
+    """Write one trial as its own directory (parallel-safe source of truth).
+
+    Layout: ``<root>/trial_<idx?>_<spec_sha8>/result.json``. Each worker writes a
+    distinct directory atomically (temp file + rename), so concurrent trials do
+    not contend on a shared file. Use :func:`reduce_trial_dirs` to materialize a
+    combined JSONL cache.
+    """
+    record = trial_record(result)
+    sha8 = str(record["spec_sha256"])[:8]
+    name = f"trial_{index:06d}_{sha8}" if index is not None else f"trial_{sha8}"
+    trial_dir = Path(root) / name
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    target = trial_dir / "result.json"
+    tmp = trial_dir / "result.json.tmp"
+    tmp.write_text(json.dumps(record, indent=2, sort_keys=True, default=str), encoding="utf-8")
+    tmp.replace(target)  # atomic on POSIX within a filesystem
+    return trial_dir
+
+
+def reduce_trial_dirs(root: str | Path, out_jsonl: str | Path) -> Path:
+    """Collect all per-trial ``result.json`` files under ``root`` into one JSONL.
+
+    The per-trial directories are the source of truth; the JSONL is a rebuildable
+    cache, so this is safe to re-run after a partially-completed sweep.
+    """
+    root_path = Path(root)
+    out = Path(out_jsonl)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    records = sorted(
+        (json.loads(p.read_text(encoding="utf-8")) for p in root_path.glob("trial_*/result.json")),
+        key=lambda r: str(r.get("spec_sha256", "")),
+    )
+    with out.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(json.dumps(record, sort_keys=True, default=str))
+            handle.write("\n")
     return out
 
 
@@ -110,6 +157,8 @@ __all__ = [
     "append_trial_record",
     "load_trial_records",
     "pareto_front",
+    "reduce_trial_dirs",
     "spec_sha256",
     "trial_record",
+    "write_trial_dir",
 ]

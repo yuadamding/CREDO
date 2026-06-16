@@ -157,6 +157,7 @@ class TrajectoryTrainer:
         output_dir: str = "outputs",
         ema_decay: float = 0.995,
         warmup_epochs: int = 10,
+        reporter: object | None = None,
     ) -> None:
         self.model = model
         self.config = config
@@ -171,6 +172,11 @@ class TrajectoryTrainer:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.ema_decay = float(ema_decay)
         self.warmup_epochs = int(warmup_epochs)
+        # Optional search reporter (duck-typed: .report(epoch, metrics_mapping)
+        # and .should_prune() -> bool). credo.training stays independent of
+        # credo.search.
+        self.reporter = reporter
+        self._pruned_epoch: int | None = None
 
         tc = config.training
         trc = config.trajectory_training
@@ -589,6 +595,17 @@ class TrajectoryTrainer:
                     self.ema.apply_shadow()
                     self.save_checkpoint("checkpoint_best_ema.pt", epoch=epoch)
                     self.ema.restore()
+
+            # Intermediate reporting / pruning for setting search (read-only).
+            if self.reporter is not None:
+                self.reporter.report(epoch, metrics)
+                if self.reporter.should_prune():
+                    self._pruned_epoch = epoch
+                    self.save_checkpoint("checkpoint_pruned.pt", epoch=epoch)
+                    self.history.to_dataframe().to_csv(
+                        self.output_dir / "training_history.csv", index=False
+                    )
+                    break
 
             if epoch % max(1, tc.log_every) == 0 or epoch == tc.epochs:
                 self.history.to_dataframe().to_csv(self.output_dir / "training_history.csv", index=False)

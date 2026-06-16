@@ -57,8 +57,13 @@ def _last_str(values: Any) -> Optional[str]:
 class CREDOTrialMetrics:
     """Outcome metrics for one CREDO trial (one fold/seed)."""
 
-    # Fit quality
+    # Fit quality. endpoint_geom_mass is the *combined* geometry+log-mass proxy
+    # (the training-history loss_end). endpoint_sinkhorn / endpoint_mass_penalty
+    # are the decomposed pieces when an evaluator can provide them; log_mass_error
+    # is a distinct relative terminal-mass diagnostic, NOT the tau penalty term.
     endpoint_geom_mass: float = math.nan
+    endpoint_sinkhorn: Optional[float] = None
+    endpoint_mass_penalty: Optional[float] = None
     log_mass_error: float = math.nan
     count_nll: Optional[float] = None
     weak_loss: Optional[float] = None
@@ -118,20 +123,36 @@ def metrics_from_history(
     history = dict(history)
     summary = dict(eval_summary or {})
 
-    # Endpoint geometry / mass: prefer eval summary (held out) over training loss.
+    # Endpoint fit: prefer the eval summary (held out) over the training loss.
+    # loss_end IS the combined geometry+log-mass proxy; the training history has
+    # no separate pure-geometry or mass term, so do not invent one from history.
     endpoint = summary.get("mean_endpoint_geom_mass")
+    endpoint_from_summary = endpoint is not None
     if endpoint is None:
         endpoint = _last(history.get("loss_end"))
+    endpoint_sinkhorn = summary.get("mean_endpoint_sinkhorn")
+    endpoint_mass_penalty = summary.get("mean_endpoint_mass_penalty")
+    # Relative terminal mass error (distinct from the tau penalty); only the eval
+    # summary provides it.
     log_mass_error = summary.get("mean_log_mass_error", summary.get("mean_mass_rel_error"))
-    if log_mass_error is None:
-        log_mass_error = _last(history.get("loss_mass", history.get("log_mass_error")))
 
-    validation_source = _last_str(history.get("validation_source")) or summary.get(
-        "validation_source"
+    # Provenance follows the source of the headline endpoint metric: if it came
+    # from the (held-out) eval summary, trust the summary's validation_source;
+    # only fall back to the training history's per-epoch label otherwise. This
+    # prevents a stale "train_self_eval" history label from mislabeling a
+    # genuinely held-out evaluation.
+    validation_source = (
+        (summary.get("validation_source") if endpoint_from_summary else None)
+        or _last_str(history.get("validation_source"))
+        or summary.get("validation_source")
     )
 
     return CREDOTrialMetrics(
         endpoint_geom_mass=float(endpoint) if endpoint is not None else math.nan,
+        endpoint_sinkhorn=float(endpoint_sinkhorn) if endpoint_sinkhorn is not None else None,
+        endpoint_mass_penalty=float(endpoint_mass_penalty)
+        if endpoint_mass_penalty is not None
+        else None,
         log_mass_error=float(log_mass_error) if log_mass_error is not None else math.nan,
         count_nll=_opt(history.get("loss_count")),
         weak_loss=_opt(history.get("loss_weak")),
@@ -152,9 +173,40 @@ def metrics_from_history(
     )
 
 
+def metrics_from_epoch(
+    epoch_metrics: Mapping[str, Any],
+    *,
+    diverged: bool = False,
+) -> CREDOTrialMetrics:
+    """Build metrics from a trainer's *single-epoch* scalar metrics dict.
+
+    Used by the trainer reporter hook so the optimizer can prune on intermediate
+    progress. Treats a non-finite total/endpoint loss as divergence.
+    """
+    m = dict(epoch_metrics)
+    endpoint = _last(m.get("loss_end"))
+    total = _last(m.get("loss_total", m.get("loss_end")))
+    return CREDOTrialMetrics(
+        endpoint_geom_mass=endpoint,
+        count_nll=_opt(m.get("loss_count")),
+        weak_loss=_opt(m.get("loss_weak")),
+        validation_source=_last_str(m.get("validation_source")),
+        terminal_ess_frac_min=_last(m.get("terminal_ess_frac_min")),
+        min_ess_frac_over_time=_last(m.get("min_ess_frac_over_time", m.get("min_ess_frac_mean"))),
+        max_weight_frac_mean=_last(m.get("max_weight_frac_mean")),
+        logw_range_max=_last(m.get("logw_range_max")),
+        diverged=bool(diverged) or not math.isfinite(total),
+    )
+
+
 def _opt(values: Any) -> Optional[float]:
     out = _last(values)
     return None if math.isnan(out) else out
 
 
-__all__ = ["CREDOTrialMetrics", "CREDOTrialResult", "metrics_from_history"]
+__all__ = [
+    "CREDOTrialMetrics",
+    "CREDOTrialResult",
+    "metrics_from_epoch",
+    "metrics_from_history",
+]

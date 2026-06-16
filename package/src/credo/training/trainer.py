@@ -415,6 +415,7 @@ class Trainer:
         particle_sampling: str = "uniform",
         context_override_provider: Optional[Callable[..., Any]] = None,
         extra_loss_callback: Optional[Callable[..., Tuple[torch.Tensor, Dict[str, float]]]] = None,
+        reporter: Optional[Any] = None,
     ) -> None:
         self.model = model
         self.config = config
@@ -424,6 +425,11 @@ class Trainer:
         self.particle_sampling = particle_sampling
         self.context_override_provider = context_override_provider
         self.extra_loss_callback = extra_loss_callback
+        # Optional search reporter (duck-typed: .report(epoch, metrics_mapping)
+        # and .should_prune() -> bool). Kept generic so credo.training has no
+        # dependency on credo.search.
+        self.reporter = reporter
+        self._pruned_epoch: Optional[int] = None
         self.training_devices = config.resolve_training_devices()
         self.device = self.training_devices[0]
         self.dtype = torch.float32
@@ -2162,6 +2168,18 @@ class Trainer:
                 should_stop_for_divergence = self._divergence_counter >= tc.divergence_patience
             else:
                 self._divergence_counter = 0
+
+            # Intermediate reporting / pruning for setting search. The reporter
+            # is read-only w.r.t. training; on a prune request we stop early and
+            # record the epoch (the search adapter translates that into a pruned
+            # trial). Does not run on the multi-GPU path's separate epoch loop.
+            if self.reporter is not None:
+                self.reporter.report(absolute_epoch, metrics)
+                if self.reporter.should_prune():
+                    self._pruned_epoch = absolute_epoch
+                    self._save_checkpoint(absolute_epoch, "pruned", ema=ema)
+                    print(f"[{stage}] Pruned by reporter at epoch {absolute_epoch}")
+                    break
 
             if epoch % tc.log_every == 0:
                 elapsed = time.time() - start

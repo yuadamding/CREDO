@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import pytest
 
@@ -143,7 +144,6 @@ def test_pruner_score_dominated_by_divergence() -> None:
 def test_metrics_from_history_takes_last_epoch_values() -> None:
     history = {
         "loss_end": [1.0, 0.7, 0.5],
-        "loss_mass": [0.9, 0.4, 0.3],
         "loss_count": [2.0, 1.5, 1.2],
         "loss_weak": [0.2, 0.1, 0.05],
         "terminal_ess_frac_min": [0.5, 0.4, 0.35],
@@ -154,15 +154,20 @@ def test_metrics_from_history_takes_last_epoch_values() -> None:
     }
     m = metrics_from_history(history, wall_seconds=12.0, diverged=False)
     assert m.endpoint_geom_mass == pytest.approx(0.5)
-    assert m.log_mass_error == pytest.approx(0.3)
+    # Training history has no separate mass term (loss_end is the combined proxy),
+    # so relative mass error is only available from an eval summary -> NaN here.
+    assert math.isnan(m.log_mass_error)
     assert m.count_nll == pytest.approx(1.2)
     assert m.min_ess_frac_over_time == pytest.approx(0.28)
     assert m.validation_source == "held_out"
     assert m.wall_seconds == pytest.approx(12.0)
 
-    # Eval summary (held out) overrides the training loss for endpoint fit.
-    m2 = metrics_from_history(history, eval_summary={"mean_endpoint_geom_mass": 0.61})
+    # Eval summary (held out) supplies endpoint fit and relative mass error.
+    m2 = metrics_from_history(
+        history, eval_summary={"mean_endpoint_geom_mass": 0.61, "mean_mass_rel_error": 0.12}
+    )
     assert m2.endpoint_geom_mass == pytest.approx(0.61)
+    assert m2.log_mass_error == pytest.approx(0.12)
 
 
 # --- runner -----------------------------------------------------------------
@@ -196,7 +201,9 @@ def test_run_credo_trial_scores_and_constrains() -> None:
 
     assert seen["lr_net"] == pytest.approx(2e-4)
     assert result.feasible is True
-    assert "endpoint_geometry" in result.objective_vector
+    # The combined proxy is exposed under its honest name (not "endpoint_geometry").
+    assert "endpoint_geom_mass" in result.objective_vector
+    assert "endpoint_geometry" not in result.objective_vector
     assert result.run_dir == "/tmp/trial0"
     assert len(reporter.history) == 1
 
@@ -259,13 +266,120 @@ def test_trial_manifest_roundtrip_and_pareto(tmp_path) -> None:
 
     front = pareto_front(
         records,
-        ["objective.endpoint_geometry", "objective.mass_error"],
+        ["objective.endpoint_geom_mass", "objective.mass_error"],
         feasible_only=True,
     )
     seeds = {r["spec.seed"] for r in front}
     # The two non-dominated feasible trade-offs are on the front; the dominated
     # one is not, and the infeasible (ESS-collapsed) one is excluded entirely.
     assert seeds == {1, 2}
+
+
+def test_metrics_validation_source_prefers_eval_summary() -> None:
+    # A stale history label must not override a fresh held-out eval summary.
+    history = {"loss_end": [0.5], "validation_source": ["train_self_eval"]}
+    summary = {"mean_endpoint_geom_mass": 0.4, "validation_source": "held_out"}
+    m = metrics_from_history(history, eval_summary=summary)
+    assert m.endpoint_geom_mass == pytest.approx(0.4)
+    assert m.validation_source == "held_out"
+
+
+def test_pruner_penalizes_missing_endpoint_metric() -> None:
+    good = CREDOTrialMetrics(
+        endpoint_geom_mass=0.3,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    missing = dataclasses.replace(good, endpoint_geom_mass=float("nan"))
+    # Missing core fit metric is a large penalty, not a neutral zero.
+    assert pruner_score(missing) > pruner_score(good) + 100.0
+
+
+def test_hard_constraints_reject_nan_fit_metrics() -> None:
+    spec = CREDOTrialSpec()
+    metrics = CREDOTrialMetrics(
+        endpoint_geom_mass=float("nan"),
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    constraints = hard_constraints(metrics, spec, DEFAULT_THRESHOLDS)
+    assert constraints["fit_metrics_finite"] is False
+    assert constraints_satisfied(constraints) is False
+
+
+def test_objective_uses_pure_geometry_only_when_decomposed() -> None:
+    decomposed = CREDOTrialMetrics(
+        endpoint_geom_mass=0.5,
+        endpoint_sinkhorn=0.3,
+        endpoint_mass_penalty=0.2,
+        log_mass_error=0.1,
+    )
+    vector = objective_vector(decomposed)
+    assert vector["endpoint_geometry"] == pytest.approx(0.3)
+    assert vector["endpoint_mass_penalty"] == pytest.approx(0.2)
+    assert "endpoint_geom_mass" not in vector
+
+
+def test_suggest_spec_allows_base_with_searched_key() -> None:
+    from credo.search.schedulers import suggest_spec
+
+    class _FakeTrial:
+        def suggest_categorical(self, name, choices):
+            return choices[0]
+
+        def suggest_int(self, name, low, high):
+            return low
+
+        def suggest_float(self, name, low, high, log=False):
+            return low
+
+    # hidden_dim is a searched key; passing it in base must not crash.
+    base = {"data_id": "d", "seed": 1, "hidden_dim": 9999}
+    spec = suggest_spec(_FakeTrial(), base)
+    assert spec.hidden_dim == 128  # suggested value wins
+    assert spec.data_id == "d"
+
+
+def test_spec_to_run_config_sets_latent_dim_via_construction() -> None:
+    cfg = spec_to_run_config(CREDOTrialSpec(), output_dir="x", latent_dim=9)
+    assert cfg.latent.dim == 9
+
+
+def test_spec_post_init_rejects_nonpositive_values() -> None:
+    with pytest.raises(ValueError, match="hidden_dim"):
+        CREDOTrialSpec(hidden_dim=0)
+    with pytest.raises(ValueError, match="lr_net"):
+        CREDOTrialSpec(lr_net=0.0)
+    with pytest.raises(ValueError, match="lambda_weak"):
+        CREDOTrialSpec(lambda_weak=-1.0)
+
+
+def test_write_trial_dir_is_parallel_safe_source_of_truth(tmp_path) -> None:
+    from credo.search import reduce_trial_dirs, write_trial_dir
+
+    metrics = CREDOTrialMetrics(
+        endpoint_geom_mass=0.2,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    result = run_credo_trial(
+        CREDOTrialSpec(seed=5), train_fn=lambda c, s, r: metrics, output_dir=str(tmp_path / "r")
+    )
+    trial_dir = write_trial_dir(tmp_path / "trials", result, index=0)
+    assert (trial_dir / "result.json").exists()
+
+    jsonl = reduce_trial_dirs(tmp_path / "trials", tmp_path / "all.jsonl")
+    records = load_trial_records(jsonl)
+    assert len(records) == 1
+    assert records[0]["spec.seed"] == 5
 
 
 def test_schedulers_import_without_optuna() -> None:

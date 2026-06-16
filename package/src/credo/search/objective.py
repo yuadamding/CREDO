@@ -28,6 +28,7 @@ from .space import CREDOTrialSpec, assert_frozen_semantics
 
 
 DIVERGENCE_PENALTY = 1_000.0
+MISSING_METRIC_PENALTY = 1_000.0
 
 DEFAULT_PRUNER_WEIGHTS: dict[str, float] = {
     "endpoint_geom_mass": 0.40,
@@ -70,6 +71,14 @@ class Standardizer:
         s = s if s and abs(s) > 1e-12 else 1.0
         return (value - c) / s
 
+    def z_or_penalty(self, name: str, value: float, *, missing_penalty: float = MISSING_METRIC_PENALTY) -> float:
+        """Like :meth:`z`, but a *required* metric that is missing/NaN is a large
+        penalty rather than a neutral zero (so a crashed trial with partial logs
+        does not look competitive)."""
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return missing_penalty
+        return self.z(name, value)
+
 
 def _particle_failure_penalty(m: CREDOTrialMetrics) -> float:
     """Soft penalty (>= 0) that grows as particle weights degenerate."""
@@ -104,7 +113,9 @@ def pruner_score(
     std = standardizer or Standardizer()
 
     score = 0.0
-    score += w["endpoint_geom_mass"] * std.z("endpoint_geom_mass", metrics.endpoint_geom_mass)
+    # endpoint_geom_mass is the core fit metric: a missing/NaN value is a large
+    # penalty, not a neutral zero (catches trials that crashed with partial logs).
+    score += w["endpoint_geom_mass"] * std.z_or_penalty("endpoint_geom_mass", metrics.endpoint_geom_mass)
     score += w["log_mass_error"] * std.z("log_mass_error", metrics.log_mass_error)
     if metrics.count_nll is not None:
         score += w["count_nll"] * std.z("count_nll", metrics.count_nll)
@@ -122,11 +133,19 @@ def objective_vector(metrics: CREDOTrialMetrics) -> dict[str, float]:
     held out; otherwise it is omitted so it cannot silently rank trials on
     training-data fit.
     """
-    vector: dict[str, float] = {
-        "endpoint_geometry": _nan_to(metrics.endpoint_geom_mass, math.inf),
-        "mass_error": _nan_to(metrics.log_mass_error, math.inf),
-        "gpu_seconds": _nan_to(metrics.gpu_seconds, math.inf),
-    }
+    vector: dict[str, float] = {"gpu_seconds": _nan_to(metrics.gpu_seconds, math.inf)}
+    # Only call an axis "endpoint_geometry" when it is genuinely pure geometry.
+    # Otherwise expose the honestly-named combined proxy "endpoint_geom_mass",
+    # which already couples mass via the log-mass penalty -- avoid double-counting
+    # mass under a "geometry" label.
+    if metrics.endpoint_sinkhorn is not None:
+        vector["endpoint_geometry"] = float(metrics.endpoint_sinkhorn)
+        if metrics.endpoint_mass_penalty is not None:
+            vector["endpoint_mass_penalty"] = float(metrics.endpoint_mass_penalty)
+    else:
+        vector["endpoint_geom_mass"] = _nan_to(metrics.endpoint_geom_mass, math.inf)
+    if metrics.log_mass_error is not None and not math.isnan(metrics.log_mass_error):
+        vector["mass_error"] = float(metrics.log_mass_error)
     if metrics.count_nll is not None:
         vector["count_nll"] = float(metrics.count_nll)
     if metrics.heldout_score is not None and metrics.validation_source == "held_out":
@@ -145,6 +164,9 @@ def hard_constraints(
     ess = min(_nan_to(metrics.terminal_ess_frac_min, 0.0), _nan_to(metrics.min_ess_frac_over_time, 0.0))
     constraints = {
         "not_diverged": not metrics.diverged,
+        "converged_ok": bool(metrics.converged) and not metrics.diverged,
+        # A missing/NaN core fit metric must not pass as feasible (crashed trial).
+        "fit_metrics_finite": _finite(metrics.endpoint_geom_mass),
         # Intra-trajectory minimum, not just terminal -- a mid-rollout collapse
         # below the floor is infeasible even if the terminal step recovered.
         "ess_ok": ess >= thresholds.ess_floor,
@@ -198,6 +220,10 @@ def _nan_to(value: Optional[float], default: float) -> float:
         return default
     value = float(value)
     return default if math.isnan(value) else value
+
+
+def _finite(value: Optional[float]) -> bool:
+    return value is not None and math.isfinite(float(value))
 
 
 __all__ = [

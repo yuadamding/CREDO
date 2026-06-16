@@ -282,6 +282,47 @@ def test_trajectory_trainer_records_validation_source(tmp_path) -> None:
     assert result_val["metrics"]["validation_source"] == "held_out"
 
 
+def test_trajectory_trainer_reporter_reports_and_prunes(tmp_path) -> None:
+    study = _toy_study()
+    trajectory = study.to_sparse_trajectory_problem(
+        by_sample=True,
+        time_labels=["90m", "6h", "10h"],
+    )
+    cfg = _tiny_config(tmp_path)
+    cfg.training.epochs = 5
+
+    class _Reporter:
+        def __init__(self) -> None:
+            self.calls: list[tuple[int, dict]] = []
+
+        def report(self, epoch, metrics):
+            self.calls.append((epoch, dict(metrics)))
+
+        def should_prune(self):
+            return len(self.calls) >= 2  # prune after the second report
+
+    reporter = _Reporter()
+    trainer = TrajectoryTrainer(
+        model=_model(),
+        config=cfg,
+        trajectory=trajectory,
+        source_label="90m",
+        target_labels=["6h", "10h"],
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+        reporter=reporter,
+    )
+    trainer.train()
+
+    # The reporter was invoked each epoch and pruning stopped training early.
+    assert len(reporter.calls) == 2
+    assert trainer._pruned_epoch == 2
+    assert (tmp_path / "checkpoint_pruned.pt").exists()
+    # The per-epoch mapping carries the diagnostics the optimizer needs.
+    _, first_metrics = reporter.calls[0]
+    assert "loss_end" in first_metrics
+
+
 def test_trajectory_trainer_count_data_key_order_must_match(tmp_path) -> None:
     study = _toy_study()
     trajectory = study.to_sparse_trajectory_problem(

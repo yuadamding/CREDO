@@ -25,7 +25,12 @@ mass-faithful context, exact full-context batching) are never searchable;
 """
 from __future__ import annotations
 
-from .metrics import CREDOTrialMetrics, CREDOTrialResult, metrics_from_history
+from .metrics import (
+    CREDOTrialMetrics,
+    CREDOTrialResult,
+    metrics_from_epoch,
+    metrics_from_history,
+)
 from .objective import (
     ConstraintThresholds,
     DEFAULT_THRESHOLDS,
@@ -55,8 +60,10 @@ from .manifests import (
     append_trial_record,
     load_trial_records,
     pareto_front,
+    reduce_trial_dirs,
     spec_sha256,
     trial_record,
+    write_trial_dir,
 )
 
 __all__ = [
@@ -79,12 +86,15 @@ __all__ = [
     "feasible_pruner_score",
     "hard_constraints",
     "load_trial_records",
+    "metrics_from_epoch",
     "metrics_from_history",
     "objective_vector",
     "pareto_front",
     "pruner_score",
+    "reduce_trial_dirs",
     "run_credo_trial",
     "spec_sha256",
     "spec_to_run_config",
     "trial_record",
+    "write_trial_dir",
 ]
