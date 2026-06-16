@@ -703,6 +703,89 @@ def test_write_trial_dir_sanitizes_trial_id(tmp_path) -> None:
     assert (trial_dir / "result.json").exists()
 
 
+def test_failure_metadata_penalizes_pruner_score() -> None:
+    from credo.search import CREDOTrainOutput
+
+    result = run_credo_trial(
+        CREDOTrialSpec(),
+        train_fn=lambda c, s, r: CREDOTrainOutput(
+            metrics=_good_metrics(), failure_type="RuntimeError", failure_message="boom"
+        ),
+        output_dir="/tmp/x",
+    )
+    assert result.feasible is False
+    assert result.constraints["no_failure"] is False
+    # The scalar score reflects the SAME (augmented) feasibility verdict.
+    assert result.pruner_score >= DIVERGENCE_PENALTY
+
+
+def test_metrics_from_epoch_training_fallback_is_not_heldout() -> None:
+    from credo.search.metrics import metrics_from_epoch
+
+    m = metrics_from_epoch(
+        {"loss_end": 5.0, "val_endpoint_loss": float("nan"), "loss_total": 5.0, "validation_source": "held_out"}
+    )
+    assert m.endpoint_geom_mass == pytest.approx(5.0)
+    # Fell back to the training loss, so it is NOT held out despite the label.
+    assert m.validation_source == "train_self_eval"
+
+
+def test_last_accepts_numpy_scalars() -> None:
+    import numpy as np
+
+    from credo.search.metrics import _last
+
+    assert _last(np.float32(1.25)) == pytest.approx(1.25)
+    assert _last(np.float64(2.5)) == pytest.approx(2.5)
+    assert _last(np.asarray(3.0)) == pytest.approx(3.0)  # 0-D array
+    assert math.isnan(_last(np.float32("nan")))
+
+
+def test_constraint_thresholds_reject_invalid_direct_construction() -> None:
+    from credo.search import ConstraintThresholds
+
+    with pytest.raises(ValueError, match="ess_floor"):
+        ConstraintThresholds(ess_floor=-0.1)
+    with pytest.raises(ValueError, match="max_weight_ceiling"):
+        ConstraintThresholds(max_weight_ceiling=2.0)
+    with pytest.raises(ValueError, match="control_null_max"):
+        ConstraintThresholds(control_null_max=-1.0)
+
+
+def test_fit_metrics_finite_accepts_endpoint_sinkhorn_when_combined_absent() -> None:
+    m = CREDOTrialMetrics(
+        endpoint_geom_mass=float("nan"),
+        endpoint_sinkhorn=0.3,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    constraints = hard_constraints(m, CREDOTrialSpec(), DEFAULT_THRESHOLDS)
+    assert constraints["fit_metrics_finite"] is True
+
+
+def test_write_trial_dir_refuses_duplicate_without_overwrite(tmp_path) -> None:
+    from credo.search import write_trial_dir
+
+    metrics = CREDOTrialMetrics(
+        endpoint_geom_mass=0.2,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    result = run_credo_trial(
+        CREDOTrialSpec(seed=1), train_fn=lambda c, s, r: metrics, output_dir=str(tmp_path / "r")
+    )
+    write_trial_dir(tmp_path / "trials", result, trial_id="dup", index=0)
+    with pytest.raises(FileExistsError):
+        write_trial_dir(tmp_path / "trials", result, trial_id="dup", index=0)
+    overwritten = write_trial_dir(tmp_path / "trials", result, trial_id="dup", index=0, overwrite=True)
+    assert (overwritten / "result.json").exists()
+
+
 def test_schedulers_import_without_optuna() -> None:
     # Importing the adapters must not require optuna to be installed.
     import credo.search.schedulers as sched

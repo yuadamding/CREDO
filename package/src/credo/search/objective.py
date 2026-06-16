@@ -61,6 +61,22 @@ class ConstraintThresholds:
     require_control_null: bool = False
     require_guide_concordance: bool = False
 
+    def __post_init__(self) -> None:
+        # Range validation only. We intentionally do NOT forbid inf ceilings when
+        # a diagnostic is "required": the presence profile (require_* with open
+        # ceilings) is a legitimate gate. Finite ceilings are enforced by the
+        # claim_grade_thresholds(...) factory.
+        if not 0.0 <= float(self.ess_floor) <= 1.0:
+            raise ValueError(f"ess_floor must be in [0, 1], got {self.ess_floor!r}.")
+        if not 0.0 < float(self.max_weight_ceiling) <= 1.0:
+            raise ValueError(f"max_weight_ceiling must be in (0, 1], got {self.max_weight_ceiling!r}.")
+        if float(self.control_null_max) < 0:
+            raise ValueError(f"control_null_max must be non-negative, got {self.control_null_max!r}.")
+        if float(self.guide_concordance_max) < 0:
+            raise ValueError(
+                f"guide_concordance_max must be non-negative, got {self.guide_concordance_max!r}."
+            )
+
 
 DEFAULT_THRESHOLDS = ConstraintThresholds()
 
@@ -240,7 +256,10 @@ def hard_constraints(
         "not_diverged": not metrics.diverged,
         "converged_ok": bool(metrics.converged) and not metrics.diverged,
         # A missing/NaN core fit metric must not pass as feasible (crashed trial).
-        "fit_metrics_finite": _finite(metrics.endpoint_geom_mass),
+        # Accept the pure-geometry term when the combined proxy is absent, matching
+        # objective_vector's headline-endpoint fallback.
+        "fit_metrics_finite": _finite(metrics.endpoint_geom_mass)
+        or _finite(metrics.endpoint_sinkhorn),
         # Finite-measure claim-grade selection requires a finite mass diagnostic.
         "mass_metric_finite": (not thresholds.require_mass_metric)
         or _finite(metrics.log_mass_error),

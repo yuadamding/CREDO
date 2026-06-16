@@ -32,11 +32,12 @@ from .metrics import CREDOTrainOutput, CREDOTrialMetrics, CREDOTrialResult
 from .objective import (
     ConstraintThresholds,
     DEFAULT_THRESHOLDS,
+    DIVERGENCE_PENALTY,
     Standardizer,
     constraints_satisfied,
-    feasible_pruner_score,
     hard_constraints,
     objective_vector,
+    pruner_score,
 )
 from .pruning import NoOpReporter, SearchReporter, TrialPrunedError
 from .space import CREDOTrialSpec, spec_to_run_config
@@ -105,15 +106,21 @@ def run_credo_trial(
     constraints = dict(hard_constraints(metrics, spec, thresholds))
     # A train_fn that reports a failure must not yield a feasible trial.
     constraints["no_failure"] = output.failure_type is None and output.failure_message is None
+    feasible = constraints_satisfied(constraints)
+    # Derive the scalar score from the SAME (augmented) feasibility verdict, so a
+    # failed-but-otherwise-fine trial gets the infeasibility penalty rather than a
+    # competitive score. (feasible_pruner_score recomputes only hard_constraints
+    # and would miss the no_failure constraint added here.)
+    score = pruner_score(metrics, standardizer=standardizer)
+    if not feasible:
+        score += DIVERGENCE_PENALTY
     return CREDOTrialResult(
         spec=spec,
         metrics=metrics,
         objective_vector=objective_vector(metrics),
         constraints=constraints,
-        pruner_score=feasible_pruner_score(
-            metrics, spec, thresholds=thresholds, standardizer=standardizer
-        ),
-        feasible=constraints_satisfied(constraints),
+        pruner_score=score,
+        feasible=feasible,
         run_dir=output.run_dir or output_dir,
         checkpoint_path=output.checkpoint_path,
         history_path=output.history_path,

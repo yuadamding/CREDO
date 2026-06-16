@@ -19,11 +19,20 @@ from typing import Any, Mapping, Optional
 
 
 def _last(values: Any) -> float:
-    """Return the last finite scalar of a list/sequence, else NaN."""
-    if values is None:
+    """Return the last finite scalar of a list/sequence (or a finite scalar), else NaN.
+
+    Robust to NumPy scalar types, 0-D arrays, and scalar tensors: a direct
+    float() conversion is attempted before falling back to sequence handling.
+    """
+    if values is None or isinstance(values, str):
         return math.nan
-    if isinstance(values, (int, float)):
-        return float(values)
+    # Scalars (incl. numpy/torch scalar types and 0-D arrays) convert directly.
+    try:
+        out = float(values)
+    except (TypeError, ValueError):
+        pass
+    else:
+        return out if math.isfinite(out) else math.nan
     try:
         seq = list(values)
     except TypeError:
@@ -233,14 +242,22 @@ def metrics_from_epoch(
     # source instead of poisoning the metric.
     train_endpoint = _last(m.get("loss_end"))
     val_endpoint = _first_finite(m.get("val_endpoint_loss"), m.get("eval_endpoint_loss"))
-    endpoint = val_endpoint if math.isfinite(val_endpoint) else train_endpoint
+    # Provenance follows the endpoint actually used: only when a finite held-out
+    # endpoint is used do we keep the reported validation_source; if we fell back
+    # to the training loss, the metric is train_self_eval (never held_out).
+    if math.isfinite(val_endpoint):
+        endpoint = val_endpoint
+        validation_source = _last_str(m.get("validation_source"))
+    else:
+        endpoint = train_endpoint
+        validation_source = "train_self_eval" if math.isfinite(train_endpoint) else None
     total = _last(m.get("loss_total", m.get("loss_end")))
     return CREDOTrialMetrics(
         endpoint_geom_mass=endpoint,
         train_endpoint_geom_mass=None if math.isnan(train_endpoint) else train_endpoint,
         count_nll=_opt_value(_first_finite(m.get("val_count_nll"), m.get("loss_count"))),
         weak_loss=_opt_value(_first_finite(m.get("val_weak_loss"), m.get("loss_weak"))),
-        validation_source=_last_str(m.get("validation_source")),
+        validation_source=validation_source,
         terminal_ess_frac_min=_last(m.get("terminal_ess_frac_min")),
         min_ess_frac_over_time=_last(m.get("min_ess_frac_over_time", m.get("min_ess_frac_mean"))),
         max_weight_frac_mean=_last(m.get("max_weight_frac_mean")),

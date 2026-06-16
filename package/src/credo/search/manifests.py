@@ -83,6 +83,7 @@ def write_trial_dir(
     *,
     index: int | None = None,
     trial_id: str | None = None,
+    overwrite: bool = False,
 ) -> Path:
     """Write one trial as its own directory (parallel-safe source of truth).
 
@@ -108,7 +109,12 @@ def write_trial_dir(
     parts.append(sha8)
     name = "_".join(parts)
     trial_dir = Path(root) / name
-    trial_dir.mkdir(parents=True, exist_ok=True)
+    if trial_dir.exists() and not overwrite:
+        raise FileExistsError(
+            f"Trial directory already exists: {trial_dir}. Pass a unique index/trial_id, "
+            "or overwrite=True to replace it."
+        )
+    trial_dir.mkdir(parents=True, exist_ok=overwrite)
     target = trial_dir / "result.json"
     tmp = trial_dir / "result.json.tmp"
     tmp.write_text(json.dumps(record, indent=2, sort_keys=True, default=str), encoding="utf-8")
