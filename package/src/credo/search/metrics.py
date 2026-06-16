@@ -170,11 +170,17 @@ def metrics_from_history(
     # only fall back to the training history's per-epoch label otherwise. This
     # prevents a stale "train_self_eval" history label from mislabeling a
     # genuinely held-out evaluation.
-    validation_source = (
-        (summary.get("validation_source") if endpoint_from_summary else None)
-        or _last_str(history.get("validation_source"))
-        or summary.get("validation_source")
-    )
+    # Provenance follows the SOURCE of the headline endpoint metric. If the
+    # endpoint came from the eval summary, use the summary's validation_source;
+    # if it came from the training history, it is NOT held out regardless of any
+    # validation_source the summary happens to carry (that label belongs to some
+    # other summarized quantity, not the training-loss endpoint).
+    if endpoint_from_summary:
+        validation_source = summary.get("validation_source")
+    else:
+        validation_source = _last_str(history.get("validation_source"))
+        if validation_source is None and not math.isnan(train_endpoint):
+            validation_source = "train_self_eval"
 
     # Prefer (sanitized) eval-summary values; fall back to training history.
     count_nll = _summary_opt(summary, "mean_count_nll")
@@ -220,19 +226,20 @@ def metrics_from_epoch(
     progress. Treats a non-finite total/endpoint loss as divergence.
     """
     m = dict(epoch_metrics)
-    # Prune on the HELD-OUT endpoint loss when the trainer provides one
+    # Prune on the HELD-OUT endpoint loss when the trainer provides a finite one
     # (val_endpoint_loss / eval_endpoint_loss); fall back to the training loss
-    # (loss_end) only when no validation signal exists. Otherwise pruning would
-    # rank on training loss while carrying a held-out validation_source label.
+    # (loss_end) when no finite validation signal exists. Using _first_finite
+    # means a present-but-NaN validation key correctly falls through to the next
+    # source instead of poisoning the metric.
     train_endpoint = _last(m.get("loss_end"))
-    val_endpoint = _last(m.get("val_endpoint_loss", m.get("eval_endpoint_loss")))
+    val_endpoint = _first_finite(m.get("val_endpoint_loss"), m.get("eval_endpoint_loss"))
     endpoint = val_endpoint if math.isfinite(val_endpoint) else train_endpoint
     total = _last(m.get("loss_total", m.get("loss_end")))
     return CREDOTrialMetrics(
         endpoint_geom_mass=endpoint,
         train_endpoint_geom_mass=None if math.isnan(train_endpoint) else train_endpoint,
-        count_nll=_opt(m.get("val_count_nll", m.get("loss_count"))),
-        weak_loss=_opt(m.get("val_weak_loss", m.get("loss_weak"))),
+        count_nll=_opt_value(_first_finite(m.get("val_count_nll"), m.get("loss_count"))),
+        weak_loss=_opt_value(_first_finite(m.get("val_weak_loss"), m.get("loss_weak"))),
         validation_source=_last_str(m.get("validation_source")),
         terminal_ess_frac_min=_last(m.get("terminal_ess_frac_min")),
         min_ess_frac_over_time=_last(m.get("min_ess_frac_over_time", m.get("min_ess_frac_mean"))),
@@ -245,6 +252,23 @@ def metrics_from_epoch(
 def _opt(values: Any) -> Optional[float]:
     out = _last(values)
     return None if math.isnan(out) else out
+
+
+def _opt_value(value: float) -> Optional[float]:
+    return None if value is None or math.isnan(value) else value
+
+
+def _first_finite(*values: Any) -> float:
+    """Return the first finite scalar across the given sources, else NaN.
+
+    Each source is passed through :func:`_last`, so a present-but-NaN value
+    correctly falls through to the next source.
+    """
+    for value in values:
+        out = _last(value)
+        if math.isfinite(out):
+            return out
+    return math.nan
 
 
 def _summary_opt(summary: Mapping[str, Any], key: str) -> Optional[float]:

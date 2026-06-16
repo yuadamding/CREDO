@@ -586,6 +586,123 @@ def test_summary_nan_metrics_are_sanitized() -> None:
     assert all(v == v for v in objective_vector(m).values())
 
 
+def test_summary_source_does_not_label_training_endpoint_as_heldout() -> None:
+    from credo.search import CLAIM_GRADE_PRESENCE_THRESHOLDS
+
+    # The eval summary carries a validation_source but no endpoint metric, so the
+    # endpoint comes from training history and must NOT inherit "held_out".
+    m = metrics_from_history({"loss_end": [0.5]}, eval_summary={"validation_source": "held_out"})
+    assert m.endpoint_geom_mass == pytest.approx(0.5)
+    assert m.validation_source == "train_self_eval"
+    constraints = hard_constraints(m, CREDOTrialSpec(), CLAIM_GRADE_PRESENCE_THRESHOLDS)
+    assert constraints["heldout_endpoint_ok"] is False
+
+
+def test_run_credo_trial_reconciles_latent_dim_into_spec_hash() -> None:
+    train_fn = lambda c, s, r: _good_metrics()  # noqa: E731
+    # Conflicting override is an error, not a silent change.
+    with pytest.raises(ValueError, match="conflicts with spec.latent_dim"):
+        run_credo_trial(
+            CREDOTrialSpec(latent_dim=16), train_fn=train_fn, output_dir="/tmp/x", latent_dim=32
+        )
+    # A bare override is folded into the (hashed) spec.
+    result = run_credo_trial(CREDOTrialSpec(), train_fn=train_fn, output_dir="/tmp/x", latent_dim=24)
+    assert result.spec.latent_dim == 24
+
+
+def test_claim_grade_thresholds_reject_infinite_ceilings() -> None:
+    from credo.search import claim_grade_thresholds
+
+    with pytest.raises(ValueError, match="control_null_max"):
+        claim_grade_thresholds(control_null_max=math.inf)
+    with pytest.raises(ValueError, match="guide_concordance_max"):
+        claim_grade_thresholds(control_null_max=0.05, require_guide_concordance=True)
+    th = claim_grade_thresholds(control_null_max=0.05)
+    assert th.control_null_max == pytest.approx(0.05)
+
+
+def test_trial_record_includes_provenance_fields() -> None:
+    from credo.search import CREDOTrainOutput
+    from credo.search.manifests import trial_record
+
+    def train_fn(cfg, spec, reporter):
+        return CREDOTrainOutput(
+            metrics=_good_metrics(),
+            run_dir="/tmp/rd",
+            checkpoint_path="/tmp/rd/ck.pt",
+            history_path="/tmp/rd/h.csv",
+            eval_summary_path="/tmp/rd/e.json",
+            resolved_config_path="/tmp/rd/c.json",
+        )
+
+    record = trial_record(run_credo_trial(CREDOTrialSpec(), train_fn=train_fn, output_dir="/tmp/x"))
+    for key in ("history_path", "eval_summary_path", "resolved_config_path", "failure_type", "failure_message"):
+        assert key in record
+    assert record["history_path"] == "/tmp/rd/h.csv"
+
+
+def test_failure_metadata_makes_trial_infeasible() -> None:
+    from credo.search import CREDOTrainOutput
+
+    def train_fn(cfg, spec, reporter):
+        return CREDOTrainOutput(
+            metrics=_good_metrics(), failure_type="RuntimeError", failure_message="boom after eval"
+        )
+
+    result = run_credo_trial(CREDOTrialSpec(), train_fn=train_fn, output_dir="/tmp/x")
+    assert result.constraints["no_failure"] is False
+    assert result.feasible is False
+    assert result.failure_type == "RuntimeError"
+
+
+def test_metrics_from_epoch_falls_back_when_val_endpoint_is_nan() -> None:
+    from credo.search.metrics import metrics_from_epoch
+
+    # NaN val_endpoint_loss must fall through to eval_endpoint_loss, then training.
+    m = metrics_from_epoch(
+        {"loss_end": 5.0, "val_endpoint_loss": float("nan"), "eval_endpoint_loss": 2.0, "loss_total": 5.0}
+    )
+    assert m.endpoint_geom_mass == pytest.approx(2.0)
+    m2 = metrics_from_epoch({"loss_end": 5.0, "val_endpoint_loss": float("nan"), "loss_total": 5.0})
+    assert m2.endpoint_geom_mass == pytest.approx(5.0)
+
+
+def test_objective_vector_omits_nan_from_external_metrics() -> None:
+    m = CREDOTrialMetrics(
+        endpoint_geom_mass=0.3,
+        endpoint_sinkhorn=float("nan"),
+        count_nll=float("nan"),
+        guide_concordance_gap=0.1,
+    )
+    vector = objective_vector(m)
+    assert "endpoint_geometry" not in vector  # NaN pure-geometry dropped
+    assert vector["endpoint_geom_mass"] == pytest.approx(0.3)  # fell back to combined
+    assert "count_nll" not in vector  # NaN dropped
+    assert vector["guide_concordance_gap"] == pytest.approx(0.1)  # now exposed
+    assert all(v == v for v in vector.values())  # no NaN
+
+
+def test_write_trial_dir_sanitizes_trial_id(tmp_path) -> None:
+    from credo.search import write_trial_dir
+
+    metrics = CREDOTrialMetrics(
+        endpoint_geom_mass=0.2,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    result = run_credo_trial(
+        CREDOTrialSpec(), train_fn=lambda c, s, r: metrics, output_dir=str(tmp_path / "r")
+    )
+    trial_dir = write_trial_dir(tmp_path / "trials", result, trial_id="../../evil id")
+    # The path stays under trials/ (no traversal) and the name is sanitized.
+    assert (tmp_path / "trials") in trial_dir.parents
+    assert ".." not in trial_dir.name
+    assert (trial_dir / "result.json").exists()
+
+
 def test_schedulers_import_without_optuna() -> None:
     # Importing the adapters must not require optuna to be installed.
     import credo.search.schedulers as sched

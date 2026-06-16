@@ -25,6 +25,7 @@ config-driven.
 """
 from __future__ import annotations
 
+import dataclasses
 from typing import Callable, Optional, Union
 
 from .metrics import CREDOTrainOutput, CREDOTrialMetrics, CREDOTrialResult
@@ -65,7 +66,17 @@ def run_credo_trial(
     method semantics are enforced when the config is built.
     """
     reporter = reporter or NoOpReporter()
-    cfg = build_config(spec, output_dir=output_dir, device=device, latent_dim=latent_dim)
+    # Representation identity has one source of truth: the (hashed) spec. An
+    # explicit latent_dim is folded into the spec so it cannot diverge from the
+    # spec hash; a conflicting override is an error rather than a silent change.
+    if latent_dim is not None:
+        if spec.latent_dim is not None and int(spec.latent_dim) != int(latent_dim):
+            raise ValueError(
+                f"latent_dim override {latent_dim} conflicts with spec.latent_dim="
+                f"{spec.latent_dim}; set latent_dim once on CREDOTrialSpec so it is hashed."
+            )
+        spec = dataclasses.replace(spec, latent_dim=int(latent_dim))
+    cfg = build_config(spec, output_dir=output_dir, device=device, latent_dim=None)
 
     try:
         out = train_fn(cfg, spec, reporter)
@@ -91,7 +102,9 @@ def run_credo_trial(
         )
 
     metrics = output.metrics
-    constraints = hard_constraints(metrics, spec, thresholds)
+    constraints = dict(hard_constraints(metrics, spec, thresholds))
+    # A train_fn that reports a failure must not yield a feasible trial.
+    constraints["no_failure"] = output.failure_type is None and output.failure_message is None
     return CREDOTrialResult(
         spec=spec,
         metrics=metrics,

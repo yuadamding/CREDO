@@ -64,36 +64,56 @@ class ConstraintThresholds:
 
 DEFAULT_THRESHOLDS = ConstraintThresholds()
 
-# Presence + provenance gate for claim-grade selection. NOTE: this requires the
-# mass / control-null / guide-concordance diagnostics to EXIST and the endpoint
-# metric to be held out, but leaves the gap *ceilings* open (inf). For a real
-# claim it is not sufficient on its own -- use claim_grade_thresholds(...) with
-# null-calibrated finite ceilings (e.g. from the practical-null floor profiles).
-CLAIM_GRADE_THRESHOLDS = ConstraintThresholds(
+# Presence + provenance gate: requires the mass / control-null / guide-concordance
+# diagnostics to EXIST and the endpoint metric to be held out, but leaves the gap
+# *ceilings* open (inf). This is NOT sufficient for a real claim on its own -- use
+# claim_grade_thresholds(...) with null-calibrated finite ceilings (e.g. from the
+# practical-null floor profiles) for final selection.
+CLAIM_GRADE_PRESENCE_THRESHOLDS = ConstraintThresholds(
     require_heldout_provenance=True,
     require_heldout_endpoint=True,
     require_mass_metric=True,
     require_control_null=True,
     require_guide_concordance=True,
 )
+# Backward-compatible alias; the explicit name makes the open-ceiling semantics
+# clear at the call site.
+CLAIM_GRADE_THRESHOLDS = CLAIM_GRADE_PRESENCE_THRESHOLDS
 
 
 def claim_grade_thresholds(
     *,
     control_null_max: float,
-    guide_concordance_max: float = math.inf,
+    guide_concordance_max: Optional[float] = None,
     require_guide_concordance: bool = False,
     ess_floor: float = 0.10,
     max_weight_ceiling: float = 0.50,
 ) -> ConstraintThresholds:
     """Build a claim-grade threshold profile with FINITE diagnostic ceilings.
 
-    ``control_null_max`` is required (no default) so callers must supply a
-    null-calibrated limit rather than silently accepting any finite gap. Set
-    ``require_guide_concordance=True`` (and a finite ``guide_concordance_max``)
-    only for guide-level claims; perturbation-level claims should leave it off so
-    they are not rejected merely because guide-level data are unavailable.
+    ``control_null_max`` is required and must be finite and non-negative, so
+    callers cannot silently accept any finite gap by passing inf. When
+    ``require_guide_concordance=True``, ``guide_concordance_max`` must also be a
+    finite non-negative limit. Enable guide concordance only for guide-level
+    claims; perturbation-level claims should leave it off so they are not
+    rejected merely because guide-level data are unavailable.
     """
+    if not math.isfinite(float(control_null_max)) or float(control_null_max) < 0:
+        raise ValueError(
+            f"control_null_max must be a finite, non-negative threshold, got {control_null_max!r}."
+        )
+    if require_guide_concordance:
+        if (
+            guide_concordance_max is None
+            or not math.isfinite(float(guide_concordance_max))
+            or float(guide_concordance_max) < 0
+        ):
+            raise ValueError(
+                "guide_concordance_max must be a finite, non-negative threshold when "
+                f"require_guide_concordance=True, got {guide_concordance_max!r}."
+            )
+    elif guide_concordance_max is None:
+        guide_concordance_max = math.inf
     return ConstraintThresholds(
         ess_floor=ess_floor,
         max_weight_ceiling=max_weight_ceiling,
@@ -192,21 +212,20 @@ def objective_vector(metrics: CREDOTrialMetrics) -> dict[str, float]:
     # Only call an axis "endpoint_geometry" when it is genuinely pure geometry.
     # Otherwise expose the honestly-named combined proxy "endpoint_geom_mass",
     # which already couples mass via the log-mass penalty -- avoid double-counting
-    # mass under a "geometry" label.
-    if metrics.endpoint_sinkhorn is not None:
+    # mass under a "geometry" label. _add_if_finite guards against NaN sneaking in
+    # from externally-constructed metrics.
+    if _finite(metrics.endpoint_sinkhorn):
         vector["endpoint_geometry"] = float(metrics.endpoint_sinkhorn)
-        if metrics.endpoint_mass_penalty is not None:
-            vector["endpoint_mass_penalty"] = float(metrics.endpoint_mass_penalty)
+        _add_if_finite(vector, "endpoint_mass_penalty", metrics.endpoint_mass_penalty)
     else:
+        # No finite pure-geometry term -> fall back to the combined proxy.
         vector["endpoint_geom_mass"] = _nan_to(metrics.endpoint_geom_mass, math.inf)
-    if metrics.log_mass_error is not None and not math.isnan(metrics.log_mass_error):
-        vector["mass_error"] = float(metrics.log_mass_error)
-    if metrics.count_nll is not None:
-        vector["count_nll"] = float(metrics.count_nll)
-    if metrics.heldout_score is not None and metrics.validation_source == "held_out":
-        vector["heldout_generalization"] = float(metrics.heldout_score)
-    if metrics.control_null_gap is not None:
-        vector["counterfactual_null_gap"] = float(metrics.control_null_gap)
+    _add_if_finite(vector, "mass_error", metrics.log_mass_error)
+    _add_if_finite(vector, "count_nll", metrics.count_nll)
+    if metrics.validation_source == "held_out":
+        _add_if_finite(vector, "heldout_generalization", metrics.heldout_score)
+    _add_if_finite(vector, "counterfactual_null_gap", metrics.control_null_gap)
+    _add_if_finite(vector, "guide_concordance_gap", metrics.guide_concordance_gap)
     return vector
 
 
@@ -293,6 +312,11 @@ def _finite(value: Optional[float]) -> bool:
     return value is not None and math.isfinite(float(value))
 
 
+def _add_if_finite(vector: dict[str, float], name: str, value: Optional[float]) -> None:
+    if value is not None and math.isfinite(float(value)):
+        vector[name] = float(value)
+
+
 def _gap_ok(gap: Optional[float], max_value: float, required: bool) -> bool:
     """Diagnostic-gap feasibility. When the diagnostic is required, a missing
     value (``None``) is infeasible; otherwise a missing value passes (screening)."""
@@ -302,6 +326,7 @@ def _gap_ok(gap: Optional[float], max_value: float, required: bool) -> bool:
 
 
 __all__ = [
+    "CLAIM_GRADE_PRESENCE_THRESHOLDS",
     "CLAIM_GRADE_THRESHOLDS",
     "ConstraintThresholds",
     "DEFAULT_PRUNER_WEIGHTS",

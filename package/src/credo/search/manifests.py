@@ -10,9 +10,19 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import re
 import uuid
 from pathlib import Path
 from typing import Any, Iterable
+
+# Filesystem-safe trial id (prevents path traversal / surprising directory names).
+# Dots are excluded so ".." can never appear as a path component.
+_TRIAL_ID_UNSAFE = re.compile(r"[^A-Za-z0-9_=-]+")
+
+
+def _slug(value: str) -> str:
+    cleaned = _TRIAL_ID_UNSAFE.sub("-", str(value)).strip("-")[:120]
+    return cleaned or uuid.uuid4().hex
 
 from .metrics import CREDOTrialResult
 from .space import CREDOTrialSpec
@@ -35,6 +45,11 @@ def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
         "spec_sha256": spec_sha256(spec),
         "run_dir": result.run_dir,
         "checkpoint_path": result.checkpoint_path,
+        "history_path": result.history_path,
+        "eval_summary_path": result.eval_summary_path,
+        "resolved_config_path": result.resolved_config_path,
+        "failure_type": result.failure_type,
+        "failure_message": result.failure_message,
         "pruner_score": result.pruner_score,
         "feasible": result.feasible,
     }
@@ -81,8 +96,7 @@ def write_trial_dir(
     overwrite-safe by default. Use :func:`reduce_trial_dirs` to materialize a
     combined JSONL cache.
     """
-    if trial_id is None:
-        trial_id = uuid.uuid4().hex
+    trial_id = _slug(trial_id) if trial_id is not None else uuid.uuid4().hex
     record = trial_record(result)
     record["trial_id"] = trial_id
     record["trial_index"] = index
@@ -113,7 +127,11 @@ def reduce_trial_dirs(root: str | Path, out_jsonl: str | Path) -> Path:
     out.parent.mkdir(parents=True, exist_ok=True)
     records = sorted(
         (json.loads(p.read_text(encoding="utf-8")) for p in root_path.glob("trial_*/result.json")),
-        key=lambda r: str(r.get("spec_sha256", "")),
+        key=lambda r: (
+            r["trial_index"] if isinstance(r.get("trial_index"), int) else 10**12,
+            str(r.get("trial_id", "")),
+            str(r.get("spec_sha256", "")),
+        ),
     )
     with out.open("w", encoding="utf-8") as handle:
         for record in records:
