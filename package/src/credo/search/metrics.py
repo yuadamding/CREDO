@@ -163,11 +163,15 @@ def metrics_from_history(
     # no separate pure-geometry or mass term, so do not invent one from history.
     train_endpoint = _last(history.get("loss_end"))
     endpoint = _summary_opt(summary, "mean_endpoint_geom_mass")
-    endpoint_from_summary = endpoint is not None
-    if endpoint is None:
-        endpoint = train_endpoint
     endpoint_sinkhorn = _summary_opt(summary, "mean_endpoint_sinkhorn")
     endpoint_mass_penalty = _summary_opt(summary, "mean_endpoint_mass_penalty")
+    # The headline endpoint can be supplied by the summary either as the combined
+    # proxy OR as the pure-geometry term (objective_vector prefers sinkhorn when
+    # finite). Either one means the headline endpoint came from the (held-out)
+    # eval summary, so provenance should follow the summary.
+    headline_from_summary = endpoint is not None or endpoint_sinkhorn is not None
+    if endpoint is None:
+        endpoint = train_endpoint
     # Relative terminal mass error (distinct from the tau penalty); only the eval
     # summary provides it.
     log_mass_error = _summary_opt(summary, "mean_log_mass_error")
@@ -184,7 +188,7 @@ def metrics_from_history(
     # if it came from the training history, it is NOT held out regardless of any
     # validation_source the summary happens to carry (that label belongs to some
     # other summarized quantity, not the training-loss endpoint).
-    if endpoint_from_summary:
+    if headline_from_summary:
         validation_source = summary.get("validation_source")
     else:
         validation_source = _last_str(history.get("validation_source"))

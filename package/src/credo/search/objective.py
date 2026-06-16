@@ -60,6 +60,9 @@ class ConstraintThresholds:
     require_mass_metric: bool = False
     require_control_null: bool = False
     require_guide_concordance: bool = False
+    # Mass *calibration* ceiling (claim-grade): existence of a finite mass error
+    # is not enough -- a claim-grade endpoint run must also keep it below this.
+    log_mass_error_max: float = math.inf
 
     def __post_init__(self) -> None:
         # Range validation only. We intentionally do NOT forbid inf ceilings when
@@ -75,6 +78,10 @@ class ConstraintThresholds:
         if float(self.guide_concordance_max) < 0:
             raise ValueError(
                 f"guide_concordance_max must be non-negative, got {self.guide_concordance_max!r}."
+            )
+        if float(self.log_mass_error_max) < 0:
+            raise ValueError(
+                f"log_mass_error_max must be non-negative, got {self.log_mass_error_max!r}."
             )
 
 
@@ -102,6 +109,7 @@ def claim_grade_thresholds(
     control_null_max: float,
     guide_concordance_max: Optional[float] = None,
     require_guide_concordance: bool = False,
+    log_mass_error_max: float = math.inf,
     ess_floor: float = 0.10,
     max_weight_ceiling: float = 0.50,
 ) -> ConstraintThresholds:
@@ -135,6 +143,7 @@ def claim_grade_thresholds(
         max_weight_ceiling=max_weight_ceiling,
         control_null_max=control_null_max,
         guide_concordance_max=guide_concordance_max,
+        log_mass_error_max=log_mass_error_max,
         require_heldout_provenance=True,
         require_heldout_endpoint=True,
         require_mass_metric=True,
@@ -204,9 +213,13 @@ def pruner_score(
     std = standardizer or Standardizer()
 
     score = 0.0
-    # endpoint_geom_mass is the core fit metric: a missing/NaN value is a large
-    # penalty, not a neutral zero (catches trials that crashed with partial logs).
-    score += w["endpoint_geom_mass"] * std.z_or_penalty("endpoint_geom_mass", metrics.endpoint_geom_mass)
+    # The headline endpoint metric is the core fit term: a missing/NaN value is a
+    # large penalty, not a neutral zero (catches trials that crashed with partial
+    # logs). Use the same combined-or-pure-geometry fallback as hard_constraints,
+    # so a feasible decomposed-only trial is not penalized for a missing combined
+    # proxy.
+    endpoint_name, endpoint_value = _headline_endpoint(metrics)
+    score += w["endpoint_geom_mass"] * std.z_or_penalty(endpoint_name, endpoint_value)
     score += w["log_mass_error"] * std.z("log_mass_error", metrics.log_mass_error)
     if metrics.count_nll is not None:
         score += w["count_nll"] * std.z("count_nll", metrics.count_nll)
@@ -260,9 +273,12 @@ def hard_constraints(
         # objective_vector's headline-endpoint fallback.
         "fit_metrics_finite": _finite(metrics.endpoint_geom_mass)
         or _finite(metrics.endpoint_sinkhorn),
-        # Finite-measure claim-grade selection requires a finite mass diagnostic.
+        # Finite-measure claim-grade selection requires a finite mass diagnostic...
         "mass_metric_finite": (not thresholds.require_mass_metric)
         or _finite(metrics.log_mass_error),
+        # ...and, when a calibration ceiling is set, the mass error must clear it.
+        "mass_error_ok": (not thresholds.require_mass_metric)
+        or (_finite(metrics.log_mass_error) and float(metrics.log_mass_error) <= thresholds.log_mass_error_max),
         # Intra-trajectory minimum, not just terminal -- a mid-rollout collapse
         # below the floor is infeasible even if the terminal step recovered.
         "ess_ok": ess >= thresholds.ess_floor,
@@ -292,6 +308,22 @@ def hard_constraints(
 
 def constraints_satisfied(constraints: Mapping[str, bool]) -> bool:
     return all(bool(v) for v in constraints.values())
+
+
+def constrained_score_from_constraints(
+    metrics: CREDOTrialMetrics,
+    constraints: Mapping[str, bool],
+    *,
+    standardizer: Optional[Standardizer] = None,
+    weights: Optional[Mapping[str, float]] = None,
+) -> float:
+    """Pruner score penalized by an already-computed (possibly augmented) constraint
+    set. Use this so run_credo_trial and external wrappers share one scoring path
+    that honors constraints (e.g. ``no_failure``) added outside ``hard_constraints``."""
+    score = pruner_score(metrics, weights=weights, standardizer=standardizer)
+    if not constraints_satisfied(constraints):
+        score += DIVERGENCE_PENALTY
+    return score
 
 
 def feasible_pruner_score(
@@ -336,6 +368,17 @@ def _add_if_finite(vector: dict[str, float], name: str, value: Optional[float]) 
         vector[name] = float(value)
 
 
+def _headline_endpoint(metrics: CREDOTrialMetrics) -> tuple[str, Optional[float]]:
+    """The endpoint metric used for scoring/feasibility: the combined geom-mass
+    proxy when finite, else the pure-geometry term, matching objective_vector and
+    hard_constraints. Returns (name, value); value is None when neither is finite."""
+    if _finite(metrics.endpoint_geom_mass):
+        return "endpoint_geom_mass", float(metrics.endpoint_geom_mass)
+    if _finite(metrics.endpoint_sinkhorn):
+        return "endpoint_sinkhorn", float(metrics.endpoint_sinkhorn)
+    return "endpoint_geom_mass", None
+
+
 def _gap_ok(gap: Optional[float], max_value: float, required: bool) -> bool:
     """Diagnostic-gap feasibility. When the diagnostic is required, a missing
     value (``None``) is infeasible; otherwise a missing value passes (screening)."""
@@ -352,6 +395,7 @@ __all__ = [
     "DEFAULT_THRESHOLDS",
     "Standardizer",
     "claim_grade_thresholds",
+    "constrained_score_from_constraints",
     "constraints_satisfied",
     "feasible_pruner_score",
     "hard_constraints",

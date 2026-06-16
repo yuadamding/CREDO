@@ -786,6 +786,85 @@ def test_write_trial_dir_refuses_duplicate_without_overwrite(tmp_path) -> None:
     assert (overwritten / "result.json").exists()
 
 
+def test_pruner_uses_endpoint_sinkhorn_when_combined_proxy_absent() -> None:
+    from credo.search.objective import MISSING_METRIC_PENALTY
+
+    m = CREDOTrialMetrics(
+        endpoint_geom_mass=float("nan"),
+        endpoint_sinkhorn=0.3,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    # Feasible via the pure-geometry fallback, and NOT penalized for a missing
+    # combined proxy (pruner and feasibility now agree on the headline endpoint).
+    assert hard_constraints(m, CREDOTrialSpec())["fit_metrics_finite"] is True
+    assert pruner_score(m) < MISSING_METRIC_PENALTY
+
+
+def test_decomposed_eval_summary_sets_heldout_endpoint_provenance() -> None:
+    # A held-out summary that supplies only the pure-geometry endpoint (no combined
+    # proxy) is still a held-out headline endpoint.
+    m = metrics_from_history(
+        {"loss_end": [0.5]},
+        eval_summary={
+            "mean_endpoint_sinkhorn": 0.3,
+            "mean_log_mass_error": 0.1,
+            "validation_source": "held_out",
+        },
+    )
+    assert m.endpoint_sinkhorn == pytest.approx(0.3)
+    assert m.validation_source == "held_out"
+
+
+def test_claim_grade_mass_error_ceiling_rejects_large_mass_error() -> None:
+    from credo.search import claim_grade_thresholds
+
+    th = claim_grade_thresholds(control_null_max=0.05, log_mass_error_max=0.2)
+    spec = CREDOTrialSpec()
+    base = dict(
+        endpoint_geom_mass=0.3,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+        validation_source="held_out",
+        control_null_gap=0.0,
+    )
+    too_large = CREDOTrialMetrics(**base, log_mass_error=0.5)
+    constraints = hard_constraints(too_large, spec, th)
+    assert constraints["mass_error_ok"] is False
+    assert constraints_satisfied(constraints) is False
+
+    within = CREDOTrialMetrics(**base, log_mass_error=0.1)
+    assert constraints_satisfied(hard_constraints(within, spec, th)) is True
+
+
+def test_constrained_score_helper_shares_run_credo_trial_semantics() -> None:
+    from credo.search import constrained_score_from_constraints
+
+    metrics = _good_metrics()
+    feasible_constraints = dict(hard_constraints(metrics, CREDOTrialSpec(), DEFAULT_THRESHOLDS))
+    feasible_constraints["no_failure"] = True
+    assert constrained_score_from_constraints(metrics, feasible_constraints) == pytest.approx(
+        pruner_score(metrics)
+    )
+
+    failed_constraints = dict(feasible_constraints)
+    failed_constraints["no_failure"] = False
+    assert constrained_score_from_constraints(metrics, failed_constraints) >= DIVERGENCE_PENALTY
+
+
+def test_optuna_studies_when_installed() -> None:
+    pytest.importorskip("optuna")
+    from credo.search.schedulers import make_multiobjective_study, make_study
+
+    assert make_study(study_name="smoke").direction.name == "MINIMIZE"
+    assert len(make_multiobjective_study(directions=["minimize", "minimize"]).directions) == 2
+
+
 def test_schedulers_import_without_optuna() -> None:
     # Importing the adapters must not require optuna to be installed.
     import credo.search.schedulers as sched

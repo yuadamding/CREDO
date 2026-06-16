@@ -32,12 +32,11 @@ from .metrics import CREDOTrainOutput, CREDOTrialMetrics, CREDOTrialResult
 from .objective import (
     ConstraintThresholds,
     DEFAULT_THRESHOLDS,
-    DIVERGENCE_PENALTY,
     Standardizer,
+    constrained_score_from_constraints,
     constraints_satisfied,
     hard_constraints,
     objective_vector,
-    pruner_score,
 )
 from .pruning import NoOpReporter, SearchReporter, TrialPrunedError
 from .space import CREDOTrialSpec, spec_to_run_config
@@ -107,13 +106,9 @@ def run_credo_trial(
     # A train_fn that reports a failure must not yield a feasible trial.
     constraints["no_failure"] = output.failure_type is None and output.failure_message is None
     feasible = constraints_satisfied(constraints)
-    # Derive the scalar score from the SAME (augmented) feasibility verdict, so a
-    # failed-but-otherwise-fine trial gets the infeasibility penalty rather than a
-    # competitive score. (feasible_pruner_score recomputes only hard_constraints
-    # and would miss the no_failure constraint added here.)
-    score = pruner_score(metrics, standardizer=standardizer)
-    if not feasible:
-        score += DIVERGENCE_PENALTY
+    # Score from the SAME (augmented) constraint set so a failed-but-otherwise-fine
+    # trial gets the infeasibility penalty rather than a competitive score.
+    score = constrained_score_from_constraints(metrics, constraints, standardizer=standardizer)
     return CREDOTrialResult(
         spec=spec,
         metrics=metrics,
