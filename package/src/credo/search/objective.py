@@ -46,7 +46,13 @@ class ConstraintThresholds:
     max_weight_ceiling: float = 0.50  # matches ess_max_weight_frac_fail default
     control_null_max: float = math.inf
     guide_concordance_max: float = math.inf
+    # If a heldout_score is reported, its provenance must be held_out.
     require_heldout_provenance: bool = True
+    # If True, the headline endpoint metric itself must come from a held-out
+    # evaluation (validation_source == "held_out"); a trial selected on training
+    # self-evaluation is infeasible. Stricter than require_heldout_provenance,
+    # which only constrains an explicitly-reported heldout_score.
+    require_heldout_endpoint: bool = False
     # Claim-grade requirements (default off so cheap screening stays permissive).
     # CREDO is a finite-measure model: a claim-grade endpoint run must have a
     # finite mass diagnostic, and counterfactual/guide claims need their
@@ -58,13 +64,47 @@ class ConstraintThresholds:
 
 DEFAULT_THRESHOLDS = ConstraintThresholds()
 
-# Stricter profile for final, claim-grade biological model selection.
+# Presence + provenance gate for claim-grade selection. NOTE: this requires the
+# mass / control-null / guide-concordance diagnostics to EXIST and the endpoint
+# metric to be held out, but leaves the gap *ceilings* open (inf). For a real
+# claim it is not sufficient on its own -- use claim_grade_thresholds(...) with
+# null-calibrated finite ceilings (e.g. from the practical-null floor profiles).
 CLAIM_GRADE_THRESHOLDS = ConstraintThresholds(
     require_heldout_provenance=True,
+    require_heldout_endpoint=True,
     require_mass_metric=True,
     require_control_null=True,
     require_guide_concordance=True,
 )
+
+
+def claim_grade_thresholds(
+    *,
+    control_null_max: float,
+    guide_concordance_max: float = math.inf,
+    require_guide_concordance: bool = False,
+    ess_floor: float = 0.10,
+    max_weight_ceiling: float = 0.50,
+) -> ConstraintThresholds:
+    """Build a claim-grade threshold profile with FINITE diagnostic ceilings.
+
+    ``control_null_max`` is required (no default) so callers must supply a
+    null-calibrated limit rather than silently accepting any finite gap. Set
+    ``require_guide_concordance=True`` (and a finite ``guide_concordance_max``)
+    only for guide-level claims; perturbation-level claims should leave it off so
+    they are not rejected merely because guide-level data are unavailable.
+    """
+    return ConstraintThresholds(
+        ess_floor=ess_floor,
+        max_weight_ceiling=max_weight_ceiling,
+        control_null_max=control_null_max,
+        guide_concordance_max=guide_concordance_max,
+        require_heldout_provenance=True,
+        require_heldout_endpoint=True,
+        require_mass_metric=True,
+        require_control_null=True,
+        require_guide_concordance=require_guide_concordance,
+    )
 
 
 @dataclass
@@ -206,6 +246,9 @@ def hard_constraints(
         constraints["heldout_provenance_ok"] = (
             metrics.heldout_score is None or metrics.validation_source == "held_out"
         )
+    if thresholds.require_heldout_endpoint:
+        # The selection metric itself must come from a held-out evaluation.
+        constraints["heldout_endpoint_ok"] = metrics.validation_source == "held_out"
     return constraints
 
 
@@ -264,6 +307,7 @@ __all__ = [
     "DEFAULT_PRUNER_WEIGHTS",
     "DEFAULT_THRESHOLDS",
     "Standardizer",
+    "claim_grade_thresholds",
     "constraints_satisfied",
     "feasible_pruner_score",
     "hard_constraints",

@@ -36,7 +36,7 @@ pytestmark = pytest.mark.unit
 # --- space ------------------------------------------------------------------
 
 def test_field_classes_partition_tunable_fields() -> None:
-    identity = {"dataset_kind", "data_id", "seed", "fold_id"}
+    identity = {"dataset_kind", "data_id", "seed", "fold_id", "latent_dim"}
     all_fields = {f.name for f in dataclasses.fields(CREDOTrialSpec)}
     classified = set(SEARCHABLE) | set(ABLATION_ONLY) | set(FROZEN)
     # Every spec field is either identity or classified, with no overlaps.
@@ -490,6 +490,100 @@ def test_write_trial_dir_is_unique_per_trial_id(tmp_path) -> None:
     records = load_trial_records(reduce_trial_dirs(tmp_path / "trials", tmp_path / "all.jsonl"))
     assert len(records) == 2
     assert records[0]["schema_version"] == "credo.search.v1"
+
+
+def test_claim_grade_requires_heldout_endpoint() -> None:
+    from credo.search import CLAIM_GRADE_THRESHOLDS
+
+    spec = CREDOTrialSpec()
+    base = dict(
+        endpoint_geom_mass=0.3,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+        control_null_gap=0.0,
+        guide_concordance_gap=0.0,
+    )
+    self_eval = CREDOTrialMetrics(**base, validation_source="train_self_eval")
+    cg = hard_constraints(self_eval, spec, CLAIM_GRADE_THRESHOLDS)
+    assert cg["heldout_endpoint_ok"] is False
+    assert constraints_satisfied(cg) is False
+
+    held_out = CREDOTrialMetrics(**base, validation_source="held_out")
+    assert constraints_satisfied(hard_constraints(held_out, spec, CLAIM_GRADE_THRESHOLDS)) is True
+
+
+def test_claim_grade_thresholds_factory_enforces_finite_ceilings() -> None:
+    from credo.search import claim_grade_thresholds
+
+    th = claim_grade_thresholds(
+        control_null_max=0.05, guide_concordance_max=0.10, require_guide_concordance=True
+    )
+    spec = CREDOTrialSpec()
+    base = dict(
+        endpoint_geom_mass=0.3,
+        log_mass_error=0.1,
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+        validation_source="held_out",
+    )
+    big_gap = CREDOTrialMetrics(**base, control_null_gap=0.20, guide_concordance_gap=0.0)
+    c = hard_constraints(big_gap, spec, th)
+    assert c["control_null_ok"] is False
+    assert constraints_satisfied(c) is False
+
+    within = CREDOTrialMetrics(**base, control_null_gap=0.01, guide_concordance_gap=0.05)
+    assert constraints_satisfied(hard_constraints(within, spec, th)) is True
+
+
+def test_latent_dim_is_part_of_spec_hash() -> None:
+    assert spec_sha256(CREDOTrialSpec(latent_dim=16)) != spec_sha256(CREDOTrialSpec(latent_dim=32))
+    cfg = spec_to_run_config(CREDOTrialSpec(latent_dim=20), output_dir="x")
+    assert cfg.latent.dim == 20
+
+
+def test_run_credo_trial_propagates_train_output_provenance() -> None:
+    from credo.search import CREDOTrainOutput
+
+    def train_fn(cfg, spec, reporter):
+        return CREDOTrainOutput(
+            metrics=_good_metrics(),
+            run_dir="/tmp/rd",
+            checkpoint_path="/tmp/rd/best.pt",
+            eval_summary_path="/tmp/rd/eval.json",
+        )
+
+    result = run_credo_trial(CREDOTrialSpec(), train_fn=train_fn, output_dir="/tmp/x")
+    assert result.checkpoint_path == "/tmp/rd/best.pt"
+    assert result.run_dir == "/tmp/rd"
+    assert result.eval_summary_path == "/tmp/rd/eval.json"
+    assert result.feasible is True
+
+
+def test_metrics_from_history_records_train_endpoint_with_eval_summary() -> None:
+    history = {"loss_end": [1.0, 0.7, 0.5]}
+    m = metrics_from_history(history, eval_summary={"mean_endpoint_geom_mass": 0.61})
+    assert m.endpoint_geom_mass == pytest.approx(0.61)  # held-out for selection
+    assert m.train_endpoint_geom_mass == pytest.approx(0.5)  # training value retained
+
+
+def test_summary_nan_metrics_are_sanitized() -> None:
+    m = metrics_from_history(
+        {"loss_end": [0.5]},
+        eval_summary={
+            "mean_endpoint_geom_mass": 0.5,
+            "mean_count_nll": float("nan"),
+            "mean_endpoint_sinkhorn": float("nan"),
+        },
+    )
+    assert m.count_nll is None
+    assert m.endpoint_sinkhorn is None
+    # No NaN leaks into the objective vector.
+    assert all(v == v for v in objective_vector(m).values())
 
 
 def test_schedulers_import_without_optuna() -> None:

@@ -431,6 +431,14 @@ class Trainer:
         # dependency on credo.search.
         self.reporter = reporter
         self._pruned_epoch: Optional[int] = None
+        # The reporter hook lives in the single-device epoch loop only; pruning
+        # would silently never fire on the multi-GPU path. Fail loudly instead of
+        # silently disabling pruning in an expensive sweep.
+        if self.reporter is not None and len(getattr(config, "multi_gpu_devices", []) or []) > 1:
+            raise NotImplementedError(
+                "Reporter-based pruning is not supported with multi-GPU training. "
+                "Use one device per trial and parallelize across trials."
+            )
         self.training_devices = config.resolve_training_devices()
         self.device = self.training_devices[0]
         self.dtype = torch.float32
@@ -2180,7 +2188,9 @@ class Trainer:
                 if self.reporter.should_prune():
                     self._pruned_epoch = absolute_epoch
                     self._save_checkpoint(absolute_epoch, "pruned", ema=ema)
-                    self.history.to_dataframe().to_csv(self.output_dir / "history.csv", index=False)
+                    self.history.to_dataframe().to_csv(
+                        self.output_dir / "training_history.csv", index=False
+                    )
                     print(f"[{stage}] Pruned by reporter at epoch {absolute_epoch}")
                     raise TrainingPruned(absolute_epoch)
 

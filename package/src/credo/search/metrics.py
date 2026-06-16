@@ -91,6 +91,26 @@ class CREDOTrialMetrics:
 
 
 @dataclass
+class CREDOTrainOutput:
+    """Rich return type for a trial's train_fn.
+
+    Lets ``run_credo_trial`` populate a reproducibility-complete result
+    (checkpoint, history, eval summary, resolved config, and failure metadata)
+    rather than only the metrics. ``train_fn`` may still return a bare
+    :class:`CREDOTrialMetrics` for convenience.
+    """
+
+    metrics: CREDOTrialMetrics
+    run_dir: Optional[str] = None
+    checkpoint_path: Optional[str] = None
+    history_path: Optional[str] = None
+    eval_summary_path: Optional[str] = None
+    resolved_config_path: Optional[str] = None
+    failure_type: Optional[str] = None
+    failure_message: Optional[str] = None
+
+
+@dataclass
 class CREDOTrialResult:
     """A spec, its metrics, and the derived search quantities."""
 
@@ -102,6 +122,11 @@ class CREDOTrialResult:
     feasible: bool = False
     run_dir: Optional[str] = None
     checkpoint_path: Optional[str] = None
+    history_path: Optional[str] = None
+    eval_summary_path: Optional[str] = None
+    resolved_config_path: Optional[str] = None
+    failure_type: Optional[str] = None
+    failure_message: Optional[str] = None
 
 
 def metrics_from_history(
@@ -127,15 +152,18 @@ def metrics_from_history(
     # Endpoint fit: prefer the eval summary (held out) over the training loss.
     # loss_end IS the combined geometry+log-mass proxy; the training history has
     # no separate pure-geometry or mass term, so do not invent one from history.
-    endpoint = summary.get("mean_endpoint_geom_mass")
+    train_endpoint = _last(history.get("loss_end"))
+    endpoint = _summary_opt(summary, "mean_endpoint_geom_mass")
     endpoint_from_summary = endpoint is not None
     if endpoint is None:
-        endpoint = _last(history.get("loss_end"))
-    endpoint_sinkhorn = summary.get("mean_endpoint_sinkhorn")
-    endpoint_mass_penalty = summary.get("mean_endpoint_mass_penalty")
+        endpoint = train_endpoint
+    endpoint_sinkhorn = _summary_opt(summary, "mean_endpoint_sinkhorn")
+    endpoint_mass_penalty = _summary_opt(summary, "mean_endpoint_mass_penalty")
     # Relative terminal mass error (distinct from the tau penalty); only the eval
     # summary provides it.
-    log_mass_error = summary.get("mean_log_mass_error", summary.get("mean_mass_rel_error"))
+    log_mass_error = _summary_opt(summary, "mean_log_mass_error")
+    if log_mass_error is None:
+        log_mass_error = _summary_opt(summary, "mean_mass_rel_error")
 
     # Provenance follows the source of the headline endpoint metric: if it came
     # from the (held-out) eval summary, trust the summary's validation_source;
@@ -148,19 +176,26 @@ def metrics_from_history(
         or summary.get("validation_source")
     )
 
+    # Prefer (sanitized) eval-summary values; fall back to training history.
+    count_nll = _summary_opt(summary, "mean_count_nll")
+    if count_nll is None:
+        count_nll = _opt(history.get("loss_count"))
+    weak_loss = _summary_opt(summary, "mean_weak_loss")
+    if weak_loss is None:
+        weak_loss = _opt(history.get("loss_weak"))
+
     return CREDOTrialMetrics(
         endpoint_geom_mass=float(endpoint) if endpoint is not None else math.nan,
-        endpoint_sinkhorn=float(endpoint_sinkhorn) if endpoint_sinkhorn is not None else None,
-        endpoint_mass_penalty=float(endpoint_mass_penalty)
-        if endpoint_mass_penalty is not None
-        else None,
+        train_endpoint_geom_mass=None if math.isnan(train_endpoint) else train_endpoint,
+        endpoint_sinkhorn=endpoint_sinkhorn,
+        endpoint_mass_penalty=endpoint_mass_penalty,
         log_mass_error=float(log_mass_error) if log_mass_error is not None else math.nan,
-        count_nll=summary.get("mean_count_nll", _opt(history.get("loss_count"))),
-        weak_loss=summary.get("mean_weak_loss", _opt(history.get("loss_weak"))),
-        heldout_score=_opt(summary.get("heldout_score")),
+        count_nll=count_nll,
+        weak_loss=weak_loss,
+        heldout_score=_summary_opt(summary, "heldout_score"),
         validation_source=validation_source,
-        control_null_gap=_opt(summary.get("control_null_gap")),
-        guide_concordance_gap=_opt(summary.get("guide_concordance_gap")),
+        control_null_gap=_summary_opt(summary, "control_null_gap"),
+        guide_concordance_gap=_summary_opt(summary, "guide_concordance_gap"),
         terminal_ess_frac_min=_last(history.get("terminal_ess_frac_min")),
         min_ess_frac_over_time=_last(
             history.get("min_ess_frac_over_time", history.get("min_ess_frac_mean"))
@@ -212,7 +247,20 @@ def _opt(values: Any) -> Optional[float]:
     return None if math.isnan(out) else out
 
 
+def _summary_opt(summary: Mapping[str, Any], key: str) -> Optional[float]:
+    """Read a scalar from an eval summary, returning None for missing/NaN/non-numeric
+    values so they never enter objectives or constraints as non-finite numbers."""
+    if key not in summary:
+        return None
+    try:
+        value = float(summary[key])
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) else None
+
+
 __all__ = [
+    "CREDOTrainOutput",
     "CREDOTrialMetrics",
     "CREDOTrialResult",
     "metrics_from_epoch",

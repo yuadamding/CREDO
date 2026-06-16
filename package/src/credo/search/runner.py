@@ -25,9 +25,9 @@ config-driven.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
-from .metrics import CREDOTrialMetrics, CREDOTrialResult
+from .metrics import CREDOTrainOutput, CREDOTrialMetrics, CREDOTrialResult
 from .objective import (
     ConstraintThresholds,
     DEFAULT_THRESHOLDS,
@@ -41,8 +41,8 @@ from .pruning import NoOpReporter, SearchReporter, TrialPrunedError
 from .space import CREDOTrialSpec, spec_to_run_config
 
 
-# train_fn(run_config, spec, reporter) -> CREDOTrialMetrics
-TrainFn = Callable[[object, CREDOTrialSpec, SearchReporter], CREDOTrialMetrics]
+# train_fn(run_config, spec, reporter) -> CREDOTrialMetrics | CREDOTrainOutput
+TrainFn = Callable[[object, CREDOTrialSpec, SearchReporter], Union[CREDOTrialMetrics, CREDOTrainOutput]]
 
 
 def run_credo_trial(
@@ -68,7 +68,7 @@ def run_credo_trial(
     cfg = build_config(spec, output_dir=output_dir, device=device, latent_dim=latent_dim)
 
     try:
-        metrics = train_fn(cfg, spec, reporter)
+        out = train_fn(cfg, spec, reporter)
     except TrialPrunedError:
         raise
     except Exception as exc:  # noqa: BLE001 - translate the trainer's prune signal
@@ -79,14 +79,20 @@ def run_credo_trial(
             raise TrialPrunedError(getattr(exc, "epoch", None)) from exc
         raise
 
-    if not isinstance(metrics, CREDOTrialMetrics):
+    # train_fn may return rich provenance (CREDOTrainOutput) or just metrics.
+    if isinstance(out, CREDOTrainOutput):
+        output = out
+    elif isinstance(out, CREDOTrialMetrics):
+        output = CREDOTrainOutput(metrics=out, run_dir=output_dir)
+    else:
         raise TypeError(
-            "train_fn must return a CREDOTrialMetrics; got "
-            f"{type(metrics).__name__}. Use metrics_from_history to build one."
+            "train_fn must return a CREDOTrialMetrics or CREDOTrainOutput; got "
+            f"{type(out).__name__}. Use metrics_from_history to build the metrics."
         )
 
+    metrics = output.metrics
     constraints = hard_constraints(metrics, spec, thresholds)
-    result = CREDOTrialResult(
+    return CREDOTrialResult(
         spec=spec,
         metrics=metrics,
         objective_vector=objective_vector(metrics),
@@ -95,9 +101,14 @@ def run_credo_trial(
             metrics, spec, thresholds=thresholds, standardizer=standardizer
         ),
         feasible=constraints_satisfied(constraints),
-        run_dir=output_dir,
+        run_dir=output.run_dir or output_dir,
+        checkpoint_path=output.checkpoint_path,
+        history_path=output.history_path,
+        eval_summary_path=output.eval_summary_path,
+        resolved_config_path=output.resolved_config_path,
+        failure_type=output.failure_type,
+        failure_message=output.failure_message,
     )
-    return result
 
 
 __all__ = ["TrainFn", "run_credo_trial"]

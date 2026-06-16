@@ -26,6 +26,7 @@ mass-faithful context, exact full-context batching) are never searchable;
 from __future__ import annotations
 
 from .metrics import (
+    CREDOTrainOutput,
     CREDOTrialMetrics,
     CREDOTrialResult,
     metrics_from_epoch,
@@ -36,6 +37,7 @@ from .objective import (
     ConstraintThresholds,
     DEFAULT_THRESHOLDS,
     Standardizer,
+    claim_grade_thresholds,
     constraints_satisfied,
     feasible_pruner_score,
     hard_constraints,
@@ -70,6 +72,7 @@ from .manifests import (
 __all__ = [
     "ABLATION_ONLY",
     "CLAIM_GRADE_THRESHOLDS",
+    "CREDOTrainOutput",
     "CREDOTrialMetrics",
     "CREDOTrialResult",
     "CREDOTrialSpec",
@@ -84,6 +87,7 @@ __all__ = [
     "TrialPrunedError",
     "append_trial_record",
     "assert_frozen_semantics",
+    "claim_grade_thresholds",
     "constraints_satisfied",
     "feasible_pruner_score",
     "hard_constraints",

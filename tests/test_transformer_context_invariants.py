@@ -1381,3 +1381,117 @@ def test_initialise_particles_legacy_uniform_rejects_nonuniform_measure() -> Non
 
     with pytest.raises(ValueError, match="non-uniform finite measure"):
         initialise_particles(endpoint, ["gene_a"], 8, seed=3, sampling="legacy_uniform")
+
+
+def test_endpoint_trainer_reporter_prunes_and_raises(tmp_path) -> None:
+    from credo.training.pruning import TrainingPruned
+
+    support = np.asarray([[0.0, 0.0], [0.5, 0.0], [0.0, 0.5]], dtype=np.float32)
+    weights = np.ones(3, dtype=np.float32)
+    measure = FiniteMeasure(support=support, weights=weights, total_mass=float(weights.sum()))
+    endpoint = EndpointProblem(
+        initial={"ctrl": measure, "gene_a": measure},
+        terminal={"ctrl": measure, "gene_a": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["ctrl", "gene_a"],
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl", "gene_a"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=3,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=False,
+        control_mode="soft_ref",
+    )
+    cfg = RunConfig(
+        output_dir=str(tmp_path),
+        device="cpu",
+        model=ModelConfig(
+            embedding_dim=4, n_programs=3, mediator_dim=2, hidden_dim=8, depth=1,
+            ecological_growth=False,
+        ),
+        simulation=SimulationConfig(n_particles=3, n_steps=1),
+        training=TrainingConfig(
+            epochs=5,
+            control_ref_warmup_epochs=0,
+            lambda_count=0.0,
+            lambda_weak=0.0,
+            lambda_reg_net=0.0,
+            lambda_reg_diffusion=0.0,
+            lambda_reg_embed=0.0,
+            lambda_reg_growth_bias=0.0,
+        ),
+    )
+
+    class _Reporter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def report(self, epoch, metrics):
+            self.calls += 1
+
+        def should_prune(self):
+            return self.calls >= 2
+
+    trainer = Trainer(
+        model=model,
+        config=cfg,
+        endpoint=endpoint,
+        supported_pids=["ctrl", "gene_a"],
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+        warmup_epochs=1,
+        reporter=_Reporter(),
+    )
+    # Pruning raises TrainingPruned (so the trial is reported as pruned, not
+    # scored as a short completed run).
+    with pytest.raises(TrainingPruned):
+        trainer.train()
+    assert trainer._pruned_epoch is not None
+    # Pruned history uses the same filename as completed history (training_history.csv).
+    assert (tmp_path / "training_history.csv").exists()
+
+
+def test_endpoint_trainer_reporter_rejects_multi_gpu() -> None:
+    measure = FiniteMeasure(
+        support=np.asarray([[0.0, 0.0], [0.5, 0.5]], dtype=np.float32),
+        weights=np.ones(2, dtype=np.float32),
+        total_mass=2.0,
+    )
+    endpoint = EndpointProblem(
+        initial={"ctrl": measure},
+        terminal={"ctrl": measure},
+        time_axis=TimeAxis(["t0", "t1"], [0.0, 1.0]),
+        perturbation_ids=["ctrl"],
+    )
+    model = FullDynamicsModel(
+        perturbation_ids=["ctrl"], control_ids=["ctrl"], latent_dim=2,
+        embedding_dim=4, n_programs=2, mediator_dim=2, hidden_dim=8, depth=1,
+        ecological_growth=False, control_mode="soft_ref",
+    )
+    cfg = RunConfig(
+        output_dir="outputs", device="cpu", multi_gpu_devices=["cuda:0", "cuda:1"],
+        model=ModelConfig(embedding_dim=4, n_programs=2, mediator_dim=2, hidden_dim=8, depth=1,
+                          ecological_growth=False),
+        simulation=SimulationConfig(n_particles=2, n_steps=1),
+        # lambda_count=0 so RunConfig's own multi-GPU validator passes and we reach
+        # the trainer's reporter+multi-GPU guard.
+        training=TrainingConfig(lambda_count=0.0),
+    )
+
+    class _Reporter:
+        def report(self, epoch, metrics):
+            pass
+
+        def should_prune(self):
+            return False
+
+    with pytest.raises(NotImplementedError, match="multi-GPU"):
+        Trainer(
+            model=model, config=cfg, endpoint=endpoint, supported_pids=["ctrl"],
+            ema_decay=0.0, reporter=_Reporter(),
+        )

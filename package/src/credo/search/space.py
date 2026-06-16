@@ -95,6 +95,10 @@ class CREDOTrialSpec:
     data_id: str = "dataset"
     seed: int = 0
     fold_id: Optional[str] = None
+    # Latent dimensionality is part of the run's representation identity: it
+    # changes results, so it must be hashed into the spec (two trials with the
+    # same hyperparameters but different latent_dim are different trials).
+    latent_dim: Optional[int] = None
 
     # --- model capacity (SEARCHABLE) ---
     embedding_dim: int = 8
@@ -180,6 +184,8 @@ class CREDOTrialSpec:
             value = getattr(self, name)
             if float(value) < 0.0:
                 raise ValueError(f"{name} must be >= 0, got {value!r}.")
+        if self.latent_dim is not None and int(self.latent_dim) <= 0:
+            raise ValueError(f"latent_dim must be a positive integer, got {self.latent_dim!r}.")
 
 
 def _known_fields() -> set[str]:
@@ -261,7 +267,14 @@ def spec_to_run_config(
         global_context_batching=spec.global_context_batching,
     )
 
-    latent = LatentConfig(dim=int(latent_dim)) if latent_dim is not None else LatentConfig()
+    # Explicit latent_dim arg overrides the spec; otherwise the spec's own
+    # latent_dim (which is hashed) is used.
+    effective_latent_dim = latent_dim if latent_dim is not None else spec.latent_dim
+    latent = (
+        LatentConfig(dim=int(effective_latent_dim))
+        if effective_latent_dim is not None
+        else LatentConfig()
+    )
 
     cfg = RunConfig(
         run_id=f"{spec.data_id}:{spec.fold_id or 'all'}:seed{spec.seed}",

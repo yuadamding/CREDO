@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import uuid
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -76,15 +77,20 @@ def write_trial_dir(
     and/or ``trial_id`` (e.g. Optuna ``trial.number`` or a UUID) so that
     re-runs of the same spec hash -- different seed/fold or a retry -- do NOT
     overwrite each other (the spec hash alone is not unique across seeds/folds).
-    Use :func:`reduce_trial_dirs` to materialize a combined JSONL cache.
+    If ``trial_id`` is omitted a random UUID is generated, so write_trial_dir is
+    overwrite-safe by default. Use :func:`reduce_trial_dirs` to materialize a
+    combined JSONL cache.
     """
+    if trial_id is None:
+        trial_id = uuid.uuid4().hex
     record = trial_record(result)
+    record["trial_id"] = trial_id
+    record["trial_index"] = index
     sha8 = str(record["spec_sha256"])[:8]
     parts = ["trial"]
     if index is not None:
         parts.append(f"{index:06d}")
-    if trial_id is not None:
-        parts.append(str(trial_id))
+    parts.append(str(trial_id))
     parts.append(sha8)
     name = "_".join(parts)
     trial_dir = Path(root) / name

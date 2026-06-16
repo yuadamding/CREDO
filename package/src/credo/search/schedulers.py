@@ -49,7 +49,7 @@ class OptunaReporter:
         return bool(self.trial.should_prune())
 
 
-def suggest_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
+def suggest_light_screen_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
     """Sample a :class:`CREDOTrialSpec` from an Optuna trial over searchable dims.
 
     ``base`` supplies the fixed fields (dataset_kind, data_id, seed, frozen
@@ -89,6 +89,11 @@ def suggest_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
     return CREDOTrialSpec(**clean_base, **suggested)
 
 
+# Back-compat alias. ``suggest_light_screen_spec`` is the explicit name; add
+# mode-specific profiles (endpoint/trajectory/single_time/claim-grade) as needed.
+suggest_spec = suggest_light_screen_spec
+
+
 def make_study(
     *,
     direction: str = "minimize",
@@ -111,4 +116,33 @@ def make_study(
     )
 
 
-__all__ = ["OptunaReporter", "make_study", "suggest_spec"]
+def make_multiobjective_study(
+    *,
+    directions: "list[str]",
+    sampler: Optional[Any] = None,
+    study_name: Optional[str] = None,
+    storage: Optional[str] = None,
+) -> Any:
+    """Create a multi-objective Optuna study (NSGA-II default) for Pareto search.
+
+    Use the scalar ``pruner_score`` only for early stopping; final selection
+    should compare candidates over the constrained ``objective_vector`` axes.
+    """
+    optuna = _require_optuna()
+    sampler = sampler or optuna.samplers.NSGAIISampler()
+    return optuna.create_study(
+        directions=list(directions),
+        sampler=sampler,
+        study_name=study_name,
+        storage=storage,
+        load_if_exists=storage is not None,
+    )
+
+
+__all__ = [
+    "OptunaReporter",
+    "make_multiobjective_study",
+    "make_study",
+    "suggest_light_screen_spec",
+    "suggest_spec",
+]
