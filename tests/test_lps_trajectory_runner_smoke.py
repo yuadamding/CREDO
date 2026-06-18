@@ -7,7 +7,7 @@ import pandas as pd
 import anndata as ad
 import pytest
 
-from runners.run_credo_trajectory import build_study_from_anndata, main as trajectory_main, parse_args
+from runners.run_credo_trajectory import build_config, build_study_from_anndata, main as trajectory_main, parse_args
 
 
 pytestmark = pytest.mark.runner
@@ -495,3 +495,23 @@ def test_trajectory_runner_manifest_is_schema_v2(tmp_path) -> None:
     # Trajectory-runner-specific provenance is still preserved.
     assert "args" in manifest
     assert manifest["requested_mass_mode"] == "count"
+
+
+def test_trajectory_build_config_revalidates_nested_models(tmp_path) -> None:
+    args = parse_args(
+        [
+            "--data-path",
+            str(tmp_path / "input.h5ad"),
+            "--output-dir",
+            str(tmp_path / "out"),
+            "--context-kind",
+            "transformer",
+            "--transformer-token-dim",
+            "10",
+            "--transformer-heads",
+            "4",
+        ]
+    )
+
+    with pytest.raises(ValueError, match="transformer_token_dim"):
+        build_config(args, latent_dim=2)

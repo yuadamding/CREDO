@@ -6,6 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "credo"
 version = "2.0.1"
 description = "Control-referenced ecological dynamics for longitudinal Perturb-seq"
+readme = "README.md"
 requires-python = ">=3.11"
 authors = [
     { name = "CREDO contributors" },

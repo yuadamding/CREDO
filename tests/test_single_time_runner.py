@@ -177,6 +177,12 @@ def test_single_time_runner_default_ecology_writes_effect_outputs(tmp_path: Path
         "latent_variance_shift",
     ]
     assert resolved["single_time"]["context_sampling"] == "epoch_resample"
+    assert resolved["output_dir"] == str(out_dir)
+    assert resolved["model"]["embedding_dim"] == 2
+    assert resolved["model"]["n_programs"] == 2
+    assert resolved["model"]["mediator_dim"] == 1
+    assert resolved["model"]["hidden_dim"] == 8
+    assert resolved["model"]["depth"] == 1
     assert (out_dir / "single_time_command.txt").read_text().startswith("python runners/run_credo_single_time.py")
     assert (out_dir / "single_time_git_sha.txt").read_text().strip()
     assert set(effects["view_id"]) == {"s1::ctrl_g1", "s2::ctrl_g1", "s1::ga_g1", "s2::ga_g2"}
@@ -223,18 +229,35 @@ def test_single_time_runner_default_ecology_writes_effect_outputs(tmp_path: Path
     assert {
         "endpoint_sinkhorn",
         "mass_error",
+        "log_mass_residual",
         "endpoint_geom_mass",
         "factual_endpoint_sinkhorn",
         "reference_endpoint_sinkhorn",
         "delta_endpoint_sinkhorn_ref_minus_fact",
         "factual_mass_error",
+        "factual_log_mass_residual",
         "reference_mass_error",
+        "reference_log_mass_residual",
         "delta_mass_error_ref_minus_fact",
+        "delta_log_mass_residual_ref_minus_fact",
         "factual_target_mean_shift_norm",
         "reference_target_mean_shift_norm",
     } <= set(endpoints.columns)
     assert np.allclose(endpoints["endpoint_sinkhorn"], endpoints["factual_endpoint_sinkhorn"])
     assert np.allclose(endpoints["mass_error"], endpoints["factual_mass_error"])
+    assert (endpoints["mass_error"] >= 0).all()
+    assert (endpoints["factual_mass_error"] >= 0).all()
+    assert (endpoints["reference_mass_error"] >= 0).all()
+    assert np.allclose(endpoints["factual_mass_error"], endpoints["factual_log_mass_residual"].abs())
+    assert np.allclose(endpoints["reference_mass_error"], endpoints["reference_log_mass_residual"].abs())
+    assert np.allclose(
+        endpoints["delta_mass_error_ref_minus_fact"],
+        endpoints["reference_mass_error"] - endpoints["factual_mass_error"],
+    )
+    assert np.allclose(
+        endpoints["delta_log_mass_residual_ref_minus_fact"],
+        endpoints["reference_log_mass_residual"] - endpoints["factual_log_mass_residual"],
+    )
     assert set(guide["target_gene"]) == {"gene_a"}
     assert set(guide["guide_concordance_evaluable"]) == {True}
     assert set(guide["guide_concordance_claimable"]) == {True}

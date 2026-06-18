@@ -666,7 +666,7 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.trajectory_training.normalize_time_weights = bool(args.normalize_time_weights)
     cfg.trajectory_training.key_mode = args.key_mode
     cfg.trajectory_training.sparse_missing = args.sparse_missing
-    return cfg
+    return RunConfig.model_validate(cfg.model_dump())
 
 
 def _sha256_text_lines(lines: list[str]) -> str:

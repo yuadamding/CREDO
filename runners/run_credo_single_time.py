@@ -460,15 +460,17 @@ def _write_single_time_effect_outputs(
         factual_endpoint_geom_mass = float(components["total"].detach().cpu().item())
         factual_endpoint_sinkhorn = float(components["geom"].detach().cpu().item())
         factual_endpoint_mass_penalty = float(components["mass"].detach().cpu().item())
-        factual_mass_error = float(
+        factual_log_mass_residual = float(
             (components["log_mass_pred"] - components["log_mass_target"]).detach().cpu().item()
         )
+        factual_mass_error = abs(factual_log_mass_residual)
         reference_endpoint_geom_mass = float(ref_components["total"].detach().cpu().item())
         reference_endpoint_sinkhorn = float(ref_components["geom"].detach().cpu().item())
         reference_endpoint_mass_penalty = float(ref_components["mass"].detach().cpu().item())
-        reference_mass_error = float(
+        reference_log_mass_residual = float(
             (ref_components["log_mass_pred"] - ref_components["log_mass_target"]).detach().cpu().item()
         )
+        reference_mass_error = abs(reference_log_mass_residual)
         factual_target_mean_shift_norm = float((fact_mean - target_mean).norm().item())
         reference_target_mean_shift_norm = float((ref_mean - target_mean).norm().item())
         factual_target_variance_shift_norm = float((fact_var - target_var).norm().item())
@@ -480,17 +482,23 @@ def _write_single_time_effect_outputs(
                 "endpoint_sinkhorn": factual_endpoint_sinkhorn,
                 "endpoint_mass_penalty": factual_endpoint_mass_penalty,
                 "mass_error": factual_mass_error,
+                "log_mass_residual": factual_log_mass_residual,
                 "factual_endpoint_geom_mass": factual_endpoint_geom_mass,
                 "factual_endpoint_sinkhorn": factual_endpoint_sinkhorn,
                 "factual_endpoint_mass_penalty": factual_endpoint_mass_penalty,
                 "factual_mass_error": factual_mass_error,
+                "factual_log_mass_residual": factual_log_mass_residual,
                 "reference_endpoint_geom_mass": reference_endpoint_geom_mass,
                 "reference_endpoint_sinkhorn": reference_endpoint_sinkhorn,
                 "reference_endpoint_mass_penalty": reference_endpoint_mass_penalty,
                 "reference_mass_error": reference_mass_error,
+                "reference_log_mass_residual": reference_log_mass_residual,
                 "delta_endpoint_geom_mass_ref_minus_fact": reference_endpoint_geom_mass - factual_endpoint_geom_mass,
                 "delta_endpoint_sinkhorn_ref_minus_fact": reference_endpoint_sinkhorn - factual_endpoint_sinkhorn,
                 "delta_mass_error_ref_minus_fact": reference_mass_error - factual_mass_error,
+                "delta_log_mass_residual_ref_minus_fact": (
+                    reference_log_mass_residual - factual_log_mass_residual
+                ),
                 "target_log_mass": float(components["log_mass_target"].detach().cpu().item()),
                 "pred_log_mass": float(components["log_mass_pred"].detach().cpu().item()),
                 "reference_pred_log_mass": float(ref_components["log_mass_pred"].detach().cpu().item()),
@@ -578,17 +586,21 @@ def _write_single_time_effect_outputs(
         "endpoint_sinkhorn",
         "endpoint_mass_penalty",
         "mass_error",
+        "log_mass_residual",
         "factual_endpoint_geom_mass",
         "factual_endpoint_sinkhorn",
         "factual_endpoint_mass_penalty",
         "factual_mass_error",
+        "factual_log_mass_residual",
         "reference_endpoint_geom_mass",
         "reference_endpoint_sinkhorn",
         "reference_endpoint_mass_penalty",
         "reference_mass_error",
+        "reference_log_mass_residual",
         "delta_endpoint_geom_mass_ref_minus_fact",
         "delta_endpoint_sinkhorn_ref_minus_fact",
         "delta_mass_error_ref_minus_fact",
+        "delta_log_mass_residual_ref_minus_fact",
         "target_log_mass",
         "pred_log_mass",
         "reference_pred_log_mass",
@@ -725,8 +737,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     latent_dim = problem.views[0].target.latent_dim
     config = RunConfig(
+        output_dir=str(output_dir),
         device=args.device,
         latent={"dim": latent_dim, "key": args.latent_key},
+        model={
+            "embedding_dim": args.embedding_dim,
+            "n_programs": args.n_programs,
+            "mediator_dim": args.mediator_dim,
+            "hidden_dim": args.hidden_dim,
+            "depth": args.depth,
+            "ecological_growth": args.ecological_growth,
+            "control_mode": args.control_mode,
+        },
         simulation={
             "n_particles": args.n_particles,
             "n_steps": args.n_steps,
@@ -765,13 +787,13 @@ def main(argv: list[str] | None = None) -> int:
         perturbation_ids=problem.catalog.perturbation_ids,
         control_ids=problem.catalog.control_ids,
         latent_dim=latent_dim,
-        embedding_dim=args.embedding_dim,
-        n_programs=args.n_programs,
-        mediator_dim=args.mediator_dim,
-        hidden_dim=args.hidden_dim,
-        depth=args.depth,
-        ecological_growth=args.ecological_growth,
-        control_mode=args.control_mode,
+        embedding_dim=config.model.embedding_dim,
+        n_programs=config.model.n_programs,
+        mediator_dim=config.model.mediator_dim,
+        hidden_dim=config.model.hidden_dim,
+        depth=config.model.depth,
+        ecological_growth=config.model.ecological_growth,
+        control_mode=config.model.control_mode,
     )
     trainer = SingleTimeTrainer(
         model=model,
