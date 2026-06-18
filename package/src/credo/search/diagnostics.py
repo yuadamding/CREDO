@@ -58,6 +58,10 @@ class BiologyAxisSpec:
     name: str
     markers: tuple[str, ...]
     expected_direction: Optional[str] = None
+    organism: str = "unspecified"
+    gene_symbol_namespace: str = "unspecified"
+    module_source: Optional[str] = None
+    min_coverage: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -66,6 +70,8 @@ class BiologyAxisSpec:
             raise ValueError(f"Biology axis {self.name!r} must include at least one marker.")
         if self.expected_direction not in {None, "positive", "negative", "either"}:
             raise ValueError("expected_direction must be positive, negative, either, or None.")
+        if not 0.0 <= float(self.min_coverage) <= 1.0:
+            raise ValueError("min_coverage must be in [0, 1].")
 
 
 DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
@@ -73,22 +79,88 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         name="tnf_expansion",
         markers=("Notch1", "Notch2", "Fat1", "Trp53", "Fgf3"),
         expected_direction="positive",
+        organism="mouse",
+        gene_symbol_namespace="MGI",
+        module_source="Renz_2024_P4_P60_field_expansion",
+        min_coverage=0.7,
     ),
     BiologyAxisSpec(
         name="cis_like_epithelial",
         markers=("TP63", "ATP1B3", "KRT5", "KRT14", "KRT17", "SOX2", "EPCAM"),
         expected_direction="either",
+        organism="human",
+        gene_symbol_namespace="HGNC",
+        module_source="Choi_2023_CIS_like_LP",
+        min_coverage=0.7,
     ),
     BiologyAxisSpec(
         name="pemt_tsk",
-        markers=("Lrp1", "CC1", "CXCL8", "COL1A1", "CD44"),
+        markers=("LGALS7B", "VIM", "SNAI2", "LAMC2", "ITGA5"),
         expected_direction="either",
+        organism="human",
+        gene_symbol_namespace="HGNC",
+        module_source="Choi_2023_CC1_Punovuori_2024_pEMT",
+        min_coverage=0.7,
     ),
-    BiologyAxisSpec(name="caf_ecm", markers=("CXCL8", "COL1A1", "CD44"), expected_direction="either"),
-    BiologyAxisSpec(name="myeloid", markers=("CXCL8",), expected_direction="either"),
-    BiologyAxisSpec(name="guide_artifact", markers=("guide_concordance",), expected_direction="negative"),
-    BiologyAxisSpec(name="large_gene_artifact", markers=("gene_size",), expected_direction="negative"),
+    BiologyAxisSpec(
+        name="caf_ecm",
+        markers=("COL1A1", "COL1A2", "FN1", "POSTN", "THBS2"),
+        expected_direction="either",
+        organism="human",
+        gene_symbol_namespace="HGNC",
+        module_source="Punovuori_2024_CAF_ECM",
+        min_coverage=0.7,
+    ),
+    BiologyAxisSpec(
+        name="myeloid",
+        markers=("LYZ", "S100A8", "S100A9", "FCGR3A"),
+        expected_direction="either",
+        organism="human",
+        gene_symbol_namespace="HGNC",
+        module_source="HNSCC_inflammatory_myeloid",
+        min_coverage=0.7,
+    ),
+    BiologyAxisSpec(
+        name="guide_artifact",
+        markers=("guide_concordance",),
+        expected_direction="negative",
+        organism="metadata",
+        gene_symbol_namespace="metric",
+        module_source="CREDO_guide_artifact_axis",
+    ),
+    BiologyAxisSpec(
+        name="large_gene_artifact",
+        markers=("gene_size",),
+        expected_direction="negative",
+        organism="metadata",
+        gene_symbol_namespace="metric",
+        module_source="CREDO_large_gene_artifact_axis",
+    ),
 )
+
+
+def claim_grade_convergence_thresholds(
+    *,
+    endpoint_drift_median_max: float,
+    rank_correlation_min: float = 0.90,
+    sign_stability_min: float = 0.90,
+    top_hit_jaccard_min: float = 0.90,
+    ess_floor: float = 0.10,
+    top_k: int = 20,
+) -> ConvergenceThresholds:
+    """Build claim-grade convergence gates with a finite endpoint-drift ceiling."""
+    if not math.isfinite(float(endpoint_drift_median_max)) or float(endpoint_drift_median_max) < 0:
+        raise ValueError(
+            "endpoint_drift_median_max must be a finite non-negative threshold for claim-grade convergence."
+        )
+    return ConvergenceThresholds(
+        rank_correlation_min=rank_correlation_min,
+        sign_stability_min=sign_stability_min,
+        endpoint_drift_median_max=float(endpoint_drift_median_max),
+        top_hit_jaccard_min=top_hit_jaccard_min,
+        ess_floor=ess_floor,
+        top_k=top_k,
+    )
 
 
 def particle_step_convergence_diagnostics(
@@ -105,26 +177,30 @@ def particle_step_convergence_diagnostics(
             "failed_gates": "insufficient_fidelities",
         }
 
+    reference = ordered[-1]
+    comparisons = [(candidate, reference) for candidate in ordered[:-1]]
     rank_corrs = [
-        _spearman_mapping(a.delta_log_mass_by_id, b.delta_log_mass_by_id)
-        for a, b in _pairs(ordered)
+        _spearman_mapping(candidate.delta_log_mass_by_id, reference.delta_log_mass_by_id)
+        for candidate, reference in comparisons
     ]
     sign_stabilities = [
-        _sign_stability(a.biology_axis_score_by_axis, b.biology_axis_score_by_axis)
-        for a, b in _pairs(ordered)
+        _sign_stability(candidate.biology_axis_score_by_axis, reference.biology_axis_score_by_axis)
+        for candidate, reference in comparisons
     ]
     endpoint_drifts = [
-        _median_abs_diff(a.endpoint_metric_by_id, b.endpoint_metric_by_id)
-        for a, b in _pairs(ordered)
+        _median_abs_diff(candidate.endpoint_metric_by_id, reference.endpoint_metric_by_id)
+        for candidate, reference in comparisons
     ]
     top_jaccards = [
-        _top_hit_jaccard(a.top_hit_scores, b.top_hit_scores, thresholds.top_k)
-        for a, b in _pairs(ordered)
+        _top_hit_jaccard(candidate.top_hit_scores, reference.top_hit_scores, thresholds.top_k)
+        for candidate, reference in comparisons
     ]
     ess_min = min(_finite_or_default(item.ess_min, -math.inf) for item in ordered)
 
     summary = {
         "n_fidelities": len(ordered),
+        "reference_n_particles": reference.n_particles,
+        "reference_n_steps": reference.n_steps,
         "rank_correlation_delta_log_mass_min": _min_finite(rank_corrs),
         "sign_stability_biology_axes_min": _min_finite(sign_stabilities),
         "endpoint_drift_median_max": _max_finite(endpoint_drifts),
@@ -253,6 +329,7 @@ def evaluate_biology_axis_gates(
     axis_scores: Mapping[str, float],
     *,
     null_summaries: Optional[Mapping[str, Mapping[str, float]]] = None,
+    coverage_by_axis: Optional[Mapping[str, float]] = None,
     axes: Iterable[BiologyAxisSpec] = DEFAULT_BIOLOGY_AXES,
     score_abs_min: float = 0.0,
     empirical_p_max: float = 0.05,
@@ -260,12 +337,14 @@ def evaluate_biology_axis_gates(
 ) -> dict[str, dict[str, object]]:
     """Gate biology support separately for each configured axis."""
     null_summaries = null_summaries or {}
+    coverage_by_axis = coverage_by_axis or {}
     out: dict[str, dict[str, object]] = {}
     for axis in axes:
         score = _finite_or_nan(axis_scores.get(axis.name))
         null_summary = null_summaries.get(axis.name, {})
         empirical_p = _finite_or_nan(null_summary.get("empirical_p"))
         fdr = _finite_or_nan(null_summary.get("fdr"))
+        coverage = _finite_or_nan(coverage_by_axis.get(axis.name))
         failed = []
         if not math.isfinite(score):
             failed.append("missing_axis_score")
@@ -279,9 +358,16 @@ def evaluate_biology_axis_gates(
             failed.append("empirical_p")
         if math.isfinite(fdr) and fdr > fdr_max:
             failed.append("fdr")
+        if math.isfinite(coverage) and coverage < axis.min_coverage:
+            failed.append("marker_coverage")
         out[axis.name] = {
             "axis": axis.name,
             "markers": ",".join(axis.markers),
+            "organism": axis.organism,
+            "gene_symbol_namespace": axis.gene_symbol_namespace,
+            "module_source": axis.module_source,
+            "marker_coverage": coverage,
+            "min_coverage": axis.min_coverage,
             "score": score,
             "empirical_p": empirical_p,
             "fdr": fdr,
@@ -442,6 +528,7 @@ __all__ = [
     "FidelityRecord",
     "baseline_export_manifest",
     "baseline_export_record",
+    "claim_grade_convergence_thresholds",
     "evaluate_biology_axis_gates",
     "particle_step_convergence_diagnostics",
     "summarize_null_distribution",

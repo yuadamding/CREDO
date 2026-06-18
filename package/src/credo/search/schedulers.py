@@ -58,18 +58,6 @@ def suggest_light_screen_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSp
     dropped (the suggested value wins) so callers cannot trigger a duplicate
     keyword-argument error by passing a default for a searched field.
     """
-    import dataclasses
-
-    from .space import CREDOTrialSpec  # local import to avoid cycle at module load
-
-    valid = {f.name for f in dataclasses.fields(CREDOTrialSpec)}
-    unknown = set(base) - valid
-    if unknown:
-        raise ValueError(
-            f"Unknown CREDOTrialSpec base keys: {sorted(unknown)}. "
-            f"Valid fields: {sorted(valid)}."
-        )
-
     suggested = {
         "hidden_dim": trial.suggest_categorical("hidden_dim", [128, 256, 512, 768]),
         "depth": trial.suggest_int("depth", 2, 5),
@@ -85,13 +73,98 @@ def suggest_light_screen_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSp
         "n_particles": trial.suggest_categorical("n_particles", [64, 128, 256]),
         "n_steps": trial.suggest_categorical("n_steps", [8, 16, 24]),
     }
-    clean_base = {k: v for k, v in base.items() if k not in suggested}
-    return CREDOTrialSpec(**clean_base, **suggested)
+    return _spec_from_suggested(base, suggested)
+
+
+def suggest_pareto_refit_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
+    """Sample a higher-fidelity constrained-Pareto refit setting."""
+    suggested = {
+        "hidden_dim": trial.suggest_categorical("hidden_dim", [256, 512, 768]),
+        "depth": trial.suggest_int("depth", 3, 6),
+        "embedding_dim": trial.suggest_categorical("embedding_dim", [16, 32, 64]),
+        "n_programs": trial.suggest_categorical("n_programs", [16, 24, 32]),
+        "mediator_dim": trial.suggest_categorical("mediator_dim", [16, 32, 64]),
+        "lr_net": trial.suggest_float("lr_net", 1e-5, 1e-3, log=True),
+        "lr_embed": trial.suggest_float("lr_embed", 1e-5, 2e-3, log=True),
+        "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True),
+        "lambda_end": trial.suggest_float("lambda_end", 0.3, 3.0, log=True),
+        "lambda_aux": trial.suggest_float("lambda_aux", 1e-4, 0.5, log=True),
+        "lambda_weak": trial.suggest_float("lambda_weak", 1e-4, 3.0, log=True),
+        "lambda_count": _suggest_lambda_count(trial),
+        "lambda_reg_net": trial.suggest_float("lambda_reg_net", 1e-6, 1e-2, log=True),
+        "lambda_reg_embed": trial.suggest_float("lambda_reg_embed", 1e-6, 1e-2, log=True),
+        "lambda_reg_diffusion": trial.suggest_float("lambda_reg_diffusion", 1e-6, 1e-2, log=True),
+        "sinkhorn_epsilon": trial.suggest_float("sinkhorn_epsilon", 0.03, 0.3, log=True),
+        "sinkhorn_tau": trial.suggest_float("sinkhorn_tau", 0.3, 10.0, log=True),
+        "n_particles": trial.suggest_categorical("n_particles", [256, 512, 1024]),
+        "n_steps": trial.suggest_categorical("n_steps", [24, 48, 96]),
+        "eval_particles": trial.suggest_categorical("eval_particles", [512, 1024, 2048]),
+    }
+    return _spec_from_suggested(base, suggested)
+
+
+def suggest_claim_grade_refit_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
+    """Sample the final high-fidelity claim-grade refit envelope."""
+    suggested = {
+        "lambda_end": trial.suggest_float("lambda_end", 0.5, 2.0, log=True),
+        "lambda_aux": trial.suggest_float("lambda_aux", 1e-4, 0.2, log=True),
+        "lambda_weak": trial.suggest_float("lambda_weak", 1e-4, 1.0, log=True),
+        "lambda_count": _suggest_lambda_count(trial),
+        "lambda_reg_net": trial.suggest_float("lambda_reg_net", 1e-6, 3e-3, log=True),
+        "lambda_reg_embed": trial.suggest_float("lambda_reg_embed", 1e-6, 3e-3, log=True),
+        "lambda_reg_diffusion": trial.suggest_float("lambda_reg_diffusion", 1e-6, 3e-3, log=True),
+        "sinkhorn_epsilon": trial.suggest_float("sinkhorn_epsilon", 0.03, 0.2, log=True),
+        "sinkhorn_tau": trial.suggest_float("sinkhorn_tau", 0.5, 5.0, log=True),
+        "n_particles": trial.suggest_categorical("n_particles", [512, 1024, 2048]),
+        "n_steps": trial.suggest_categorical("n_steps", [24, 48, 96]),
+        "eval_particles": trial.suggest_categorical("eval_particles", [1024, 2048, 4096]),
+    }
+    return _spec_from_suggested(base, suggested)
+
+
+def suggest_mass_calibration_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
+    """Sample a focused mass-calibration refit around finite-measure terms."""
+    suggested = {
+        "lambda_count": _suggest_lambda_count(trial),
+        "sinkhorn_tau": trial.suggest_float("sinkhorn_tau", 0.3, 20.0, log=True),
+        "sinkhorn_epsilon": trial.suggest_float("sinkhorn_epsilon", 0.03, 0.3, log=True),
+        "lambda_end": trial.suggest_float("lambda_end", 0.5, 3.0, log=True),
+        "n_particles": trial.suggest_categorical("n_particles", [256, 512, 1024]),
+        "n_steps": trial.suggest_categorical("n_steps", [24, 48]),
+        "eval_particles": trial.suggest_categorical("eval_particles", [512, 1024, 2048]),
+    }
+    return _spec_from_suggested(base, suggested)
+
+
+def suggest_ablation_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
+    """Sample explicit method-variant ablations, not ordinary hyperparameters."""
+    suggested = {
+        "context_kind": trial.suggest_categorical("context_kind", ["mlp", "transformer", "causal_attention"]),
+        "ecological_growth": trial.suggest_categorical("ecological_growth", [True, False]),
+        "training_schedule": trial.suggest_categorical("training_schedule", ["joint", "staged"]),
+    }
+    return _spec_from_suggested(base, suggested)
 
 
 # Back-compat alias. ``suggest_light_screen_spec`` is the explicit name; add
 # mode-specific profiles (endpoint/trajectory/single_time/claim-grade) as needed.
 suggest_spec = suggest_light_screen_spec
+
+
+def _spec_from_suggested(base: dict[str, Any], suggested: dict[str, Any]) -> "CREDOTrialSpec":
+    import dataclasses
+
+    from .space import CREDOTrialSpec  # local import to avoid cycle at module load
+
+    valid = {f.name for f in dataclasses.fields(CREDOTrialSpec)}
+    unknown = set(base) - valid
+    if unknown:
+        raise ValueError(
+            f"Unknown CREDOTrialSpec base keys: {sorted(unknown)}. "
+            f"Valid fields: {sorted(valid)}."
+        )
+    clean_base = {k: v for k, v in base.items() if k not in suggested}
+    return CREDOTrialSpec(**clean_base, **suggested)
 
 
 def _suggest_lambda_count(trial: Any) -> float:
@@ -153,6 +226,10 @@ __all__ = [
     "OptunaReporter",
     "make_multiobjective_study",
     "make_study",
+    "suggest_ablation_spec",
+    "suggest_claim_grade_refit_spec",
     "suggest_light_screen_spec",
+    "suggest_mass_calibration_spec",
+    "suggest_pareto_refit_spec",
     "suggest_spec",
 ]

@@ -64,6 +64,7 @@ from .diagnostics import (
     FidelityRecord,
     baseline_export_manifest,
     baseline_export_record,
+    claim_grade_convergence_thresholds,
     evaluate_biology_axis_gates,
     particle_step_convergence_diagnostics,
     summarize_null_distribution,
@@ -71,12 +72,21 @@ from .diagnostics import (
 )
 from .problem_builders import (
     DEFAULT_PROBLEM_BUILDERS,
+    ProblemBuilderMetadata,
     ProblemBuilderRegistry,
     build_endpoint_problem_from_config,
     build_single_time_problem_from_config,
     build_trajectory_problem_from_config,
     clear_problem_builders,
+    problem_builder_metadata,
     register_problem_builder,
+)
+from .schedulers import (
+    suggest_ablation_spec,
+    suggest_claim_grade_refit_spec,
+    suggest_light_screen_spec,
+    suggest_mass_calibration_spec,
+    suggest_pareto_refit_spec,
 )
 from .runner import run_credo_trial
 from .space import (
@@ -119,6 +129,7 @@ __all__ = [
     "FROZEN",
     "MassErrorKind",
     "NoOpReporter",
+    "ProblemBuilderMetadata",
     "ProblemBuilderRegistry",
     "RecordingReporter",
     "SEARCHABLE",
@@ -134,6 +145,7 @@ __all__ = [
     "build_single_time_problem_from_config",
     "build_trajectory_problem_from_config",
     "claim_grade_thresholds",
+    "claim_grade_convergence_thresholds",
     "clear_problem_builders",
     "constrained_score_from_constraints",
     "constraints_satisfied",
@@ -147,11 +159,17 @@ __all__ = [
     "pareto_front",
     "pruner_score",
     "particle_step_convergence_diagnostics",
+    "problem_builder_metadata",
     "reduce_trial_dirs",
     "register_problem_builder",
     "run_credo_trial",
     "select_final_candidates",
     "setting_sha256",
+    "suggest_ablation_spec",
+    "suggest_claim_grade_refit_spec",
+    "suggest_light_screen_spec",
+    "suggest_mass_calibration_spec",
+    "suggest_pareto_refit_spec",
     "spec_sha256",
     "spec_to_run_config",
     "summarize_null_distribution",

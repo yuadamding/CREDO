@@ -250,35 +250,19 @@ def metrics_from_history(
         ),
         max_weight_frac_mean=_last(history.get("max_weight_frac_mean")),
         logw_range_max=_last(history.get("logw_range_max")),
-        source_ess_frac=_last(summary.get("source_ess_frac", history.get("source_ess_frac"))),
-        factual_terminal_ess_frac=_last(
-            summary.get("factual_terminal_ess_frac", history.get("factual_terminal_ess_frac"))
+        source_ess_frac=_summary_or_history(summary, history, "source_ess_frac"),
+        factual_terminal_ess_frac=_summary_or_history(summary, history, "factual_terminal_ess_frac"),
+        reference_terminal_ess_frac=_summary_or_history(summary, history, "reference_terminal_ess_frac"),
+        factual_min_ess_frac_over_time=_summary_or_history(
+            summary, history, "factual_min_ess_frac_over_time"
         ),
-        reference_terminal_ess_frac=_last(
-            summary.get("reference_terminal_ess_frac", history.get("reference_terminal_ess_frac"))
+        reference_min_ess_frac_over_time=_summary_or_history(
+            summary, history, "reference_min_ess_frac_over_time"
         ),
-        factual_min_ess_frac_over_time=_last(
-            summary.get(
-                "factual_min_ess_frac_over_time",
-                history.get("factual_min_ess_frac_over_time"),
-            )
-        ),
-        reference_min_ess_frac_over_time=_last(
-            summary.get(
-                "reference_min_ess_frac_over_time",
-                history.get("reference_min_ess_frac_over_time"),
-            )
-        ),
-        factual_max_weight_frac=_last(
-            summary.get("factual_max_weight_frac", history.get("factual_max_weight_frac"))
-        ),
-        reference_max_weight_frac=_last(
-            summary.get("reference_max_weight_frac", history.get("reference_max_weight_frac"))
-        ),
-        factual_logw_range=_last(summary.get("factual_logw_range", history.get("factual_logw_range"))),
-        reference_logw_range=_last(
-            summary.get("reference_logw_range", history.get("reference_logw_range"))
-        ),
+        factual_max_weight_frac=_summary_or_history(summary, history, "factual_max_weight_frac"),
+        reference_max_weight_frac=_summary_or_history(summary, history, "reference_max_weight_frac"),
+        factual_logw_range=_summary_or_history(summary, history, "factual_logw_range"),
+        reference_logw_range=_summary_or_history(summary, history, "reference_logw_range"),
         gpu_seconds=float(gpu_seconds),
         wall_seconds=float(wall_seconds),
         converged=bool(converged),
@@ -388,14 +372,27 @@ def _mass_error_from_summary(summary: Mapping[str, Any]) -> tuple[float, MassErr
     signed = _summary_opt(summary, "mean_log_mass_residual")
     if signed is None:
         signed = _summary_opt(summary, "signed_log_mass_residual")
-    for key in ("mass_error_value", "mean_abs_log_mass_residual", "mean_log_mass_error", "mean_mass_error"):
+    explicit_kind = summary.get("mass_error_kind")
+    explicit_value = _summary_opt(summary, "mass_error_value")
+    if explicit_value is not None and explicit_kind in {"abs_log_residual", "relative_error", "unknown"}:
+        return float(explicit_value), explicit_kind, signed  # type: ignore[return-value]
+    if explicit_value is not None:
+        return float(explicit_value), "unknown", signed
+    for key in ("mean_abs_log_mass_residual", "mean_log_mass_error"):
         value = _summary_opt(summary, key)
         if value is not None:
             return float(value), "abs_log_residual", signed
     value = _summary_opt(summary, "mean_mass_rel_error")
     if value is not None:
         return float(value), "relative_error", signed
+    value = _summary_opt(summary, "mean_mass_error")
+    if value is not None:
+        return float(value), "unknown", signed
     return math.nan, "unknown", signed
+
+
+def _summary_or_history(summary: Mapping[str, Any], history: Mapping[str, Any], key: str) -> float:
+    return _first_finite(summary.get(key), history.get(key))
 
 
 def _mass_error_from_epoch(epoch_metrics: Mapping[str, Any]) -> tuple[float, MassErrorKind, Optional[float]]:

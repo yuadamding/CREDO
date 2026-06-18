@@ -229,10 +229,13 @@ def select_final_candidates(
     seed_min = _profile_min_seeds(profile) if min_seeds is None else min_seeds
     group_keys = tuple(_record_key(name) for name in group_by)
     aggregate_keys = tuple(_record_key(name) for name in aggregate_by)
-    objective_names = objectives or ["endpoint_geom_mass", "mass_error", "gpu_seconds"]
-    objective_keys = [_objective_key(name) for name in objective_names]
+    all_rows = list(records)
+    all_grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in all_rows:
+        key = tuple(row.get(name) for name in group_keys)
+        all_grouped.setdefault(key, []).append(row)
 
-    rows = list(records)
+    rows = list(all_rows)
     if require_feasible:
         rows = [r for r in rows if bool(r.get("feasible", False))]
     if require_heldout:
@@ -241,6 +244,8 @@ def select_final_candidates(
         rows = [r for r in rows if _record_claim_grade_ready(r)]
     elif profile is SearchProfile.PARETO_REFIT:
         rows = [r for r in rows if _record_pareto_refit_ready(r)]
+    objective_names = objectives or _default_objectives_from_records(rows)
+    objective_keys = [_objective_key(name) for name in objective_names]
 
     grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for row in rows:
@@ -250,19 +255,22 @@ def select_final_candidates(
     candidates: list[dict[str, Any]] = []
     skipped_for_coverage = False
     for key, group in grouped.items():
-        folds = _distinct_values(group, aggregate_keys[0]) if len(aggregate_keys) >= 1 else set()
-        seeds = _distinct_values(group, aggregate_keys[1]) if len(aggregate_keys) >= 2 else set()
-        if len(folds) < fold_min or len(seeds) < seed_min:
+        coverage = _fold_seed_coverage(group, aggregate_keys, min_folds=fold_min, min_seeds=seed_min)
+        if not coverage["ok"]:
             skipped_for_coverage = True
             continue
+        total_group = all_grouped.get(key, group)
         aggregate = _aggregate_group(
             key=key,
             group_by=group_by,
             group=group,
+            total_group=total_group,
             profile=profile,
             objective_keys=objective_keys,
-            fold_count=len(folds),
-            seed_count=len(seeds),
+            aggregate_keys=aggregate_keys,
+            fold_count=int(coverage["fold_count"]),
+            seed_count=int(coverage["seed_count"]),
+            missing_pairs=coverage["missing_pairs"],
         )
         if all(_finite(aggregate.get(f"{key}.mean")) for key in objective_keys):
             candidates.append(aggregate)
@@ -291,17 +299,35 @@ def _aggregate_group(
     key: tuple[Any, ...],
     group_by: tuple[str, ...],
     group: list[dict[str, Any]],
+    total_group: list[dict[str, Any]],
     profile: SearchProfile,
     objective_keys: list[str],
+    aggregate_keys: tuple[str, ...],
     fold_count: int,
     seed_count: int,
+    missing_pairs: object,
 ) -> dict[str, Any]:
     out: dict[str, Any] = {
         "profile": profile.value,
         "n_trials": len(group),
+        "n_trials_total": len(total_group),
+        "n_trials_feasible": sum(1 for row in total_group if row.get("feasible", False)),
         "fold_count": fold_count,
         "seed_count": seed_count,
-        "fold_pass_rate": sum(1.0 for row in group if row.get("feasible", False)) / max(len(group), 1),
+        "fold_pass_rate": _axis_pass_rate(group, aggregate_keys[0] if len(aggregate_keys) >= 1 else None),
+        "fold_pass_rate_all": _axis_pass_rate(
+            total_group, aggregate_keys[0] if len(aggregate_keys) >= 1 else None
+        ),
+        "fold_pass_rate_after_filter": _axis_pass_rate(
+            group, aggregate_keys[0] if len(aggregate_keys) >= 1 else None
+        ),
+        "seed_pass_rate_all": _axis_pass_rate(
+            total_group, aggregate_keys[1] if len(aggregate_keys) >= 2 else None
+        ),
+        "seed_pass_rate_after_filter": _axis_pass_rate(
+            group, aggregate_keys[1] if len(aggregate_keys) >= 2 else None
+        ),
+        "missing_fold_seed_pairs": missing_pairs,
         "worst_fold_ess": _min_finite(
             row.get("metric.min_ess_frac_over_time", row.get("metric.terminal_ess_frac_min"))
             for row in group
@@ -318,6 +344,27 @@ def _aggregate_group(
             out[f"{objective}.mean"] = sum(finite) / len(finite)
             out[f"{objective}.se"] = _standard_error(finite)
     return out
+
+
+def _default_objectives_from_records(records: list[dict[str, Any]]) -> list[str]:
+    if not records:
+        return ["endpoint_geom_mass", "mass_error"]
+    if all(_finite(row.get("objective.endpoint_geometry")) for row in records):
+        objectives = ["endpoint_geometry"]
+        if all(_finite(row.get("objective.endpoint_mass_penalty")) for row in records):
+            objectives.append("endpoint_mass_penalty")
+    else:
+        objectives = ["endpoint_geom_mass"]
+    for name in (
+        "mass_error",
+        "counterfactual_null_gap",
+        "guide_concordance_gap",
+        "gpu_seconds",
+    ):
+        key = _objective_key(name)
+        if all(_finite(row.get(key)) for row in records):
+            objectives.append(name)
+    return objectives
 
 
 def _objective_key(name: str) -> str:
@@ -342,6 +389,54 @@ def _record_key(name: str) -> str:
 
 def _distinct_values(records: list[dict[str, Any]], key: str) -> set[Any]:
     return {record.get(key) for record in records if record.get(key) is not None}
+
+
+def _fold_seed_coverage(
+    records: list[dict[str, Any]],
+    aggregate_keys: tuple[str, ...],
+    *,
+    min_folds: int,
+    min_seeds: int,
+) -> dict[str, object]:
+    if len(aggregate_keys) < 2:
+        return {
+            "ok": min_folds <= 1 and min_seeds <= 1,
+            "fold_count": 0,
+            "seed_count": 0,
+            "missing_pairs": [],
+        }
+    fold_key, seed_key = aggregate_keys[:2]
+    folds = sorted(_distinct_values(records, fold_key), key=str)
+    seeds = sorted(_distinct_values(records, seed_key), key=str)
+    observed_pairs = {(row.get(fold_key), row.get(seed_key)) for row in records}
+    required_pairs = {(fold, seed) for fold in folds for seed in seeds}
+    missing = sorted(required_pairs - observed_pairs, key=lambda item: (str(item[0]), str(item[1])))
+    ok = (
+        len(folds) >= min_folds
+        and len(seeds) >= min_seeds
+        and len(records) >= min_folds * min_seeds
+        and not missing
+    )
+    return {
+        "ok": ok,
+        "fold_count": len(folds),
+        "seed_count": len(seeds),
+        "missing_pairs": [f"{fold}:{seed}" for fold, seed in missing],
+    }
+
+
+def _axis_pass_rate(records: list[dict[str, Any]], key: str | None) -> float:
+    if key is None:
+        return math.nan
+    groups: dict[Any, list[dict[str, Any]]] = {}
+    for record in records:
+        value = record.get(key)
+        if value is not None:
+            groups.setdefault(value, []).append(record)
+    if not groups:
+        return math.nan
+    passed = sum(1 for group in groups.values() if any(row.get("feasible", False) for row in group))
+    return passed / len(groups)
 
 
 def _profile_min_folds(profile: SearchProfile) -> int:

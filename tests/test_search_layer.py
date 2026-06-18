@@ -171,6 +171,19 @@ def test_pruner_score_dominated_by_divergence() -> None:
     assert feasible_pruner_score(diverged, spec) >= DIVERGENCE_PENALTY
 
 
+def test_pruner_score_default_weights_none_does_not_crash() -> None:
+    metrics = CREDOTrialMetrics(
+        endpoint_geom_mass=1.0,
+        mass_error_value=0.1,
+        mass_error_kind="abs_log_residual",
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+    assert math.isfinite(pruner_score(metrics))
+
+
 # --- metrics extraction -----------------------------------------------------
 
 def test_metrics_from_history_takes_last_epoch_values() -> None:
@@ -204,6 +217,43 @@ def test_metrics_from_history_takes_last_epoch_values() -> None:
     assert m2.log_mass_error == pytest.approx(0.12)
     assert m2.mass_error_value == pytest.approx(0.12)
     assert m2.mass_error_kind == "relative_error"
+
+
+def test_mean_mass_error_without_explicit_kind_is_not_claim_grade() -> None:
+    m = metrics_from_history(
+        {"loss_end": [0.5]},
+        eval_summary={"mean_endpoint_geom_mass": 0.4, "mean_mass_error": 0.2},
+    )
+    assert m.mass_error_value == pytest.approx(0.2)
+    assert m.log_mass_error == pytest.approx(0.2)
+    assert m.mass_error_kind == "unknown"
+
+    explicit = metrics_from_history(
+        {"loss_end": [0.5]},
+        eval_summary={
+            "mean_endpoint_geom_mass": 0.4,
+            "mass_error_value": 0.2,
+            "mass_error_kind": "abs_log_residual",
+        },
+    )
+    assert explicit.mass_error_kind == "abs_log_residual"
+
+
+def test_branch_metric_nan_summary_falls_back_to_history() -> None:
+    m = metrics_from_history(
+        {
+            "loss_end": [0.5],
+            "factual_terminal_ess_frac": [0.33],
+            "reference_logw_range": [4.5],
+        },
+        eval_summary={
+            "mean_endpoint_geom_mass": 0.4,
+            "factual_terminal_ess_frac": float("nan"),
+            "reference_logw_range": float("nan"),
+        },
+    )
+    assert m.factual_terminal_ess_frac == pytest.approx(0.33)
+    assert m.reference_logw_range == pytest.approx(4.5)
 
 
 # --- runner -----------------------------------------------------------------
@@ -388,10 +438,133 @@ def test_select_final_candidates_aggregates_folds_and_seeds(tmp_path) -> None:
         select_final_candidates(records[:9], profile="claim_grade")
 
 
+def test_final_selector_accepts_decomposed_endpoint_objectives_by_default(tmp_path) -> None:
+    from credo.search import select_final_candidates
+    from credo.search.manifests import trial_record
+
+    records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = CREDOTrialMetrics(
+                endpoint_geom_mass=float("nan"),
+                endpoint_sinkhorn=0.2 + fold * 0.001,
+                endpoint_mass_penalty=0.03,
+                mass_error_value=0.05,
+                mass_error_kind="abs_log_residual",
+                terminal_ess_frac_min=0.4,
+                min_ess_frac_over_time=0.35,
+                max_weight_frac_mean=0.2,
+                converged=True,
+                validation_source="held_out",
+                control_null_gap=0.01,
+                **BRANCH_PARTICLE_OK,
+            )
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: metrics,
+                output_dir=str(tmp_path / f"{fold}_{seed}"),
+            )
+            records.append(trial_record(result))
+
+    front = select_final_candidates(records, profile="claim_grade")
+    assert len(front) == 1
+    row = front[0]
+    assert "objective.endpoint_geometry.mean" in row
+    assert "objective.endpoint_mass_penalty.mean" in row
+    assert "objective.endpoint_geom_mass.mean" not in row
+
+
+def test_claim_grade_requires_full_fold_seed_grid_not_distinct_counts_only(tmp_path) -> None:
+    from credo.search import select_final_candidates
+    from credo.search.manifests import trial_record
+
+    pairs = [(fold, seed) for fold in range(4) for seed in range(3)]
+    pairs.remove((3, 2))
+    pairs.append((0, 0))
+    records = []
+    for idx, (fold, seed) in enumerate(pairs):
+        metrics = CREDOTrialMetrics(
+            endpoint_geom_mass=0.2,
+            mass_error_value=0.05,
+            mass_error_kind="abs_log_residual",
+            terminal_ess_frac_min=0.4,
+            min_ess_frac_over_time=0.35,
+            max_weight_frac_mean=0.2,
+            converged=True,
+            validation_source="held_out",
+            control_null_gap=0.01,
+            **BRANCH_PARTICLE_OK,
+        )
+        result = run_credo_trial(
+            CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+            train_fn=lambda c, s, r, metrics=metrics: metrics,
+            output_dir=str(tmp_path / f"{idx}"),
+        )
+        records.append(trial_record(result))
+
+    with pytest.raises(ValueError, match="4 folds x 3 seeds"):
+        select_final_candidates(records, profile="claim_grade")
+
+
+def test_final_selector_reports_attempted_and_feasible_trial_counts(tmp_path) -> None:
+    from credo.search import CREDOTrainOutput, select_final_candidates
+    from credo.search.manifests import trial_record
+
+    records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = CREDOTrialMetrics(
+                endpoint_geom_mass=0.2,
+                mass_error_value=0.05,
+                mass_error_kind="abs_log_residual",
+                terminal_ess_frac_min=0.4,
+                min_ess_frac_over_time=0.35,
+                max_weight_frac_mean=0.2,
+                converged=True,
+                validation_source="held_out",
+                control_null_gap=0.01,
+                **BRANCH_PARTICLE_OK,
+            )
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: metrics,
+                output_dir=str(tmp_path / f"{fold}_{seed}"),
+            )
+            records.append(trial_record(result))
+
+    failed = run_credo_trial(
+        CREDOTrialSpec(fold_id="fold0", seed=0),
+        train_fn=lambda c, s, r: CREDOTrainOutput(
+            metrics=CREDOTrialMetrics(
+                endpoint_geom_mass=0.2,
+                mass_error_value=0.05,
+                mass_error_kind="abs_log_residual",
+                terminal_ess_frac_min=0.4,
+                min_ess_frac_over_time=0.35,
+                max_weight_frac_mean=0.2,
+                converged=True,
+                validation_source="held_out",
+                control_null_gap=0.01,
+                **BRANCH_PARTICLE_OK,
+            ),
+            failure_type="RuntimeError",
+        ),
+        output_dir=str(tmp_path / "failed"),
+    )
+    records.append(trial_record(failed))
+
+    front = select_final_candidates(records, profile="claim_grade", objectives=["endpoint_geom_mass", "mass_error"])
+    assert len(front) == 1
+    assert front[0]["n_trials"] == 12
+    assert front[0]["n_trials_total"] == 13
+    assert front[0]["n_trials_feasible"] == 12
+
+
 def test_particle_step_convergence_diagnostics_gate_fidelities() -> None:
     from credo.search import (
         ConvergenceThresholds,
         FidelityRecord,
+        claim_grade_convergence_thresholds,
         particle_step_convergence_diagnostics,
     )
 
@@ -427,8 +600,15 @@ def test_particle_step_convergence_diagnostics_gate_fidelities() -> None:
     ]
     summary = particle_step_convergence_diagnostics(records, thresholds=thresholds)
     assert summary["passes"] is True
+    assert summary["reference_n_particles"] == 2048
+    assert summary["reference_n_steps"] == 96
     assert summary["rank_correlation_delta_log_mass_min"] >= 0.9
     assert summary["top_hit_jaccard_min"] == pytest.approx(1.0)
+
+    with pytest.raises(ValueError, match="endpoint_drift_median_max"):
+        claim_grade_convergence_thresholds(endpoint_drift_median_max=math.inf)
+    claim_thresholds = claim_grade_convergence_thresholds(endpoint_drift_median_max=0.05)
+    assert claim_thresholds.endpoint_drift_median_max == pytest.approx(0.05)
 
     unstable = dataclasses.replace(records[-1], biology_axis_score_by_axis={"tnf": -0.7, "cis": 0.3})
     failed = particle_step_convergence_diagnostics(records[:-1] + [unstable], thresholds=thresholds)
@@ -469,16 +649,28 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
     assert manifest["required_missing"] == ["moscot_time"]
 
     axes = (
-        BiologyAxisSpec("tnf", ("Notch1",), expected_direction="positive"),
+        BiologyAxisSpec(
+            "tnf",
+            ("Notch1",),
+            expected_direction="positive",
+            organism="mouse",
+            gene_symbol_namespace="MGI",
+            module_source="Renz",
+            min_coverage=0.7,
+        ),
         BiologyAxisSpec("artifact", ("gene_size",), expected_direction="negative"),
     )
     gates = evaluate_biology_axis_gates(
         {"tnf": 1.2, "artifact": 0.4},
         null_summaries={"tnf": {"empirical_p": 0.01, "fdr": 0.02}},
+        coverage_by_axis={"tnf": 0.5},
         axes=axes,
         score_abs_min=0.1,
     )
-    assert gates["tnf"]["pass"] is True
+    assert gates["tnf"]["pass"] is False
+    assert gates["tnf"]["organism"] == "mouse"
+    assert gates["tnf"]["gene_symbol_namespace"] == "MGI"
+    assert "marker_coverage" in gates["tnf"]["failed_gates"]
     assert gates["artifact"]["pass"] is False
     assert "wrong_direction" in gates["artifact"]["failed_gates"]
 
@@ -487,19 +679,42 @@ def test_problem_builder_registry_builds_from_config_without_namespace() -> None
     from types import SimpleNamespace
 
     from credo.search import (
+        ProblemBuilderMetadata,
         ProblemBuilderRegistry,
         build_endpoint_problem_from_config,
         build_single_time_problem_from_config,
+        problem_builder_metadata,
     )
 
     registry = ProblemBuilderRegistry()
-    registry.register("endpoint", "dataset-a", lambda cfg: {"kind": "endpoint", "data_id": cfg.data_id})
+    metadata = ProblemBuilderMetadata(
+        builder_name="tiny_builder",
+        builder_version="1",
+        data_path_hash="data",
+        mass_table_hash="mass",
+        split_file_hash="split",
+        latent_source="pca",
+        latent_key="X_pca",
+        gene_panel_hash="genes",
+        normalization_hash="norm",
+        hvg_preprocessing_hash="hvg",
+        encoder_checkpoint_hash="encoder",
+    )
+    registry.register(
+        "endpoint",
+        "dataset-a",
+        lambda cfg: {"kind": "endpoint", "data_id": cfg.data_id},
+        metadata=metadata,
+    )
     cfg = SimpleNamespace(data_id="dataset-a")
 
     assert build_endpoint_problem_from_config(cfg, registry=registry) == {
         "kind": "endpoint",
         "data_id": "dataset-a",
     }
+    record = problem_builder_metadata("endpoint", cfg, registry=registry).to_record()
+    assert record["builder_name"] == "tiny_builder"
+    assert record["mass_table_hash"] == "mass"
     with pytest.raises(KeyError, match="single_time"):
         build_single_time_problem_from_config(cfg, registry=registry)
     with pytest.raises(ValueError, match="data_id"):
@@ -606,6 +821,47 @@ def test_suggest_spec_samples_lambda_count_from_mixture() -> None:
     assert not any(name == "lambda_count_low" for name, *_ in zero.requested)
     assert any(name == "lambda_count_low" for name, *_ in low.requested)
     assert any(name == "lambda_count_high" for name, *_ in high.requested)
+
+
+def test_scheduler_profiles_use_separate_fidelity_ranges() -> None:
+    from credo.search.schedulers import (
+        suggest_ablation_spec,
+        suggest_claim_grade_refit_spec,
+        suggest_pareto_refit_spec,
+    )
+
+    class _FakeTrial:
+        def suggest_categorical(self, name, choices):
+            return choices[-1]
+
+        def suggest_int(self, name, low, high):
+            return high
+
+        def suggest_float(self, name, low, high, log=False):
+            if name == "lambda_count_regime":
+                return 0.1
+            return low
+
+    pareto = suggest_pareto_refit_spec(_FakeTrial(), {"data_id": "d"})
+    claim = suggest_claim_grade_refit_spec(
+        _FakeTrial(),
+        {
+            "data_id": "d",
+            "hidden_dim": 256,
+            "depth": 3,
+            "embedding_dim": 16,
+            "n_programs": 16,
+            "mediator_dim": 16,
+        },
+    )
+    ablation = suggest_ablation_spec(_FakeTrial(), {"data_id": "d"})
+
+    assert pareto.n_particles == 1024
+    assert pareto.eval_particles == 2048
+    assert claim.n_particles == 2048
+    assert claim.eval_particles == 4096
+    assert ablation.context_kind == "causal_attention"
+    assert ablation.ecological_growth is False
 
 
 def test_spec_to_run_config_sets_latent_dim_via_construction() -> None:
