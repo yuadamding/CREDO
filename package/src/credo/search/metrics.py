@@ -15,7 +15,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional
+from typing import Any, Literal, Mapping, Optional
+
+
+MassErrorKind = Literal["abs_log_residual", "relative_error", "unknown"]
 
 
 def _last(values: Any) -> float:
@@ -68,12 +71,20 @@ class CREDOTrialMetrics:
 
     # Fit quality. endpoint_geom_mass is the *combined* geometry+log-mass proxy
     # (the training-history loss_end). endpoint_sinkhorn / endpoint_mass_penalty
-    # are the decomposed pieces when an evaluator can provide them; log_mass_error
-    # is a distinct relative terminal-mass diagnostic, NOT the tau penalty term.
+    # are the decomposed pieces when an evaluator can provide them; mass_error_*
+    # stores the typed terminal-mass diagnostic, NOT the tau penalty term.
     endpoint_geom_mass: float = math.nan  # best available (held-out if present)
     train_endpoint_geom_mass: Optional[float] = None  # training-loss value, for reference
     endpoint_sinkhorn: Optional[float] = None
     endpoint_mass_penalty: Optional[float] = None
+    # Typed finite-measure mass diagnostic. ``abs_log_residual`` is the only
+    # kind accepted by claim-grade gates; ``relative_error`` may still be useful
+    # for screening, but it is not interchangeable with an absolute log residual.
+    mass_error_value: float = math.nan
+    mass_error_kind: MassErrorKind = "unknown"
+    signed_log_mass_residual: Optional[float] = None
+    # Backward-compatible alias for older callers. New code should use
+    # ``mass_error_value`` + ``mass_error_kind``.
     log_mass_error: float = math.nan
     count_nll: Optional[float] = None
     weak_loss: Optional[float] = None
@@ -91,12 +102,31 @@ class CREDOTrialMetrics:
     min_ess_frac_over_time: float = math.nan
     max_weight_frac_mean: float = math.nan
     logw_range_max: float = math.nan
+    source_ess_frac: float = math.nan
+    factual_terminal_ess_frac: float = math.nan
+    reference_terminal_ess_frac: float = math.nan
+    factual_min_ess_frac_over_time: float = math.nan
+    reference_min_ess_frac_over_time: float = math.nan
+    factual_max_weight_frac: float = math.nan
+    reference_max_weight_frac: float = math.nan
+    factual_logw_range: float = math.nan
+    reference_logw_range: float = math.nan
 
     # Cost / status
     gpu_seconds: float = math.nan
     wall_seconds: float = math.nan
     converged: bool = False
     diverged: bool = False
+
+    def __post_init__(self) -> None:
+        if self.mass_error_kind not in ("abs_log_residual", "relative_error", "unknown"):
+            raise ValueError(f"Unknown mass_error_kind: {self.mass_error_kind!r}.")
+        mass_error = _finite_or_nan(self.mass_error_value)
+        legacy = _finite_or_nan(self.log_mass_error)
+        if math.isnan(mass_error) and math.isfinite(legacy):
+            self.mass_error_value = legacy
+        elif math.isfinite(mass_error) and math.isnan(legacy):
+            self.log_mass_error = mass_error
 
 
 @dataclass
@@ -172,11 +202,7 @@ def metrics_from_history(
     headline_from_summary = endpoint is not None or endpoint_sinkhorn is not None
     if endpoint is None:
         endpoint = train_endpoint
-    # Relative terminal mass error (distinct from the tau penalty); only the eval
-    # summary provides it.
-    log_mass_error = _summary_opt(summary, "mean_log_mass_error")
-    if log_mass_error is None:
-        log_mass_error = _summary_opt(summary, "mean_mass_rel_error")
+    mass_error_value, mass_error_kind, signed_log_mass_residual = _mass_error_from_summary(summary)
 
     # Provenance follows the source of the headline endpoint metric: if it came
     # from the (held-out) eval summary, trust the summary's validation_source;
@@ -208,7 +234,10 @@ def metrics_from_history(
         train_endpoint_geom_mass=None if math.isnan(train_endpoint) else train_endpoint,
         endpoint_sinkhorn=endpoint_sinkhorn,
         endpoint_mass_penalty=endpoint_mass_penalty,
-        log_mass_error=float(log_mass_error) if log_mass_error is not None else math.nan,
+        mass_error_value=mass_error_value,
+        mass_error_kind=mass_error_kind,
+        signed_log_mass_residual=signed_log_mass_residual,
+        log_mass_error=mass_error_value,
         count_nll=count_nll,
         weak_loss=weak_loss,
         heldout_score=_summary_opt(summary, "heldout_score"),
@@ -221,6 +250,35 @@ def metrics_from_history(
         ),
         max_weight_frac_mean=_last(history.get("max_weight_frac_mean")),
         logw_range_max=_last(history.get("logw_range_max")),
+        source_ess_frac=_last(summary.get("source_ess_frac", history.get("source_ess_frac"))),
+        factual_terminal_ess_frac=_last(
+            summary.get("factual_terminal_ess_frac", history.get("factual_terminal_ess_frac"))
+        ),
+        reference_terminal_ess_frac=_last(
+            summary.get("reference_terminal_ess_frac", history.get("reference_terminal_ess_frac"))
+        ),
+        factual_min_ess_frac_over_time=_last(
+            summary.get(
+                "factual_min_ess_frac_over_time",
+                history.get("factual_min_ess_frac_over_time"),
+            )
+        ),
+        reference_min_ess_frac_over_time=_last(
+            summary.get(
+                "reference_min_ess_frac_over_time",
+                history.get("reference_min_ess_frac_over_time"),
+            )
+        ),
+        factual_max_weight_frac=_last(
+            summary.get("factual_max_weight_frac", history.get("factual_max_weight_frac"))
+        ),
+        reference_max_weight_frac=_last(
+            summary.get("reference_max_weight_frac", history.get("reference_max_weight_frac"))
+        ),
+        factual_logw_range=_last(summary.get("factual_logw_range", history.get("factual_logw_range"))),
+        reference_logw_range=_last(
+            summary.get("reference_logw_range", history.get("reference_logw_range"))
+        ),
         gpu_seconds=float(gpu_seconds),
         wall_seconds=float(wall_seconds),
         converged=bool(converged),
@@ -256,9 +314,14 @@ def metrics_from_epoch(
         endpoint = train_endpoint
         validation_source = "train_self_eval" if math.isfinite(train_endpoint) else None
     total = _last(m.get("loss_total", m.get("loss_end")))
+    mass_error_value, mass_error_kind, signed_log_mass_residual = _mass_error_from_epoch(m)
     return CREDOTrialMetrics(
         endpoint_geom_mass=endpoint,
         train_endpoint_geom_mass=None if math.isnan(train_endpoint) else train_endpoint,
+        mass_error_value=mass_error_value,
+        mass_error_kind=mass_error_kind,
+        signed_log_mass_residual=signed_log_mass_residual,
+        log_mass_error=mass_error_value,
         count_nll=_opt_value(_first_finite(m.get("val_count_nll"), m.get("loss_count"))),
         weak_loss=_opt_value(_first_finite(m.get("val_weak_loss"), m.get("loss_weak"))),
         validation_source=validation_source,
@@ -266,6 +329,15 @@ def metrics_from_epoch(
         min_ess_frac_over_time=_last(m.get("min_ess_frac_over_time", m.get("min_ess_frac_mean"))),
         max_weight_frac_mean=_last(m.get("max_weight_frac_mean")),
         logw_range_max=_last(m.get("logw_range_max")),
+        source_ess_frac=_last(m.get("source_ess_frac")),
+        factual_terminal_ess_frac=_last(m.get("factual_terminal_ess_frac")),
+        reference_terminal_ess_frac=_last(m.get("reference_terminal_ess_frac")),
+        factual_min_ess_frac_over_time=_last(m.get("factual_min_ess_frac_over_time")),
+        reference_min_ess_frac_over_time=_last(m.get("reference_min_ess_frac_over_time")),
+        factual_max_weight_frac=_last(m.get("factual_max_weight_frac")),
+        reference_max_weight_frac=_last(m.get("reference_max_weight_frac")),
+        factual_logw_range=_last(m.get("factual_logw_range")),
+        reference_logw_range=_last(m.get("reference_logw_range")),
         diverged=bool(diverged) or not math.isfinite(total) or not math.isfinite(endpoint),
     )
 
@@ -304,10 +376,50 @@ def _summary_opt(summary: Mapping[str, Any], key: str) -> Optional[float]:
     return value if math.isfinite(value) else None
 
 
+def _finite_or_nan(value: Any) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return math.nan
+    return out if math.isfinite(out) else math.nan
+
+
+def _mass_error_from_summary(summary: Mapping[str, Any]) -> tuple[float, MassErrorKind, Optional[float]]:
+    signed = _summary_opt(summary, "mean_log_mass_residual")
+    if signed is None:
+        signed = _summary_opt(summary, "signed_log_mass_residual")
+    for key in ("mass_error_value", "mean_abs_log_mass_residual", "mean_log_mass_error", "mean_mass_error"):
+        value = _summary_opt(summary, key)
+        if value is not None:
+            return float(value), "abs_log_residual", signed
+    value = _summary_opt(summary, "mean_mass_rel_error")
+    if value is not None:
+        return float(value), "relative_error", signed
+    return math.nan, "unknown", signed
+
+
+def _mass_error_from_epoch(epoch_metrics: Mapping[str, Any]) -> tuple[float, MassErrorKind, Optional[float]]:
+    signed = _opt_value(
+        _first_finite(
+            epoch_metrics.get("log_mass_residual"),
+            epoch_metrics.get("signed_log_mass_residual"),
+        )
+    )
+    for key in ("mass_error_value", "abs_log_mass_residual", "log_mass_error", "mass_error"):
+        value = _opt_value(_first_finite(epoch_metrics.get(key)))
+        if value is not None:
+            return float(value), "abs_log_residual", signed
+    value = _opt_value(_first_finite(epoch_metrics.get("mass_rel_error")))
+    if value is not None:
+        return float(value), "relative_error", signed
+    return math.nan, "unknown", signed
+
+
 __all__ = [
     "CREDOTrainOutput",
     "CREDOTrialMetrics",
     "CREDOTrialResult",
+    "MassErrorKind",
     "metrics_from_epoch",
     "metrics_from_history",
 ]

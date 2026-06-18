@@ -21,9 +21,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from enum import Enum
+from typing import Mapping, Optional
 
-from .metrics import CREDOTrialMetrics
+from .metrics import CREDOTrialMetrics, MassErrorKind
 from .space import CREDOTrialSpec, assert_frozen_semantics
 
 
@@ -32,12 +33,21 @@ MISSING_METRIC_PENALTY = 1_000.0
 
 DEFAULT_PRUNER_WEIGHTS: dict[str, float] = {
     "endpoint_geom_mass": 0.40,
-    "log_mass_error": 0.30,
+    "mass_error": 0.30,
     "count_nll": 0.10,
     "weak_loss": 0.05,
     "gpu_seconds": 0.05,
     "particle_failure": 0.10,
 }
+
+
+class SearchProfile(str, Enum):
+    """Named search phases with different evidentiary standards."""
+
+    LIGHT_SCREEN = "light_screen"
+    PARETO_REFIT = "pareto_refit"
+    CLAIM_GRADE = "claim_grade"
+    ABLATION_ONLY = "ablation_only"
 
 
 @dataclass(frozen=True)
@@ -60,6 +70,8 @@ class ConstraintThresholds:
     require_mass_metric: bool = False
     require_control_null: bool = False
     require_guide_concordance: bool = False
+    require_branch_particle_diagnostics: bool = False
+    required_mass_error_kind: Optional[MassErrorKind] = None
     # Mass *calibration* ceiling (claim-grade): existence of a finite mass error
     # is not enough -- a claim-grade endpoint run must also keep it below this.
     log_mass_error_max: float = math.inf
@@ -83,6 +95,14 @@ class ConstraintThresholds:
             raise ValueError(
                 f"log_mass_error_max must be non-negative, got {self.log_mass_error_max!r}."
             )
+        if self.required_mass_error_kind is not None and self.required_mass_error_kind not in (
+            "abs_log_residual",
+            "relative_error",
+            "unknown",
+        ):
+            raise ValueError(
+                f"required_mass_error_kind must be a known mass kind, got {self.required_mass_error_kind!r}."
+            )
 
 
 DEFAULT_THRESHOLDS = ConstraintThresholds()
@@ -98,18 +118,20 @@ CLAIM_GRADE_PRESENCE_THRESHOLDS = ConstraintThresholds(
     require_mass_metric=True,
     require_control_null=True,
     require_guide_concordance=True,
+    require_branch_particle_diagnostics=True,
+    required_mass_error_kind="abs_log_residual",
 )
-# Backward-compatible alias; the explicit name makes the open-ceiling semantics
-# clear at the call site.
-CLAIM_GRADE_THRESHOLDS = CLAIM_GRADE_PRESENCE_THRESHOLDS
+# Deliberately not an open-ceiling alias. Final biological claims must call
+# claim_grade_thresholds(...) with finite calibrated ceilings.
+CLAIM_GRADE_THRESHOLDS = None
 
 
 def claim_grade_thresholds(
     *,
     control_null_max: float,
+    log_mass_error_max: Optional[float] = None,
     guide_concordance_max: Optional[float] = None,
     require_guide_concordance: bool = False,
-    log_mass_error_max: float = math.inf,
     ess_floor: float = 0.10,
     max_weight_ceiling: float = 0.50,
 ) -> ConstraintThresholds:
@@ -125,6 +147,15 @@ def claim_grade_thresholds(
     if not math.isfinite(float(control_null_max)) or float(control_null_max) < 0:
         raise ValueError(
             f"control_null_max must be a finite, non-negative threshold, got {control_null_max!r}."
+        )
+    if (
+        log_mass_error_max is None
+        or not math.isfinite(float(log_mass_error_max))
+        or float(log_mass_error_max) < 0
+    ):
+        raise ValueError(
+            "log_mass_error_max must be a finite, non-negative abs-log-residual "
+            f"threshold, got {log_mass_error_max!r}."
         )
     if require_guide_concordance:
         if (
@@ -143,13 +174,40 @@ def claim_grade_thresholds(
         max_weight_ceiling=max_weight_ceiling,
         control_null_max=control_null_max,
         guide_concordance_max=guide_concordance_max,
-        log_mass_error_max=log_mass_error_max,
+        log_mass_error_max=float(log_mass_error_max),
         require_heldout_provenance=True,
         require_heldout_endpoint=True,
         require_mass_metric=True,
         require_control_null=True,
         require_guide_concordance=require_guide_concordance,
+        require_branch_particle_diagnostics=True,
+        required_mass_error_kind="abs_log_residual",
     )
+
+
+def thresholds_for_profile(
+    profile: SearchProfile | str,
+    *,
+    claim_thresholds: Optional[ConstraintThresholds] = None,
+) -> ConstraintThresholds:
+    """Return the default feasibility gate for a named search profile."""
+    profile = SearchProfile(profile)
+    if profile in (SearchProfile.LIGHT_SCREEN, SearchProfile.ABLATION_ONLY):
+        return DEFAULT_THRESHOLDS
+    if profile is SearchProfile.PARETO_REFIT:
+        return ConstraintThresholds(
+            require_heldout_provenance=True,
+            require_heldout_endpoint=True,
+            require_mass_metric=True,
+            require_control_null=True,
+            required_mass_error_kind="abs_log_residual",
+        )
+    if claim_thresholds is None:
+        raise ValueError(
+            "SearchProfile.CLAIM_GRADE requires explicit finite claim_thresholds "
+            "from claim_grade_thresholds(...)."
+        )
+    return claim_thresholds
 
 
 @dataclass
@@ -210,6 +268,8 @@ def pruner_score(
     w = dict(DEFAULT_PRUNER_WEIGHTS)
     if weights:
         w.update(weights)
+        if "log_mass_error" in weights and "mass_error" not in weights:
+            w["mass_error"] = weights["log_mass_error"]
     std = standardizer or Standardizer()
 
     score = 0.0
@@ -220,7 +280,7 @@ def pruner_score(
     # proxy.
     endpoint_name, endpoint_value = _headline_endpoint(metrics)
     score += w["endpoint_geom_mass"] * std.z_or_penalty(endpoint_name, endpoint_value)
-    score += w["log_mass_error"] * std.z("log_mass_error", metrics.log_mass_error)
+    score += w["mass_error"] * std.z_or_penalty("mass_error", metrics.mass_error_value)
     if metrics.count_nll is not None:
         score += w["count_nll"] * std.z("count_nll", metrics.count_nll)
     if metrics.weak_loss is not None:
@@ -249,7 +309,7 @@ def objective_vector(metrics: CREDOTrialMetrics) -> dict[str, float]:
     else:
         # No finite pure-geometry term -> fall back to the combined proxy.
         vector["endpoint_geom_mass"] = _nan_to(metrics.endpoint_geom_mass, math.inf)
-    _add_if_finite(vector, "mass_error", metrics.log_mass_error)
+    _add_if_finite(vector, "mass_error", metrics.mass_error_value)
     _add_if_finite(vector, "count_nll", metrics.count_nll)
     if metrics.validation_source == "held_out":
         _add_if_finite(vector, "heldout_generalization", metrics.heldout_score)
@@ -264,6 +324,12 @@ def hard_constraints(
     thresholds: ConstraintThresholds = DEFAULT_THRESHOLDS,
 ) -> dict[str, bool]:
     """Feasibility constraints; a trial is selectable only if all are True."""
+    if thresholds is None:
+        raise ValueError(
+            "CLAIM_GRADE_THRESHOLDS no longer points to open-ceiling gates. "
+            "Use CLAIM_GRADE_PRESENCE_THRESHOLDS for diagnostic presence checks "
+            "or claim_grade_thresholds(...) for final claim-grade selection."
+        )
     ess = min(_nan_to(metrics.terminal_ess_frac_min, 0.0), _nan_to(metrics.min_ess_frac_over_time, 0.0))
     constraints = {
         "not_diverged": not metrics.diverged,
@@ -275,10 +341,16 @@ def hard_constraints(
         or _finite(metrics.endpoint_sinkhorn),
         # Finite-measure claim-grade selection requires a finite mass diagnostic...
         "mass_metric_finite": (not thresholds.require_mass_metric)
-        or _finite(metrics.log_mass_error),
+        or _finite(metrics.mass_error_value),
+        "mass_error_kind_ok": (not thresholds.require_mass_metric)
+        or thresholds.required_mass_error_kind is None
+        or metrics.mass_error_kind == thresholds.required_mass_error_kind,
         # ...and, when a calibration ceiling is set, the mass error must clear it.
         "mass_error_ok": (not thresholds.require_mass_metric)
-        or (_finite(metrics.log_mass_error) and float(metrics.log_mass_error) <= thresholds.log_mass_error_max),
+        or (
+            _finite(metrics.mass_error_value)
+            and float(metrics.mass_error_value) <= thresholds.log_mass_error_max
+        ),
         # Intra-trajectory minimum, not just terminal -- a mid-rollout collapse
         # below the floor is infeasible even if the terminal step recovered.
         "ess_ok": ess >= thresholds.ess_floor,
@@ -295,6 +367,7 @@ def hard_constraints(
         ),
         "semantic_ok": _frozen_ok(spec),
     }
+    constraints.update(_branch_particle_constraints(metrics, thresholds))
     if thresholds.require_heldout_provenance:
         # A reported generalization score must be genuinely held out.
         constraints["heldout_provenance_ok"] = (
@@ -387,12 +460,59 @@ def _gap_ok(gap: Optional[float], max_value: float, required: bool) -> bool:
     return float(gap) <= max_value
 
 
+def _branch_particle_constraints(
+    metrics: CREDOTrialMetrics,
+    thresholds: ConstraintThresholds,
+) -> dict[str, bool]:
+    required = thresholds.require_branch_particle_diagnostics
+    return {
+        "source_ess_ok": _optional_floor_ok(metrics.source_ess_frac, thresholds.ess_floor, required),
+        "factual_terminal_ess_ok": _optional_floor_ok(
+            metrics.factual_terminal_ess_frac, thresholds.ess_floor, required
+        ),
+        "reference_terminal_ess_ok": _optional_floor_ok(
+            metrics.reference_terminal_ess_frac, thresholds.ess_floor, required
+        ),
+        "factual_min_ess_ok": _optional_floor_ok(
+            metrics.factual_min_ess_frac_over_time, thresholds.ess_floor, required
+        ),
+        "reference_min_ess_ok": _optional_floor_ok(
+            metrics.reference_min_ess_frac_over_time, thresholds.ess_floor, required
+        ),
+        "factual_max_weight_ok": _optional_ceiling_ok(
+            metrics.factual_max_weight_frac, thresholds.max_weight_ceiling, required
+        ),
+        "reference_max_weight_ok": _optional_ceiling_ok(
+            metrics.reference_max_weight_frac, thresholds.max_weight_ceiling, required
+        ),
+        "factual_logw_range_finite": _optional_finite_ok(metrics.factual_logw_range, required),
+        "reference_logw_range_finite": _optional_finite_ok(metrics.reference_logw_range, required),
+    }
+
+
+def _optional_floor_ok(value: Optional[float], floor: float, required: bool) -> bool:
+    if not _finite(value):
+        return not required
+    return float(value) >= floor
+
+
+def _optional_ceiling_ok(value: Optional[float], ceiling: float, required: bool) -> bool:
+    if not _finite(value):
+        return not required
+    return float(value) <= ceiling
+
+
+def _optional_finite_ok(value: Optional[float], required: bool) -> bool:
+    return _finite(value) or not required
+
+
 __all__ = [
     "CLAIM_GRADE_PRESENCE_THRESHOLDS",
     "CLAIM_GRADE_THRESHOLDS",
     "ConstraintThresholds",
     "DEFAULT_PRUNER_WEIGHTS",
     "DEFAULT_THRESHOLDS",
+    "SearchProfile",
     "Standardizer",
     "claim_grade_thresholds",
     "constrained_score_from_constraints",
@@ -401,4 +521,5 @@ __all__ = [
     "hard_constraints",
     "objective_vector",
     "pruner_score",
+    "thresholds_for_profile",
 ]

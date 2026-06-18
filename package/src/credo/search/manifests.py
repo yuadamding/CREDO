@@ -10,6 +10,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import math
 import re
 import uuid
 from pathlib import Path
@@ -25,15 +26,25 @@ def _slug(value: str) -> str:
     return cleaned or uuid.uuid4().hex
 
 from .metrics import CREDOTrialResult
+from .objective import SearchProfile
 from .space import CREDOTrialSpec
 
 # Bump when the flattened trial-record schema changes (field names/prefixes).
-SEARCH_SCHEMA_VERSION = "credo.search.v1"
+SEARCH_SCHEMA_VERSION = "credo.search.v2"
 
 
 def spec_sha256(spec: CREDOTrialSpec) -> str:
     """Deterministic content hash of a trial spec (for dedup / cache keys)."""
     payload = json.dumps(dataclasses.asdict(spec), sort_keys=True, default=str)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def setting_sha256(spec: CREDOTrialSpec) -> str:
+    """Hash a setting across folds/seeds by excluding stochastic split identity."""
+    payload_dict = dataclasses.asdict(spec)
+    payload_dict.pop("seed", None)
+    payload_dict.pop("fold_id", None)
+    payload = json.dumps(payload_dict, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -43,6 +54,7 @@ def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
     record: dict[str, Any] = {
         "schema_version": SEARCH_SCHEMA_VERSION,
         "spec_sha256": spec_sha256(spec),
+        "setting_sha256": setting_sha256(spec),
         "run_dir": result.run_dir,
         "checkpoint_path": result.checkpoint_path,
         "history_path": result.history_path,
@@ -188,10 +200,220 @@ def pareto_front(
     return front
 
 
+def select_final_candidates(
+    records: Iterable[dict[str, Any]],
+    *,
+    profile: SearchProfile | str = SearchProfile.CLAIM_GRADE,
+    require_feasible: bool = True,
+    require_heldout: bool = True,
+    group_by: tuple[str, ...] = ("setting_sha256",),
+    aggregate_by: tuple[str, ...] = ("spec.fold_id", "spec.seed"),
+    objectives: list[str] | None = None,
+    sort_by: str | None = None,
+    min_folds: int | None = None,
+    min_seeds: int | None = None,
+) -> list[dict[str, Any]]:
+    """Aggregate trial records and return constrained Pareto-final candidates.
+
+    This is the selection path for refit / claim-grade settings. Scalar
+    ``pruner_score`` is allowed for cheap screening, but claim-grade final
+    selection must be based on aggregated objective axes after fold/seed checks.
+    """
+    profile = SearchProfile(profile)
+    if profile is SearchProfile.CLAIM_GRADE and sort_by == "pruner_score":
+        raise ValueError("CLAIM_GRADE final selection cannot rank by pruner_score.")
+    if profile in (SearchProfile.PARETO_REFIT, SearchProfile.CLAIM_GRADE) and not aggregate_by:
+        raise ValueError(f"{profile.value} selection requires fold/seed aggregation.")
+
+    fold_min = _profile_min_folds(profile) if min_folds is None else min_folds
+    seed_min = _profile_min_seeds(profile) if min_seeds is None else min_seeds
+    group_keys = tuple(_record_key(name) for name in group_by)
+    aggregate_keys = tuple(_record_key(name) for name in aggregate_by)
+    objective_names = objectives or ["endpoint_geom_mass", "mass_error", "gpu_seconds"]
+    objective_keys = [_objective_key(name) for name in objective_names]
+
+    rows = list(records)
+    if require_feasible:
+        rows = [r for r in rows if bool(r.get("feasible", False))]
+    if require_heldout:
+        rows = [r for r in rows if r.get("metric.validation_source") == "held_out"]
+    if profile is SearchProfile.CLAIM_GRADE:
+        rows = [r for r in rows if _record_claim_grade_ready(r)]
+    elif profile is SearchProfile.PARETO_REFIT:
+        rows = [r for r in rows if _record_pareto_refit_ready(r)]
+
+    grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = tuple(row.get(name) for name in group_keys)
+        grouped.setdefault(key, []).append(row)
+
+    candidates: list[dict[str, Any]] = []
+    skipped_for_coverage = False
+    for key, group in grouped.items():
+        folds = _distinct_values(group, aggregate_keys[0]) if len(aggregate_keys) >= 1 else set()
+        seeds = _distinct_values(group, aggregate_keys[1]) if len(aggregate_keys) >= 2 else set()
+        if len(folds) < fold_min or len(seeds) < seed_min:
+            skipped_for_coverage = True
+            continue
+        aggregate = _aggregate_group(
+            key=key,
+            group_by=group_by,
+            group=group,
+            profile=profile,
+            objective_keys=objective_keys,
+            fold_count=len(folds),
+            seed_count=len(seeds),
+        )
+        if all(_finite(aggregate.get(f"{key}.mean")) for key in objective_keys):
+            candidates.append(aggregate)
+
+    if not candidates and skipped_for_coverage:
+        raise ValueError(
+            f"{profile.value} selection found no candidates with required "
+            f"{fold_min} folds x {seed_min} seeds coverage."
+        )
+    if sort_by is not None:
+        sort_key = _aggregate_sort_key(sort_by)
+        candidates.sort(key=lambda row: _sort_value(row.get(sort_key)))
+        return candidates
+    pareto_objectives = [f"{key}.mean" for key in objective_keys]
+    return pareto_front(candidates, pareto_objectives, feasible_only=False)
+
+
 def _dominates(a: dict[str, Any], b: dict[str, Any], objectives: list[str]) -> bool:
     no_worse = all(float(a[o]) <= float(b[o]) for o in objectives)
     strictly_better = any(float(a[o]) < float(b[o]) for o in objectives)
     return no_worse and strictly_better
+
+
+def _aggregate_group(
+    *,
+    key: tuple[Any, ...],
+    group_by: tuple[str, ...],
+    group: list[dict[str, Any]],
+    profile: SearchProfile,
+    objective_keys: list[str],
+    fold_count: int,
+    seed_count: int,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "profile": profile.value,
+        "n_trials": len(group),
+        "fold_count": fold_count,
+        "seed_count": seed_count,
+        "fold_pass_rate": sum(1.0 for row in group if row.get("feasible", False)) / max(len(group), 1),
+        "worst_fold_ess": _min_finite(
+            row.get("metric.min_ess_frac_over_time", row.get("metric.terminal_ess_frac_min"))
+            for row in group
+        ),
+        "worst_fold_max_weight_frac": _max_finite(row.get("metric.max_weight_frac_mean") for row in group),
+        "pruner_score.mean": _mean_finite(row.get("pruner_score") for row in group),
+    }
+    for name, value in zip(group_by, key):
+        out[name] = value
+    for objective in objective_keys:
+        values = [_to_float(row.get(objective)) for row in group]
+        finite = [value for value in values if math.isfinite(value)]
+        if finite:
+            out[f"{objective}.mean"] = sum(finite) / len(finite)
+            out[f"{objective}.se"] = _standard_error(finite)
+    return out
+
+
+def _objective_key(name: str) -> str:
+    return name if name.startswith("objective.") else f"objective.{name}"
+
+
+def _aggregate_sort_key(name: str) -> str:
+    if name == "pruner_score":
+        return "pruner_score.mean"
+    if name.endswith(".mean") or name.endswith(".se"):
+        return name
+    if name.startswith("objective."):
+        return f"{name}.mean"
+    return f"objective.{name}.mean"
+
+
+def _record_key(name: str) -> str:
+    if "." in name or name in {"spec_sha256", "setting_sha256", "schema_version", "feasible", "pruner_score"}:
+        return name
+    return f"spec.{name}"
+
+
+def _distinct_values(records: list[dict[str, Any]], key: str) -> set[Any]:
+    return {record.get(key) for record in records if record.get(key) is not None}
+
+
+def _profile_min_folds(profile: SearchProfile) -> int:
+    return 4 if profile in (SearchProfile.PARETO_REFIT, SearchProfile.CLAIM_GRADE) else 1
+
+
+def _profile_min_seeds(profile: SearchProfile) -> int:
+    return 3 if profile in (SearchProfile.PARETO_REFIT, SearchProfile.CLAIM_GRADE) else 1
+
+
+def _record_pareto_refit_ready(record: dict[str, Any]) -> bool:
+    return (
+        record.get("metric.mass_error_kind") == "abs_log_residual"
+        and _finite(record.get("metric.mass_error_value"))
+        and _finite(record.get("metric.control_null_gap"))
+    )
+
+
+def _record_claim_grade_ready(record: dict[str, Any]) -> bool:
+    return _record_pareto_refit_ready(record) and all(
+        _finite(record.get(key))
+        for key in (
+            "metric.source_ess_frac",
+            "metric.factual_terminal_ess_frac",
+            "metric.reference_terminal_ess_frac",
+            "metric.factual_min_ess_frac_over_time",
+            "metric.reference_min_ess_frac_over_time",
+            "metric.factual_max_weight_frac",
+            "metric.reference_max_weight_frac",
+            "metric.factual_logw_range",
+            "metric.reference_logw_range",
+        )
+    )
+
+
+def _to_float(value: Any) -> float:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return math.nan
+    return out if math.isfinite(out) else math.nan
+
+
+def _mean_finite(values: Iterable[Any]) -> float:
+    finite = [_to_float(value) for value in values]
+    finite = [value for value in finite if math.isfinite(value)]
+    return sum(finite) / len(finite) if finite else math.nan
+
+
+def _min_finite(values: Iterable[Any]) -> float:
+    finite = [_to_float(value) for value in values]
+    finite = [value for value in finite if math.isfinite(value)]
+    return min(finite) if finite else math.nan
+
+
+def _max_finite(values: Iterable[Any]) -> float:
+    finite = [_to_float(value) for value in values]
+    finite = [value for value in finite if math.isfinite(value)]
+    return max(finite) if finite else math.nan
+
+
+def _standard_error(values: list[float]) -> float:
+    if len(values) <= 1:
+        return 0.0
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / (len(values) - 1)
+    return math.sqrt(variance / len(values))
+
+
+def _sort_value(value: Any) -> float:
+    out = _to_float(value)
+    return out if math.isfinite(out) else math.inf
 
 
 def _finite(value: Any) -> bool:
@@ -207,6 +429,8 @@ __all__ = [
     "load_trial_records",
     "pareto_front",
     "reduce_trial_dirs",
+    "select_final_candidates",
+    "setting_sha256",
     "spec_sha256",
     "trial_record",
     "write_trial_dir",

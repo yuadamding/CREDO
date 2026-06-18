@@ -92,6 +92,22 @@ class CREDOTrialSpec:
 
     # --- dataset / problem identity (provided, not searched) ---
     dataset_kind: Literal["endpoint", "trajectory", "single_time"] = "endpoint"
+    claim_type: Literal[
+        "endpoint_reconstruction",
+        "same_perturbation_counterfactual",
+        "guide_generalization",
+        "target_gene_generalization",
+        "unseen_perturbation_prediction",
+        "time_holdout_prediction",
+    ] = "endpoint_reconstruction"
+    split_type: Literal[
+        "random_cell",
+        "sample_holdout",
+        "guide_holdout",
+        "target_gene_holdout",
+        "perturbation_holdout",
+        "time_holdout",
+    ] = "random_cell"
     data_id: str = "dataset"
     seed: int = 0
     fold_id: Optional[str] = None
@@ -99,6 +115,17 @@ class CREDOTrialSpec:
     # changes results, so it must be hashed into the spec (two trials with the
     # same hyperparameters but different latent_dim are different trials).
     latent_dim: Optional[int] = None
+    latent_source: Optional[str] = None
+    latent_key: Optional[str] = None
+    encoder_checkpoint_sha256: Optional[str] = None
+    representation_config_sha256: Optional[str] = None
+    gene_panel_sha256: Optional[str] = None
+    normalization_sha256: Optional[str] = None
+    hvg_selection_sha256: Optional[str] = None
+    batch_correction_sha256: Optional[str] = None
+    input_data_sha256: Optional[str] = None
+    mass_table_sha256: Optional[str] = None
+    split_file_sha256: Optional[str] = None
 
     # --- model capacity (SEARCHABLE) ---
     embedding_dim: int = 8

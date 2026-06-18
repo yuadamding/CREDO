@@ -10,7 +10,7 @@ so the search layer itself stays light and unit-testable. A real endpoint
 adapter looks like::
 
     def endpoint_train_fn(cfg, spec, reporter):
-        problem = build_endpoint_problem(...)          # data -> EndpointProblem
+        problem = build_endpoint_problem_from_config(cfg)
         model = build_model_from_config(cfg, problem)  # FullDynamicsModel
         trainer = Trainer(model=model, problem=problem, config=cfg,
                           reporter=reporter, output_dir=cfg.output_dir)
@@ -19,9 +19,8 @@ adapter looks like::
         return metrics_from_history(history.to_dict(), eval_summary=summary,
                                     wall_seconds=..., diverged=trainer.diverged)
 
-The data -> problem step is the part that still needs a ``Namespace``-free entry
-point extracted from the CLI runners; everything downstream of ``cfg`` is already
-config-driven.
+Register a project-specific factory with ``register_problem_builder`` so this
+data -> problem step stays config-driven and independent of CLI namespaces.
 """
 from __future__ import annotations
 

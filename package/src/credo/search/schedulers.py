@@ -80,7 +80,7 @@ def suggest_light_screen_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSp
         "lr_embed": trial.suggest_float("lr_embed", 1e-5, 5e-3, log=True),
         "weight_decay": trial.suggest_float("weight_decay", 1e-7, 1e-2, log=True),
         "lambda_weak": trial.suggest_float("lambda_weak", 1e-4, 10.0, log=True),
-        "lambda_count": trial.suggest_float("lambda_count", 0.0, 10.0),
+        "lambda_count": _suggest_lambda_count(trial),
         "sinkhorn_tau": trial.suggest_float("sinkhorn_tau", 0.1, 10.0, log=True),
         "n_particles": trial.suggest_categorical("n_particles", [64, 128, 256]),
         "n_steps": trial.suggest_categorical("n_steps", [8, 16, 24]),
@@ -92,6 +92,16 @@ def suggest_light_screen_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSp
 # Back-compat alias. ``suggest_light_screen_spec`` is the explicit name; add
 # mode-specific profiles (endpoint/trajectory/single_time/claim-grade) as needed.
 suggest_spec = suggest_light_screen_spec
+
+
+def _suggest_lambda_count(trial: Any) -> float:
+    """Mixture prior for count loss: point mass at zero plus log-scale nonzero ranges."""
+    regime = float(trial.suggest_float("lambda_count_regime", 0.0, 1.0))
+    if regime < 0.25:
+        return 0.0
+    if regime < 0.85:
+        return float(trial.suggest_float("lambda_count_low", 1e-3, 1.0, log=True))
+    return float(trial.suggest_float("lambda_count_high", 1.0, 10.0, log=True))
 
 
 def make_study(
