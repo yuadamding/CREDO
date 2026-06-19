@@ -112,6 +112,16 @@ class CREDOTrialMetrics:
     factual_logw_range: float = math.nan
     reference_logw_range: float = math.nan
 
+    # Claim-report diagnostics. These are report-only by default: final
+    # claim-grade selection should not optimize away diffusion, but reports need
+    # to expose whether hits remain stable under diffusion and fidelity checks.
+    drift_action: Optional[float] = None
+    diffusion_action: Optional[float] = None
+    growth_action: Optional[float] = None
+    diffusion_ablation_delta: Optional[float] = None
+    biology_axis_stability_under_diffusion_ablation: Optional[float] = None
+    particle_step_convergence_status: Optional[str] = None
+
     # Cost / status
     gpu_seconds: float = math.nan
     wall_seconds: float = math.nan

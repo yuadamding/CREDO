@@ -37,6 +37,9 @@ class ProblemBuilderMetadata:
     fold_grid_sha256: Optional[str] = None
     seed_grid: Optional[str] = None
     split_manifest_sha256: Optional[str] = None
+    homolog_map_name: Optional[str] = None
+    homolog_map_version: Optional[str] = None
+    homolog_map_sha256: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.builder_name:

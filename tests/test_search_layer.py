@@ -66,9 +66,12 @@ BUILDER_METADATA = {
     "gene_symbol_namespace": "MGI",
     "expression_gene_universe_hash": "expr-universe",
     "decoder_gene_panel_hash": "decoder-genes",
-    "fold_grid_sha256": "fold-grid",
+    "fold_grid_sha256": "dc180e48e8c3887e6be464d691d735e6df2ee0fd1eab69be13295d05c8bc6506",
     "seed_grid": "0,1,2",
     "split_manifest_sha256": "split-manifest",
+    "homolog_map_name": "HGNC_MGI",
+    "homolog_map_version": "2026-01",
+    "homolog_map_sha256": "homolog-map",
 }
 REQUIRED_FOLDS = ("fold0", "fold1", "fold2", "fold3")
 REQUIRED_SEEDS = (0, 1, 2)
@@ -649,7 +652,10 @@ def test_claim_grade_uses_explicit_required_fold_seed_grid(tmp_path) -> None:
             metrics = _complete_claim_grade_metrics()
             result = run_credo_trial(
                 CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
-                train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
+                train_fn=lambda c, s, r, metrics=metrics: CREDOTrainOutput(
+                    metrics=metrics,
+                    builder_metadata=dict(BUILDER_METADATA, seed_grid="0,1,7"),
+                ),
                 output_dir=str(tmp_path / f"{fold}_{seed}"),
                 thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
             )
@@ -663,13 +669,21 @@ def test_claim_grade_uses_explicit_required_fold_seed_grid(tmp_path) -> None:
         required_folds=("fold0", "fold1", "fold2", "fold3"),
         required_seeds=(0, 1, 7),
     )
-    with pytest.raises(ValueError, match="4 folds x 3 seeds"):
+    assert select_final_candidates(
+        records,
+        profile="claim_grade",
+        required_folds=("fold0", "fold1", "fold2", "fold3"),
+        required_seeds=("0", "1", "7"),
+    )
+    assert (
         select_final_candidates(
             records,
             profile="claim_grade",
             required_folds=("fold0", "fold1", "fold2", "fold3"),
             required_seeds=(0, 1, 2),
         )
+        == []
+    )
 
 
 def test_guide_claim_requires_guide_concordance_gap(tmp_path) -> None:
@@ -768,6 +782,84 @@ def test_claim_grade_rejects_presence_only_threshold_profiles(tmp_path) -> None:
         profile="claim_grade",
         require_finite_thresholds=False,
         **_claim_grade_grid_kwargs(),
+    )
+
+
+def test_claim_grade_group_requires_uniform_threshold_hash(tmp_path) -> None:
+    from credo.search import select_final_candidates
+    from credo.search.manifests import trial_record
+
+    records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = _complete_claim_grade_metrics()
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
+                output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
+            )
+            records.append(trial_record(result))
+
+    expected_hash = records[0]["constraints.thresholds_sha256"]
+    assert select_final_candidates(
+        records,
+        profile="claim_grade",
+        expected_thresholds_sha256=expected_hash,
+        expected_fold_grid_sha256=BUILDER_METADATA["fold_grid_sha256"],
+        expected_split_manifest_sha256="split-manifest",
+        **_claim_grade_grid_kwargs(),
+    )
+
+    mixed = [dict(record) for record in records]
+    mixed[0]["constraints.thresholds_sha256"] = "other-threshold-floor"
+    assert select_final_candidates(mixed, profile="claim_grade", **_claim_grade_grid_kwargs()) == []
+    assert (
+        select_final_candidates(
+            records,
+            profile="claim_grade",
+            expected_thresholds_sha256="unexpected-threshold-floor",
+            **_claim_grade_grid_kwargs(),
+        )
+        == []
+    )
+
+
+def test_claim_grade_requires_builder_grid_metadata_match(tmp_path) -> None:
+    from credo.search import select_final_candidates
+    from credo.search.manifests import trial_record
+
+    records = []
+    wrong_grid = dict(
+        BUILDER_METADATA,
+        fold_grid_sha256="wrong-fold-grid",
+        seed_grid="0,1,9",
+        split_manifest_sha256="wrong-split",
+    )
+    for fold in range(4):
+        for seed in range(3):
+            metrics = _complete_claim_grade_metrics()
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: CREDOTrainOutput(
+                    metrics=metrics,
+                    builder_metadata=wrong_grid,
+                ),
+                output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
+            )
+            records.append(trial_record(result))
+
+    assert select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs()) == []
+    assert (
+        select_final_candidates(
+            records,
+            profile="claim_grade",
+            expected_fold_grid_sha256="wrong-fold-grid",
+            expected_split_manifest_sha256="wrong-split",
+            **_claim_grade_grid_kwargs(),
+        )
+        == []
     )
 
 
@@ -983,10 +1075,29 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
             "control_null": [0.1, 0.2, 0.3, 0.4],
             "guide_shuffle": [0.2, 0.3, 0.4, 0.5],
         },
+        alternatives={"guide_shuffle": "less"},
     )
     assert nulls["control_null"]["empirical_p"] == pytest.approx(0.2)
+    assert nulls["guide_shuffle"]["empirical_p"] == pytest.approx(0.2)
     assert nulls["control_null"]["fdr"] <= 0.4
     assert nulls["guide_shuffle"]["null_gap_p95"] == pytest.approx(0.485)
+
+    axis_tail_nulls = summarize_null_suite(
+        {"upper": 5.0, "lower": -5.0, "centered": 3.0},
+        {
+            "upper": [0.0, 1.0, 2.0, 3.0],
+            "lower": [-3.0, -2.0, -1.0, 0.0],
+            "centered": [-3.0, -1.0, 1.0, 3.0],
+        },
+        axes=(
+            BiologyAxisSpec("upper", ("A",), null_alternative="greater"),
+            BiologyAxisSpec("lower", ("B",), null_alternative="less"),
+            BiologyAxisSpec("centered", ("C",), null_alternative="two_sided"),
+        ),
+    )
+    assert axis_tail_nulls["upper"]["empirical_p"] == pytest.approx(0.2)
+    assert axis_tail_nulls["lower"]["empirical_p"] == pytest.approx(0.2)
+    assert axis_tail_nulls["centered"]["empirical_p"] == pytest.approx(0.6)
 
     credo = baseline_export_record(
         "credo_endpoint_proxy",
@@ -1059,6 +1170,23 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
         homolog_mapped_axes=("tnf",),
     )
     assert "organism_mismatch" not in mapped["tnf"]["failed_gates"]
+    assert "missing_homolog_map_provenance" in mapped["tnf"]["failed_gates"]
+    mapped_with_provenance = evaluate_biology_axis_gates(
+        {"tnf": 1.2},
+        null_summaries={"tnf": {"empirical_p": 0.01, "fdr": 0.02}},
+        coverage_by_axis={"tnf": 1.0},
+        axes=axes[:1],
+        dataset_organism="human",
+        homolog_mapped_axes=("tnf",),
+        homolog_map_name="HGNC_MGI",
+        homolog_map_version="2026-01",
+        homolog_map_sha256="hash",
+        homolog_marker_counts={"tnf": 1},
+    )
+    assert mapped_with_provenance["tnf"]["pass"] is True
+    assert mapped_with_provenance["tnf"]["original_organism"] == "mouse"
+    assert mapped_with_provenance["tnf"]["scored_organism"] == "human"
+    assert mapped_with_provenance["tnf"]["homolog_map_sha256"] == "hash"
 
 
 def test_problem_builder_registry_builds_from_config_without_namespace() -> None:
@@ -1091,9 +1219,12 @@ def test_problem_builder_registry_builds_from_config_without_namespace() -> None
         gene_symbol_namespace="MGI",
         expression_gene_universe_hash="expr-universe",
         decoder_gene_panel_hash="decoder-genes",
-        fold_grid_sha256="fold-grid",
+        fold_grid_sha256=BUILDER_METADATA["fold_grid_sha256"],
         seed_grid="0,1,2",
         split_manifest_sha256="split-manifest",
+        homolog_map_name="HGNC_MGI",
+        homolog_map_version="2026-01",
+        homolog_map_sha256="homolog-map",
     )
     registry.register(
         "endpoint",
@@ -1111,6 +1242,7 @@ def test_problem_builder_registry_builds_from_config_without_namespace() -> None
     assert record["builder_name"] == "tiny_builder"
     assert record["mass_table_hash"] == "mass"
     assert record["dataset_organism"] == "mouse"
+    assert record["homolog_map_sha256"] == "homolog-map"
     with pytest.raises(KeyError, match="single_time"):
         build_single_time_problem_from_config(cfg, registry=registry)
     with pytest.raises(ValueError, match="data_id"):
@@ -1121,7 +1253,14 @@ def test_trial_record_persists_builder_metadata_and_hashes_identity(tmp_path) ->
     from credo.search.manifests import setting_sha256, trial_record
 
     spec = CREDOTrialSpec(fold_id="fold0", seed=1)
-    metrics = _complete_claim_grade_metrics()
+    metrics = _complete_claim_grade_metrics(
+        drift_action=0.3,
+        diffusion_action=0.4,
+        growth_action=0.5,
+        diffusion_ablation_delta=0.05,
+        biology_axis_stability_under_diffusion_ablation=0.9,
+        particle_step_convergence_status="pass",
+    )
     result = run_credo_trial(
         spec,
         train_fn=lambda c, s, r: _claim_grade_output(metrics),
@@ -1138,7 +1277,12 @@ def test_trial_record_persists_builder_metadata_and_hashes_identity(tmp_path) ->
     assert record["constraints.threshold_profile"] == "claim_grade_finite"
     assert record["constraints.control_null_max"] == pytest.approx(0.05)
     assert record["constraints.log_mass_error_max"] == pytest.approx(0.2)
+    assert record["constraints.mass_error_kind"] == "abs_log_residual"
+    assert record["constraints.mass_error_max"] == pytest.approx(0.2)
+    assert record["constraints.mass_error_units"] == "abs_log_residual"
     assert record["constraints.thresholds_sha256"]
+    assert record["metric.diffusion_action"] == pytest.approx(0.4)
+    assert record["metric.particle_step_convergence_status"] == "pass"
     assert record["setting_sha256"] == setting_sha256(spec, BUILDER_METADATA)
     changed = dict(BUILDER_METADATA, gene_panel_hash="other-genes")
     assert setting_sha256(spec, BUILDER_METADATA) != setting_sha256(spec, changed)
@@ -1828,6 +1972,24 @@ def test_pruner_uses_endpoint_sinkhorn_when_combined_proxy_absent() -> None:
     # combined proxy (pruner and feasibility now agree on the headline endpoint).
     assert hard_constraints(m, CREDOTrialSpec())["fit_metrics_finite"] is True
     assert pruner_score(m) < MISSING_METRIC_PENALTY
+
+
+def test_pruner_score_default_and_empty_weights_do_not_crash() -> None:
+    m = CREDOTrialMetrics(
+        endpoint_geom_mass=1.0,
+        mass_error_value=0.1,
+        mass_error_kind="abs_log_residual",
+        terminal_ess_frac_min=0.4,
+        min_ess_frac_over_time=0.4,
+        max_weight_frac_mean=0.2,
+        converged=True,
+    )
+
+    assert math.isfinite(pruner_score(m))
+    assert math.isfinite(pruner_score(m, weights={}))
+    assert pruner_score(m, weights={"log_mass_error": 0.0}) == pytest.approx(
+        pruner_score(m, weights={"mass_error": 0.0})
+    )
 
 
 def test_decomposed_eval_summary_sets_heldout_endpoint_provenance() -> None:

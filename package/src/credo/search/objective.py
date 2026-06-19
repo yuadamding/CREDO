@@ -220,9 +220,13 @@ def threshold_metadata(thresholds: ConstraintThresholds) -> dict[str, object]:
     payload = dataclasses.asdict(thresholds)
     profile = _threshold_profile(thresholds)
     encoded = json.dumps({"profile": profile, **payload}, sort_keys=True, default=str)
+    mass_error_kind = payload.get("required_mass_error_kind")
     return {
         "threshold_profile": profile,
         "thresholds_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        "mass_error_kind": mass_error_kind,
+        "mass_error_max": payload["log_mass_error_max"],
+        "mass_error_units": mass_error_kind,
         **payload,
     }
 
@@ -315,11 +319,11 @@ def pruner_score(
     """
     if metrics.diverged:
         return DIVERGENCE_PENALTY
+    provided_weights = dict(weights or {})
     w = dict(DEFAULT_PRUNER_WEIGHTS)
-    if weights:
-        w.update(weights)
-        if "log_mass_error" in weights and "mass_error" not in weights:
-            w["mass_error"] = weights["log_mass_error"]
+    w.update(provided_weights)
+    if "log_mass_error" in provided_weights and "mass_error" not in provided_weights:
+        w["mass_error"] = provided_weights["log_mass_error"]
     std = standardizer or Standardizer()
 
     score = 0.0

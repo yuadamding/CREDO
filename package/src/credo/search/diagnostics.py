@@ -320,7 +320,7 @@ def summarize_null_distribution(
     elif alternative == "less":
         extreme = sum(1 for value in values if value <= observed)
     else:
-        extreme = sum(1 for value in values if abs(value) >= abs(observed))
+        extreme = sum(1 for value in values if abs(value - mean) >= abs(observed - mean))
     empirical_p = (extreme + 1.0) / (len(values) + 1.0)
     if sd > 0:
         null_gap_z = (observed - mean) / sd
@@ -342,10 +342,18 @@ def summarize_null_suite(
     nulls_by_name: Mapping[str, Iterable[float]],
     *,
     alternative: str = "greater",
+    alternatives: Optional[Mapping[str, str]] = None,
+    axes: Optional[Iterable[BiologyAxisSpec]] = None,
 ) -> dict[str, dict[str, float]]:
     """Summarize multiple nulls and apply Benjamini-Hochberg FDR correction."""
+    axis_alternatives = {axis.name: axis.null_alternative for axis in axes or ()}
+    alternatives = alternatives or {}
     summaries = {
-        name: summarize_null_distribution(nulls_by_name.get(name, ()), observed, alternative=alternative)
+        name: summarize_null_distribution(
+            nulls_by_name.get(name, ()),
+            observed,
+            alternative=alternatives.get(name, axis_alternatives.get(name, alternative)),
+        )
         for name, observed in observed_gaps.items()
     }
     p_values = {name: summary["empirical_p"] for name, summary in summaries.items()}
@@ -402,6 +410,10 @@ def evaluate_biology_axis_gates(
     coverage_by_axis: Optional[Mapping[str, float]] = None,
     dataset_organism: str | None = None,
     homolog_mapped_axes: Optional[Iterable[str]] = None,
+    homolog_map_name: str | None = None,
+    homolog_map_version: str | None = None,
+    homolog_map_sha256: str | None = None,
+    homolog_marker_counts: Optional[Mapping[str, int]] = None,
     axes: Iterable[BiologyAxisSpec] = DEFAULT_BIOLOGY_AXES,
     score_abs_min: float = 0.0,
     empirical_p_max: float = 0.05,
@@ -410,6 +422,7 @@ def evaluate_biology_axis_gates(
     """Gate biology support separately for each configured axis."""
     null_summaries = null_summaries or {}
     coverage_by_axis = coverage_by_axis or {}
+    homolog_marker_counts = homolog_marker_counts or {}
     homolog_mapped = set(homolog_mapped_axes or ())
     out: dict[str, dict[str, object]] = {}
     for axis in axes:
@@ -439,18 +452,30 @@ def evaluate_biology_axis_gates(
         organism_mismatch = _organism_mismatch(axis, dataset_organism)
         if organism_mismatch and axis.name not in homolog_mapped:
             failed.append("organism_mismatch")
+        if axis.name in homolog_mapped and any(
+            _blank(value) for value in (homolog_map_name, homolog_map_version, homolog_map_sha256)
+        ):
+            failed.append("missing_homolog_map_provenance")
+        n_markers_after_mapping = homolog_marker_counts.get(axis.name, len(axis.markers))
         out[axis.name] = {
             "axis": axis.name,
             "axis_kind": axis.axis_kind,
             "markers": ",".join(axis.markers),
             "organism": axis.organism,
             "dataset_organism": dataset_organism,
+            "original_organism": axis.organism,
+            "scored_organism": dataset_organism or axis.organism,
             "gene_symbol_namespace": axis.gene_symbol_namespace,
             "module_source": axis.module_source,
             "null_alternative": axis.null_alternative,
             "marker_coverage": coverage,
             "min_coverage": axis.min_coverage,
             "homolog_mapped": bool(axis.name in homolog_mapped),
+            "homolog_map_name": homolog_map_name,
+            "homolog_map_version": homolog_map_version,
+            "homolog_map_sha256": homolog_map_sha256,
+            "n_markers_before_mapping": len(axis.markers),
+            "n_markers_after_mapping": int(n_markers_after_mapping),
             "score": score,
             "empirical_p": empirical_p,
             "fdr": fdr,
@@ -599,6 +624,10 @@ def _finite_nonnegative_values(values: Iterable[float]) -> list[float]:
         if math.isfinite(finite) and finite >= 0:
             out.append(finite)
     return out
+
+
+def _blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _organism_mismatch(axis: BiologyAxisSpec, dataset_organism: str | None) -> bool:

@@ -284,6 +284,10 @@ def select_final_candidates(
     min_seeds: int | None = None,
     required_folds: Iterable[Any] | None = None,
     required_seeds: Iterable[Any] | None = None,
+    expected_thresholds_sha256: str | None = None,
+    expected_fold_grid_sha256: str | None = None,
+    expected_seed_grid: Iterable[Any] | str | None = None,
+    expected_split_manifest_sha256: str | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate trial records and return constrained Pareto-final candidates.
 
@@ -322,6 +326,10 @@ def select_final_candidates(
     aggregate_keys = tuple(_record_key(name) for name in aggregate_by)
     required_fold_values = tuple(required_folds) if required_folds is not None else None
     required_seed_values = tuple(required_seeds) if required_seeds is not None else None
+    requested_fold_grid_sha256 = expected_fold_grid_sha256 or _fold_grid_sha256(required_fold_values)
+    requested_seed_grid = _canonical_seed_grid(
+        expected_seed_grid if expected_seed_grid is not None else required_seed_values
+    )
     all_rows = [_record_with_canonical_endpoint(row) for row in records]
     all_grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for row in all_rows:
@@ -342,6 +350,9 @@ def select_final_candidates(
                 require_guide_concordance=require_guide_concordance,
                 require_builder_metadata=builder_required,
                 require_finite_thresholds=finite_thresholds_required,
+                expected_fold_grid_sha256=requested_fold_grid_sha256,
+                expected_seed_grid=requested_seed_grid,
+                expected_split_manifest_sha256=expected_split_manifest_sha256,
             )
         ]
     elif profile is SearchProfile.PARETO_REFIT:
@@ -369,6 +380,11 @@ def select_final_candidates(
         )
         if not coverage["ok"]:
             skipped_for_coverage = True
+            continue
+        if profile is SearchProfile.CLAIM_GRADE and not _claim_grade_group_uniformity_ready(
+            group,
+            expected_thresholds_sha256=expected_thresholds_sha256,
+        ):
             continue
         total_group = all_grouped.get(key, group)
         aggregate = _aggregate_group(
@@ -562,11 +578,15 @@ def _fold_seed_coverage(
             "missing_pairs": [],
         }
     fold_key, seed_key = aggregate_keys[:2]
-    observed_folds = sorted(_distinct_values(records, fold_key), key=str)
-    observed_seeds = sorted(_distinct_values(records, seed_key), key=str)
-    folds = sorted(tuple(required_folds), key=str) if required_folds is not None else observed_folds
-    seeds = sorted(tuple(required_seeds), key=str) if required_seeds is not None else observed_seeds
-    observed_pairs = {(row.get(fold_key), row.get(seed_key)) for row in records}
+    observed_folds = sorted({_canonical_fold_id(value) for value in _distinct_values(records, fold_key)})
+    observed_seeds = sorted({_canonical_seed_id(value) for value in _distinct_values(records, seed_key)})
+    folds = _canonical_fold_values(required_folds) if required_folds is not None else observed_folds
+    seeds = _canonical_seed_values(required_seeds) if required_seeds is not None else observed_seeds
+    observed_pairs = {
+        (_canonical_fold_id(row.get(fold_key)), _canonical_seed_id(row.get(seed_key)))
+        for row in records
+        if row.get(fold_key) is not None and row.get(seed_key) is not None
+    }
     required_pairs = {(fold, seed) for fold in folds for seed in seeds}
     missing = sorted(required_pairs - observed_pairs, key=lambda item: (str(item[0]), str(item[1])))
     ok = (
@@ -635,6 +655,9 @@ _REQUIRED_BUILDER_FIELDS = (
     "builder.gene_symbol_namespace",
     "builder.expression_gene_universe_hash",
     "builder.decoder_gene_panel_hash",
+    "builder.fold_grid_sha256",
+    "builder.seed_grid",
+    "builder.split_manifest_sha256",
 )
 
 
@@ -644,6 +667,9 @@ def _record_claim_grade_ready(
     require_guide_concordance: bool | None,
     require_builder_metadata: bool,
     require_finite_thresholds: bool,
+    expected_fold_grid_sha256: str | None,
+    expected_seed_grid: str | None,
+    expected_split_manifest_sha256: str | None,
 ) -> bool:
     branch_ready = _record_pareto_refit_ready(record) and all(
         _finite(record.get(key))
@@ -669,8 +695,16 @@ def _record_claim_grade_ready(
             return False
         if require_finite_thresholds and not _guide_threshold_ready(record):
             return False
-    if require_builder_metadata and not _claim_grade_builder_metadata_ready(record):
-        return False
+    if require_builder_metadata:
+        if not _claim_grade_builder_metadata_ready(record):
+            return False
+        if not _claim_grade_builder_grid_ready(
+            record,
+            expected_fold_grid_sha256=expected_fold_grid_sha256,
+            expected_seed_grid=expected_seed_grid,
+            expected_split_manifest_sha256=expected_split_manifest_sha256,
+        ):
+            return False
     if require_finite_thresholds and not _claim_grade_thresholds_ready(record):
         return False
     return True
@@ -686,12 +720,49 @@ def _claim_grade_builder_metadata_ready(record: dict[str, Any]) -> bool:
 
 
 def _claim_grade_thresholds_ready(record: dict[str, Any]) -> bool:
+    mass_error_kind = record.get(
+        "constraints.mass_error_kind",
+        record.get("constraints.required_mass_error_kind"),
+    )
+    mass_error_max = record.get(
+        "constraints.mass_error_max",
+        record.get("constraints.log_mass_error_max"),
+    )
     return (
         record.get("constraints.threshold_profile") == "claim_grade_finite"
         and _finite(record.get("constraints.control_null_max"))
-        and _finite(record.get("constraints.log_mass_error_max"))
+        and mass_error_kind == "abs_log_residual"
+        and _finite(mass_error_max)
         and not _blank(record.get("constraints.thresholds_sha256"))
     )
+
+
+def _claim_grade_builder_grid_ready(
+    record: dict[str, Any],
+    *,
+    expected_fold_grid_sha256: str | None,
+    expected_seed_grid: str | None,
+    expected_split_manifest_sha256: str | None,
+) -> bool:
+    if expected_fold_grid_sha256 is not None and record.get("builder.fold_grid_sha256") != expected_fold_grid_sha256:
+        return False
+    if expected_seed_grid is not None and _canonical_seed_grid(record.get("builder.seed_grid")) != expected_seed_grid:
+        return False
+    return not (
+        expected_split_manifest_sha256 is not None
+        and record.get("builder.split_manifest_sha256") != expected_split_manifest_sha256
+    )
+
+
+def _claim_grade_group_uniformity_ready(
+    group: list[dict[str, Any]],
+    *,
+    expected_thresholds_sha256: str | None,
+) -> bool:
+    threshold_hashes = _unique_nonblank(row.get("constraints.thresholds_sha256") for row in group)
+    if len(threshold_hashes) != 1:
+        return False
+    return expected_thresholds_sha256 is None or next(iter(threshold_hashes)) == expected_thresholds_sha256
 
 
 def _guide_threshold_ready(record: dict[str, Any]) -> bool:
@@ -703,6 +774,50 @@ def _guide_threshold_ready(record: dict[str, Any]) -> bool:
 
 def _blank(value: Any) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _unique_nonblank(values: Iterable[Any]) -> set[str]:
+    return {str(value) for value in values if not _blank(value)}
+
+
+def _canonical_fold_id(value: Any) -> str:
+    return str(value).strip()
+
+
+def _canonical_fold_values(values: Iterable[Any]) -> list[str]:
+    return sorted({_canonical_fold_id(value) for value in values})
+
+
+def _canonical_seed_id(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("seed values must be integer-like, not booleans.")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"seed values must be integer-like, got {value!r}.")
+        return int(value)
+    text = str(value).strip()
+    if not text:
+        raise ValueError("seed values must not be blank.")
+    return int(text)
+
+
+def _canonical_seed_values(values: Iterable[Any]) -> list[int]:
+    return sorted({_canonical_seed_id(value) for value in values})
+
+
+def _canonical_seed_grid(values: Iterable[Any] | str | None) -> str | None:
+    if values is None:
+        return None
+    if isinstance(values, str):
+        values = [value.strip() for value in values.split(",") if value.strip()]
+    return ",".join(str(seed) for seed in _canonical_seed_values(values))
+
+
+def _fold_grid_sha256(folds: Iterable[Any] | None) -> str | None:
+    if folds is None:
+        return None
+    payload = json.dumps({"folds": _canonical_fold_values(folds)}, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _to_float(value: Any) -> float:
