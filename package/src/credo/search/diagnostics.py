@@ -24,7 +24,9 @@ BASELINE_KINDS: tuple[str, ...] = (
 BASELINE_STATUSES: tuple[str, ...] = ("planned", "available", "skipped", "failed")
 BASELINE_PROVENANCE_FIELDS: tuple[str, ...] = (
     "baseline_version",
+    "baseline_commit_sha",
     "export_schema_version",
+    "artifact_sha256",
     "input_measure_hash",
     "latent_space_hash",
     "mass_table_hash",
@@ -385,6 +387,7 @@ def baseline_export_record(
     baseline_kind: str,
     *,
     artifact_path: str | Path | None = None,
+    artifact_sha256: str | None = None,
     metrics: Optional[Mapping[str, float]] = None,
     status: str = "planned",
     notes: str | None = None,
@@ -405,6 +408,7 @@ def baseline_export_record(
         "baseline_kind": baseline_kind,
         "status": status,
         "artifact_path": None if artifact_path is None else str(artifact_path),
+        "artifact_sha256": artifact_sha256,
         "notes": notes,
         "baseline_version": baseline_version,
         "baseline_commit_sha": baseline_commit_sha,
@@ -440,6 +444,8 @@ def baseline_export_manifest(
             baseline = str(row.get("baseline_kind"))
             if baseline not in required_set or row.get("status") != "available":
                 continue
+            if _blank(row.get("artifact_path")):
+                provenance_missing.append(f"{baseline}.artifact_path")
             provenance_missing.extend(
                 f"{baseline}.{field}"
                 for field in BASELINE_PROVENANCE_FIELDS
@@ -488,6 +494,27 @@ def evaluate_biology_axis_gates(
         fdr = _finite_or_nan(null_summary.get("fdr"))
         coverage = _finite_or_nan(coverage_by_axis.get(axis.name))
         scored_coverage = _finite_or_nan(scored_coverage_by_axis.get(axis.name, coverage))
+        unmapped_markers = tuple(unmapped_markers_by_axis.get(axis.name, ()))
+        ambiguous_markers = tuple(ambiguous_markers_by_axis.get(axis.name, ()))
+        unmapped_set = {str(marker) for marker in unmapped_markers}
+        ambiguous_set = {str(marker) for marker in ambiguous_markers}
+        n_markers_after_mapping = int(homolog_marker_counts.get(axis.name, len(axis.markers)))
+        n_markers_scored_including_ambiguous = max(0, n_markers_after_mapping - len(unmapped_set))
+        n_markers_scored_ambiguous = len(ambiguous_set - unmapped_set)
+        n_markers_scored_unique = max(
+            0,
+            n_markers_scored_including_ambiguous - n_markers_scored_ambiguous,
+        )
+        n_markers_mapped_ambiguous = len(ambiguous_set)
+        n_markers_mapped_unique = max(0, n_markers_after_mapping - n_markers_mapped_ambiguous)
+        coverage_scored_unique = n_markers_scored_unique / max(1, len(axis.markers))
+        ambiguous_marker_fraction = n_markers_mapped_ambiguous / max(1, len(axis.markers))
+        if axis.name in homolog_mapped and math.isfinite(scored_coverage):
+            scored_coverage_for_gate = min(scored_coverage, coverage_scored_unique)
+        elif axis.name in homolog_mapped:
+            scored_coverage_for_gate = coverage_scored_unique
+        else:
+            scored_coverage_for_gate = scored_coverage
         failed = []
         if not math.isfinite(score):
             failed.append("missing_axis_score")
@@ -502,9 +529,9 @@ def evaluate_biology_axis_gates(
         if math.isfinite(fdr) and fdr > fdr_max:
             failed.append("fdr")
         if axis.min_coverage > 0:
-            if not math.isfinite(scored_coverage):
+            if not math.isfinite(scored_coverage_for_gate):
                 failed.append("missing_marker_coverage")
-            elif scored_coverage < axis.min_coverage:
+            elif scored_coverage_for_gate < axis.min_coverage:
                 failed.append("marker_coverage")
         organism_mismatch = _organism_mismatch(axis, dataset_organism)
         if organism_mismatch and axis.name not in homolog_mapped:
@@ -513,11 +540,7 @@ def evaluate_biology_axis_gates(
             _blank(value) for value in (homolog_map_name, homolog_map_version, homolog_map_sha256)
         ):
             failed.append("missing_homolog_map_provenance")
-        unmapped_markers = tuple(unmapped_markers_by_axis.get(axis.name, ()))
-        ambiguous_markers = tuple(ambiguous_markers_by_axis.get(axis.name, ()))
-        n_markers_after_mapping = int(homolog_marker_counts.get(axis.name, len(axis.markers)))
-        n_markers_scored = max(0, n_markers_after_mapping - len(unmapped_markers))
-        if n_markers_scored < axis.min_markers_scored:
+        if n_markers_scored_unique < axis.min_markers_scored:
             failed.append("markers_scored")
         out[axis.name] = {
             "axis": axis.name,
@@ -543,7 +566,15 @@ def evaluate_biology_axis_gates(
             "n_markers_after_mapping": int(n_markers_after_mapping),
             "n_markers_original": len(axis.markers),
             "n_markers_mapped": int(n_markers_after_mapping),
-            "n_markers_scored": n_markers_scored,
+            "n_markers_mapped_unique": n_markers_mapped_unique,
+            "n_markers_mapped_ambiguous": n_markers_mapped_ambiguous,
+            "n_markers_scored": n_markers_scored_unique,
+            "n_markers_scored_unique": n_markers_scored_unique,
+            "n_markers_scored_ambiguous": n_markers_scored_ambiguous,
+            "n_markers_scored_including_ambiguous": n_markers_scored_including_ambiguous,
+            "coverage_scored_unique": coverage_scored_unique,
+            "coverage_scored_including_ambiguous": scored_coverage,
+            "ambiguous_marker_fraction": ambiguous_marker_fraction,
             "unmapped_markers": ",".join(str(marker) for marker in unmapped_markers),
             "ambiguous_many_to_many_markers": ",".join(str(marker) for marker in ambiguous_markers),
             "diffusion_dependence_label": _diffusion_dependence_label(null_summary),

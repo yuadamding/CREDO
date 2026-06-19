@@ -30,7 +30,7 @@ from .objective import SearchProfile
 from .space import CREDOTrialSpec
 
 # Bump when the flattened trial-record schema changes (field names/prefixes).
-SEARCH_SCHEMA_VERSION = "credo.search.v2"
+SEARCH_SCHEMA_VERSION = "credo.search.v3.claim_audit"
 
 _SETTING_BUILDER_FIELDS = {
     "builder_name",
@@ -810,14 +810,18 @@ def _claim_grade_metric_thresholds_ready(
     )
     if record.get("metric.mass_error_kind") != mass_error_kind:
         return False
-    if not _lte(record.get("metric.mass_error_value"), mass_error_max):
+    if not _abs_gap_lte(record.get("metric.mass_error_value"), mass_error_max):
         return False
-    if not _lte(record.get("metric.control_null_gap"), record.get("constraints.control_null_max")):
+    if not _abs_gap_lte(record.get("metric.control_null_gap"), record.get("constraints.control_null_max")):
         return False
     guide_required = bool(record.get("constraints.require_guide_concordance")) or (
         require_guide_concordance is True
+        or (
+            require_guide_concordance is None
+            and record.get("spec.claim_type") in _GUIDE_CONCORDANCE_CLAIM_TYPES
+        )
     )
-    if guide_required and not _lte(
+    if guide_required and not _abs_gap_lte(
         record.get("metric.guide_concordance_gap"),
         record.get("constraints.guide_concordance_max"),
     ):
@@ -847,10 +851,11 @@ def _claim_grade_group_uniformity_ready(
     *,
     expected_thresholds_sha256: str | None,
 ) -> bool:
-    threshold_hashes = _unique_nonblank(row.get("constraints.thresholds_sha256") for row in group)
-    if len(threshold_hashes) != 1:
+    threshold_counts = _value_counts(row.get("constraints.thresholds_sha256") for row in group)
+    if not _threshold_counts_uniform(threshold_counts):
         return False
-    return expected_thresholds_sha256 is None or next(iter(threshold_hashes)) == expected_thresholds_sha256
+    threshold_hash = next(iter(threshold_counts))
+    return expected_thresholds_sha256 is None or threshold_hash == expected_thresholds_sha256
 
 
 def _guide_threshold_ready(record: dict[str, Any]) -> bool:
@@ -874,27 +879,37 @@ def _threshold_audit_fields(total_group: list[dict[str, Any]], feasible_group: l
     return {
         "threshold_hashes_all": ",".join(sorted(all_counts)),
         "threshold_hashes_feasible": ",".join(sorted(feasible_counts)),
-        "threshold_uniform_all": len(all_counts) == 1,
-        "threshold_uniform_feasible": len(feasible_counts) == 1,
+        "threshold_uniform_all": _threshold_counts_uniform(all_counts),
+        "threshold_uniform_feasible": _threshold_counts_uniform(feasible_counts),
         "n_trials_total_by_threshold_hash": json.dumps(all_counts, sort_keys=True),
         "n_trials_feasible_by_threshold_hash": json.dumps(feasible_counts, sort_keys=True),
+        "n_trials_total_missing_threshold_hash": all_counts.get("__missing__", 0),
+        "n_trials_feasible_missing_threshold_hash": feasible_counts.get("__missing__", 0),
     }
 
 
-def _value_counts(values: Iterable[Any]) -> dict[str, int]:
+def _value_counts(values: Iterable[Any], *, missing_key: str = "__missing__") -> dict[str, int]:
     counts: dict[str, int] = {}
     for value in values:
-        if _blank(value):
-            continue
-        key = str(value)
+        key = missing_key if _blank(value) else str(value)
         counts[key] = counts.get(key, 0) + 1
     return counts
 
 
-def _lte(value: Any, threshold: Any) -> bool:
+def _threshold_counts_uniform(counts: dict[str, int]) -> bool:
+    return len(counts) == 1 and "__missing__" not in counts
+
+
+def _abs_gap_lte(value: Any, threshold: Any) -> bool:
     value_float = _to_float(value)
     threshold_float = _to_float(threshold)
-    return math.isfinite(value_float) and math.isfinite(threshold_float) and value_float <= threshold_float
+    return (
+        math.isfinite(value_float)
+        and value_float >= 0.0
+        and math.isfinite(threshold_float)
+        and threshold_float >= 0.0
+        and value_float <= threshold_float
+    )
 
 
 def _canonical_fold_id(value: Any) -> str:

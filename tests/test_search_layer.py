@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import math
 
 import pytest
@@ -828,6 +829,38 @@ def test_claim_grade_group_requires_uniform_threshold_hash(tmp_path) -> None:
     assert "other-threshold-floor" in aggregate_with_failed_retry["threshold_hashes_all"]
     assert expected_hash in aggregate_with_failed_retry["n_trials_feasible_by_threshold_hash"]
 
+    aggregate_with_missing_retry = select_final_candidates(
+        records
+        + [
+            {
+                **records[0],
+                "feasible": False,
+                "constraints.thresholds_sha256": "",
+            }
+        ],
+        profile="claim_grade",
+        expected_thresholds_sha256=expected_hash,
+        **_claim_grade_grid_kwargs(),
+    )[0]
+    assert aggregate_with_missing_retry["threshold_uniform_all"] is False
+    assert aggregate_with_missing_retry["threshold_uniform_feasible"] is True
+    assert "__missing__" in aggregate_with_missing_retry["threshold_hashes_all"]
+    assert aggregate_with_missing_retry["n_trials_total_missing_threshold_hash"] == 1
+    assert json.loads(aggregate_with_missing_retry["n_trials_total_by_threshold_hash"])["__missing__"] == 1
+    assert aggregate_with_missing_retry["n_trials_feasible_missing_threshold_hash"] == 0
+
+    missing_feasible = [dict(record) for record in records]
+    missing_feasible[0]["constraints.thresholds_sha256"] = ""
+    assert (
+        select_final_candidates(
+            missing_feasible,
+            profile="claim_grade",
+            require_finite_thresholds=False,
+            **_claim_grade_grid_kwargs(),
+        )
+        == []
+    )
+
     mixed = [dict(record) for record in records]
     mixed[0]["constraints.thresholds_sha256"] = "other-threshold-floor"
     assert select_final_candidates(mixed, profile="claim_grade", **_claim_grade_grid_kwargs()) == []
@@ -861,6 +894,46 @@ def test_claim_grade_selector_recomputes_stored_threshold_constraints(tmp_path) 
 
     with pytest.raises(ValueError, match="4 folds x 3 seeds"):
         select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs())
+
+
+def test_claim_grade_rejects_negative_absolute_threshold_gaps(tmp_path) -> None:
+    from credo.search import select_final_candidates
+    from credo.search.manifests import trial_record
+
+    records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = _complete_claim_grade_metrics(control_null_gap=0.0)
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
+                output_dir=str(tmp_path / f"control_{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
+            )
+            records.append(trial_record(result))
+    records[0] = dict(records[0], **{"metric.control_null_gap": -0.01, "feasible": True})
+    with pytest.raises(ValueError, match="4 folds x 3 seeds"):
+        select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs())
+
+    guide_records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = _complete_claim_grade_metrics(guide_concordance_gap=0.0)
+            result = run_credo_trial(
+                CREDOTrialSpec(
+                    fold_id=f"fold{fold}",
+                    seed=seed,
+                    claim_type="guide_generalization",
+                    split_type="guide_holdout",
+                ),
+                train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
+                output_dir=str(tmp_path / f"guide_{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_GUIDE_TEST_THRESHOLDS,
+            )
+            guide_records.append(trial_record(result))
+    guide_records[0] = dict(guide_records[0], **{"metric.guide_concordance_gap": -0.01, "feasible": True})
+    with pytest.raises(ValueError, match="4 folds x 3 seeds"):
+        select_final_candidates(guide_records, profile="claim_grade", **_claim_grade_grid_kwargs())
 
 
 def test_claim_grade_requires_builder_grid_metadata_match(tmp_path) -> None:
@@ -1145,6 +1218,7 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
     credo = baseline_export_record(
         "credo_endpoint_proxy",
         artifact_path="/tmp/credo.csv",
+        artifact_sha256="credo-artifact",
         metrics={"endpoint_geom_mass": 0.2},
         status="available",
         baseline_version="1.0",
@@ -1156,6 +1230,7 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
         split_manifest_sha256="split-manifest",
     )
     assert credo["export_schema_version"] == "baseline.v1"
+    assert credo["artifact_sha256"] == "credo-artifact"
     assert credo["input_measure_hash"] == "input"
     with pytest.raises(ValueError, match="Unknown baseline_kind"):
         baseline_export_record("not_a_baseline")
@@ -1173,7 +1248,28 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
         required=("credo_endpoint_proxy",),
     )
     assert incomplete_manifest["complete"] is False
+    assert "credo_endpoint_proxy.baseline_commit_sha" in incomplete_manifest["provenance_missing"]
+    assert "credo_endpoint_proxy.artifact_sha256" in incomplete_manifest["provenance_missing"]
     assert "credo_endpoint_proxy.input_measure_hash" in incomplete_manifest["provenance_missing"]
+    missing_artifact = baseline_export_record(
+        "credo_endpoint_proxy",
+        status="available",
+        baseline_version="1.0",
+        baseline_commit_sha="abc123",
+        artifact_sha256="credo-artifact",
+        export_schema_version="baseline.v1",
+        input_measure_hash="input",
+        latent_space_hash="latent",
+        mass_table_hash="mass",
+        split_manifest_sha256="split-manifest",
+    )
+    missing_artifact_manifest = baseline_export_manifest(
+        [missing_artifact],
+        required=("credo_endpoint_proxy",),
+    )
+    assert missing_artifact_manifest["complete"] is False
+    assert missing_artifact_manifest["required_missing"] == ["credo_endpoint_proxy"]
+    assert "credo_endpoint_proxy.artifact_path" in missing_artifact_manifest["provenance_missing"]
     assert required_baselines_for_claim("biology") == ("credo_endpoint_proxy",)
     assert "wfr_mfm_unbalanced_transport" in required_baselines_for_claim("method_superiority")
     default_axis_by_name = {axis.name: axis for axis in DEFAULT_BIOLOGY_AXES}
@@ -1261,7 +1357,29 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
     assert mapped_with_provenance["tnf"]["scored_organism"] == "human"
     assert mapped_with_provenance["tnf"]["homolog_map_sha256"] == "hash"
     assert mapped_with_provenance["tnf"]["coverage_scored"] == pytest.approx(1.0)
+    assert mapped_with_provenance["tnf"]["coverage_scored_unique"] == pytest.approx(1.0)
     assert mapped_with_provenance["tnf"]["diffusion_dependence_label"] == "diffusion_independent"
+    ambiguous_mapping = evaluate_biology_axis_gates(
+        {"tnf": 1.2},
+        null_summaries={"tnf": {"empirical_p": 0.01, "fdr": 0.02}},
+        coverage_by_axis={"tnf": 1.0},
+        scored_coverage_by_axis={"tnf": 1.0},
+        axes=axes[:1],
+        dataset_organism="human",
+        homolog_mapped_axes=("tnf",),
+        homolog_map_name="HGNC_MGI",
+        homolog_map_version="2026-01",
+        homolog_map_sha256="hash",
+        homolog_marker_counts={"tnf": 1},
+        ambiguous_markers_by_axis={"tnf": ("Notch1",)},
+    )
+    assert ambiguous_mapping["tnf"]["pass"] is False
+    assert ambiguous_mapping["tnf"]["n_markers_scored_including_ambiguous"] == 1
+    assert ambiguous_mapping["tnf"]["n_markers_scored_unique"] == 0
+    assert ambiguous_mapping["tnf"]["coverage_scored_unique"] == pytest.approx(0.0)
+    assert ambiguous_mapping["tnf"]["ambiguous_marker_fraction"] == pytest.approx(1.0)
+    assert "markers_scored" in ambiguous_mapping["tnf"]["failed_gates"]
+    assert "marker_coverage" in ambiguous_mapping["tnf"]["failed_gates"]
     low_scored_coverage = evaluate_biology_axis_gates(
         {"tnf": 1.2},
         null_summaries={"tnf": {"empirical_p": 0.01, "fdr": 0.02}},
@@ -1387,7 +1505,7 @@ def test_trial_record_persists_builder_metadata_and_hashes_identity(tmp_path) ->
         working_tree_clean=True,
         test_status="search-layer-pass",
     )
-    assert run_manifest["selector_version"] == "credo.search.v2"
+    assert run_manifest["selector_version"] == "credo.search.v3.claim_audit"
     assert run_manifest["is_commit_on_branch"] is True
 
     bare_result = run_credo_trial(
@@ -1722,7 +1840,7 @@ def test_write_trial_dir_is_unique_per_trial_id(tmp_path) -> None:
 
     records = load_trial_records(reduce_trial_dirs(tmp_path / "trials", tmp_path / "all.jsonl"))
     assert len(records) == 2
-    assert records[0]["schema_version"] == "credo.search.v2"
+    assert records[0]["schema_version"] == "credo.search.v3.claim_audit"
 
 
 def test_claim_grade_requires_heldout_endpoint() -> None:
