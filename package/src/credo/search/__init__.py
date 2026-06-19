@@ -58,6 +58,7 @@ from .pruning import (
 )
 from .diagnostics import (
     BASELINE_KINDS,
+    BASELINE_PROVENANCE_FIELDS,
     BASELINE_STATUSES,
     DEFAULT_BIOLOGY_AXES,
     BiologyAxisSpec,
@@ -106,6 +107,7 @@ from .manifests import (
     pareto_front,
     reduce_trial_dirs,
     select_final_candidates,
+    search_run_manifest,
     setting_sha256,
     spec_sha256,
     trial_record,
@@ -115,6 +117,7 @@ from .manifests import (
 __all__ = [
     "ABLATION_ONLY",
     "BASELINE_KINDS",
+    "BASELINE_PROVENANCE_FIELDS",
     "BASELINE_STATUSES",
     "BiologyAxisSpec",
     "CLAIM_GRADE_PRESENCE_THRESHOLDS",
@@ -169,6 +172,7 @@ __all__ = [
     "required_baselines_for_claim",
     "run_credo_trial",
     "select_final_candidates",
+    "search_run_manifest",
     "setting_sha256",
     "suggest_ablation_spec",
     "suggest_claim_grade_refit_spec",

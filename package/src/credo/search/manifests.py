@@ -32,6 +32,31 @@ from .space import CREDOTrialSpec
 # Bump when the flattened trial-record schema changes (field names/prefixes).
 SEARCH_SCHEMA_VERSION = "credo.search.v2"
 
+_SETTING_BUILDER_FIELDS = {
+    "builder_name",
+    "builder_version",
+    "data_path_hash",
+    "mass_table_hash",
+    "split_file_hash",
+    "latent_source",
+    "latent_key",
+    "gene_panel_hash",
+    "normalization_hash",
+    "hvg_preprocessing_hash",
+    "encoder_checkpoint_hash",
+    "representation_config_sha256",
+    "dataset_organism",
+    "gene_symbol_namespace",
+    "expression_gene_universe_hash",
+    "decoder_gene_panel_hash",
+    "fold_grid_sha256",
+    "seed_grid",
+    "split_manifest_sha256",
+    "homolog_map_name",
+    "homolog_map_version",
+    "homolog_map_sha256",
+}
+
 
 def spec_sha256(spec: CREDOTrialSpec) -> str:
     """Deterministic content hash of a trial spec (for dedup / cache keys)."""
@@ -49,7 +74,7 @@ def setting_sha256(spec: CREDOTrialSpec, builder_metadata: Any | None = None) ->
     payload_dict = dataclasses.asdict(spec)
     payload_dict.pop("seed", None)
     payload_dict.pop("fold_id", None)
-    builder_record = _builder_metadata_record(builder_metadata)
+    builder_record = _setting_builder_metadata_record(builder_metadata)
     if builder_record:
         payload_dict["builder_metadata"] = builder_record
     payload = json.dumps(payload_dict, sort_keys=True, default=str)
@@ -103,6 +128,33 @@ def _builder_metadata_record(metadata: Any | None) -> dict[str, Any]:
             "builder_metadata must be a mapping, dataclass, or object with to_record()."
         )
     return {str(key): value for key, value in metadata.items()}
+
+
+def _setting_builder_metadata_record(metadata: Any | None) -> dict[str, Any]:
+    record = _builder_metadata_record(metadata)
+    return {key: value for key, value in record.items() if key in _SETTING_BUILDER_FIELDS}
+
+
+def search_run_manifest(
+    *,
+    repo_url: str | None = None,
+    commit_sha: str | None = None,
+    branch_name: str | None = None,
+    is_commit_on_branch: bool | None = None,
+    working_tree_clean: bool | None = None,
+    test_status: str | None = None,
+    selector_version: str = SEARCH_SCHEMA_VERSION,
+) -> dict[str, object]:
+    """Build provenance for the code state used to generate search records."""
+    return {
+        "repo_url": repo_url,
+        "commit_sha": commit_sha,
+        "branch_name": branch_name,
+        "is_commit_on_branch": is_commit_on_branch,
+        "working_tree_clean": working_tree_clean,
+        "test_status": test_status,
+        "selector_version": selector_version,
+    }
 
 
 def _canonical_endpoint(metrics: Any) -> tuple[float, str]:
@@ -439,6 +491,7 @@ def _aggregate_group(
         "n_trials": len(group),
         "n_trials_total": len(total_group),
         "n_trials_feasible": sum(1 for row in total_group if row.get("feasible", False)),
+        **_threshold_audit_fields(total_group, group),
         "fold_count": fold_count,
         "seed_count": seed_count,
         "fold_pass_rate": _axis_pass_rate(group, aggregate_keys[0] if len(aggregate_keys) >= 1 else None),
@@ -707,6 +760,11 @@ def _record_claim_grade_ready(
             return False
     if require_finite_thresholds and not _claim_grade_thresholds_ready(record):
         return False
+    if require_finite_thresholds and not _claim_grade_metric_thresholds_ready(
+        record,
+        require_guide_concordance=require_guide_concordance,
+    ):
+        return False
     return True
 
 
@@ -735,6 +793,36 @@ def _claim_grade_thresholds_ready(record: dict[str, Any]) -> bool:
         and _finite(mass_error_max)
         and not _blank(record.get("constraints.thresholds_sha256"))
     )
+
+
+def _claim_grade_metric_thresholds_ready(
+    record: dict[str, Any],
+    *,
+    require_guide_concordance: bool | None,
+) -> bool:
+    mass_error_kind = record.get(
+        "constraints.mass_error_kind",
+        record.get("constraints.required_mass_error_kind"),
+    )
+    mass_error_max = record.get(
+        "constraints.mass_error_max",
+        record.get("constraints.log_mass_error_max"),
+    )
+    if record.get("metric.mass_error_kind") != mass_error_kind:
+        return False
+    if not _lte(record.get("metric.mass_error_value"), mass_error_max):
+        return False
+    if not _lte(record.get("metric.control_null_gap"), record.get("constraints.control_null_max")):
+        return False
+    guide_required = bool(record.get("constraints.require_guide_concordance")) or (
+        require_guide_concordance is True
+    )
+    if guide_required and not _lte(
+        record.get("metric.guide_concordance_gap"),
+        record.get("constraints.guide_concordance_max"),
+    ):
+        return False
+    return True
 
 
 def _claim_grade_builder_grid_ready(
@@ -778,6 +866,35 @@ def _blank(value: Any) -> bool:
 
 def _unique_nonblank(values: Iterable[Any]) -> set[str]:
     return {str(value) for value in values if not _blank(value)}
+
+
+def _threshold_audit_fields(total_group: list[dict[str, Any]], feasible_group: list[dict[str, Any]]) -> dict[str, Any]:
+    all_counts = _value_counts(row.get("constraints.thresholds_sha256") for row in total_group)
+    feasible_counts = _value_counts(row.get("constraints.thresholds_sha256") for row in feasible_group)
+    return {
+        "threshold_hashes_all": ",".join(sorted(all_counts)),
+        "threshold_hashes_feasible": ",".join(sorted(feasible_counts)),
+        "threshold_uniform_all": len(all_counts) == 1,
+        "threshold_uniform_feasible": len(feasible_counts) == 1,
+        "n_trials_total_by_threshold_hash": json.dumps(all_counts, sort_keys=True),
+        "n_trials_feasible_by_threshold_hash": json.dumps(feasible_counts, sort_keys=True),
+    }
+
+
+def _value_counts(values: Iterable[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        if _blank(value):
+            continue
+        key = str(value)
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _lte(value: Any, threshold: Any) -> bool:
+    value_float = _to_float(value)
+    threshold_float = _to_float(threshold)
+    return math.isfinite(value_float) and math.isfinite(threshold_float) and value_float <= threshold_float
 
 
 def _canonical_fold_id(value: Any) -> str:
@@ -873,6 +990,7 @@ __all__ = [
     "pareto_front",
     "reduce_trial_dirs",
     "select_final_candidates",
+    "search_run_manifest",
     "setting_sha256",
     "spec_sha256",
     "trial_record",

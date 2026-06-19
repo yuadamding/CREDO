@@ -22,6 +22,14 @@ BASELINE_KINDS: tuple[str, ...] = (
     "scdiffeq_sde",
 )
 BASELINE_STATUSES: tuple[str, ...] = ("planned", "available", "skipped", "failed")
+BASELINE_PROVENANCE_FIELDS: tuple[str, ...] = (
+    "baseline_version",
+    "export_schema_version",
+    "input_measure_hash",
+    "latent_space_hash",
+    "mass_table_hash",
+    "split_manifest_sha256",
+)
 
 
 @dataclass(frozen=True)
@@ -62,6 +70,7 @@ class BiologyAxisSpec:
     gene_symbol_namespace: str = "unspecified"
     module_source: Optional[str] = None
     min_coverage: float = 0.0
+    min_markers_scored: int = 1
     axis_kind: str = "expression_module"
     null_alternative: Literal["greater", "less", "two_sided"] = "two_sided"
 
@@ -78,6 +87,8 @@ class BiologyAxisSpec:
             raise ValueError("null_alternative must be greater, less, or two_sided.")
         if not 0.0 <= float(self.min_coverage) <= 1.0:
             raise ValueError("min_coverage must be in [0, 1].")
+        if int(self.min_markers_scored) < 1:
+            raise ValueError("min_markers_scored must be positive.")
 
 
 DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
@@ -308,7 +319,11 @@ def summarize_null_distribution(
     if not values or not math.isfinite(observed):
         return {
             "null_gap_mean": math.nan,
+            "null_gap_p05": math.nan,
             "null_gap_p95": math.nan,
+            "null_abs_p95": math.nan,
+            "null_tail_quantile": math.nan,
+            "null_tail_direction": alternative,
             "null_gap_z": math.nan,
             "empirical_p": math.nan,
             "fdr": math.nan,
@@ -330,7 +345,11 @@ def summarize_null_distribution(
         null_gap_z = math.copysign(math.inf, observed - mean)
     return {
         "null_gap_mean": mean,
+        "null_gap_p05": _quantile(values, 0.05),
         "null_gap_p95": _quantile(values, 0.95),
+        "null_abs_p95": _quantile([abs(value - mean) for value in values], 0.95),
+        "null_tail_quantile": _tail_quantile(values, mean=mean, alternative=alternative),
+        "null_tail_direction": alternative,
         "null_gap_z": null_gap_z,
         "empirical_p": empirical_p,
         "fdr": empirical_p,
@@ -369,6 +388,13 @@ def baseline_export_record(
     metrics: Optional[Mapping[str, float]] = None,
     status: str = "planned",
     notes: str | None = None,
+    baseline_version: str | None = None,
+    baseline_commit_sha: str | None = None,
+    export_schema_version: str | None = None,
+    input_measure_hash: str | None = None,
+    latent_space_hash: str | None = None,
+    mass_table_hash: str | None = None,
+    split_manifest_sha256: str | None = None,
 ) -> dict[str, object]:
     """Build one stable baseline-export manifest row."""
     if baseline_kind not in BASELINE_KINDS:
@@ -380,6 +406,13 @@ def baseline_export_record(
         "status": status,
         "artifact_path": None if artifact_path is None else str(artifact_path),
         "notes": notes,
+        "baseline_version": baseline_version,
+        "baseline_commit_sha": baseline_commit_sha,
+        "export_schema_version": export_schema_version,
+        "input_measure_hash": input_measure_hash,
+        "latent_space_hash": latent_space_hash,
+        "mass_table_hash": mass_table_hash,
+        "split_manifest_sha256": split_manifest_sha256,
     }
     for key, value in dict(metrics or {}).items():
         record[f"metric.{key}"] = float(value)
@@ -390,6 +423,7 @@ def baseline_export_manifest(
     records: Iterable[Mapping[str, object]],
     *,
     required: Iterable[str] = BASELINE_KINDS,
+    require_provenance: bool = True,
 ) -> dict[str, object]:
     """Summarize which method-baseline exports are available for a claim."""
     rows = [dict(record) for record in records]
@@ -400,7 +434,23 @@ def baseline_export_manifest(
     }
     required_set = set(required)
     missing = sorted(required_set - available)
-    return {"records": rows, "required_missing": missing, "complete": not missing}
+    provenance_missing = []
+    if require_provenance:
+        for row in rows:
+            baseline = str(row.get("baseline_kind"))
+            if baseline not in required_set or row.get("status") != "available":
+                continue
+            provenance_missing.extend(
+                f"{baseline}.{field}"
+                for field in BASELINE_PROVENANCE_FIELDS
+                if _blank(row.get(field))
+            )
+    return {
+        "records": rows,
+        "required_missing": missing,
+        "provenance_missing": sorted(provenance_missing),
+        "complete": not missing and not provenance_missing,
+    }
 
 
 def evaluate_biology_axis_gates(
@@ -414,6 +464,9 @@ def evaluate_biology_axis_gates(
     homolog_map_version: str | None = None,
     homolog_map_sha256: str | None = None,
     homolog_marker_counts: Optional[Mapping[str, int]] = None,
+    scored_coverage_by_axis: Optional[Mapping[str, float]] = None,
+    unmapped_markers_by_axis: Optional[Mapping[str, Iterable[str]]] = None,
+    ambiguous_markers_by_axis: Optional[Mapping[str, Iterable[str]]] = None,
     axes: Iterable[BiologyAxisSpec] = DEFAULT_BIOLOGY_AXES,
     score_abs_min: float = 0.0,
     empirical_p_max: float = 0.05,
@@ -422,6 +475,9 @@ def evaluate_biology_axis_gates(
     """Gate biology support separately for each configured axis."""
     null_summaries = null_summaries or {}
     coverage_by_axis = coverage_by_axis or {}
+    scored_coverage_by_axis = scored_coverage_by_axis or {}
+    unmapped_markers_by_axis = unmapped_markers_by_axis or {}
+    ambiguous_markers_by_axis = ambiguous_markers_by_axis or {}
     homolog_marker_counts = homolog_marker_counts or {}
     homolog_mapped = set(homolog_mapped_axes or ())
     out: dict[str, dict[str, object]] = {}
@@ -431,6 +487,7 @@ def evaluate_biology_axis_gates(
         empirical_p = _finite_or_nan(null_summary.get("empirical_p"))
         fdr = _finite_or_nan(null_summary.get("fdr"))
         coverage = _finite_or_nan(coverage_by_axis.get(axis.name))
+        scored_coverage = _finite_or_nan(scored_coverage_by_axis.get(axis.name, coverage))
         failed = []
         if not math.isfinite(score):
             failed.append("missing_axis_score")
@@ -445,9 +502,9 @@ def evaluate_biology_axis_gates(
         if math.isfinite(fdr) and fdr > fdr_max:
             failed.append("fdr")
         if axis.min_coverage > 0:
-            if not math.isfinite(coverage):
+            if not math.isfinite(scored_coverage):
                 failed.append("missing_marker_coverage")
-            elif coverage < axis.min_coverage:
+            elif scored_coverage < axis.min_coverage:
                 failed.append("marker_coverage")
         organism_mismatch = _organism_mismatch(axis, dataset_organism)
         if organism_mismatch and axis.name not in homolog_mapped:
@@ -456,7 +513,12 @@ def evaluate_biology_axis_gates(
             _blank(value) for value in (homolog_map_name, homolog_map_version, homolog_map_sha256)
         ):
             failed.append("missing_homolog_map_provenance")
-        n_markers_after_mapping = homolog_marker_counts.get(axis.name, len(axis.markers))
+        unmapped_markers = tuple(unmapped_markers_by_axis.get(axis.name, ()))
+        ambiguous_markers = tuple(ambiguous_markers_by_axis.get(axis.name, ()))
+        n_markers_after_mapping = int(homolog_marker_counts.get(axis.name, len(axis.markers)))
+        n_markers_scored = max(0, n_markers_after_mapping - len(unmapped_markers))
+        if n_markers_scored < axis.min_markers_scored:
+            failed.append("markers_scored")
         out[axis.name] = {
             "axis": axis.name,
             "axis_kind": axis.axis_kind,
@@ -470,12 +532,21 @@ def evaluate_biology_axis_gates(
             "null_alternative": axis.null_alternative,
             "marker_coverage": coverage,
             "min_coverage": axis.min_coverage,
+            "min_markers_scored": axis.min_markers_scored,
+            "coverage_original": coverage,
+            "coverage_scored": scored_coverage,
             "homolog_mapped": bool(axis.name in homolog_mapped),
             "homolog_map_name": homolog_map_name,
             "homolog_map_version": homolog_map_version,
             "homolog_map_sha256": homolog_map_sha256,
             "n_markers_before_mapping": len(axis.markers),
             "n_markers_after_mapping": int(n_markers_after_mapping),
+            "n_markers_original": len(axis.markers),
+            "n_markers_mapped": int(n_markers_after_mapping),
+            "n_markers_scored": n_markers_scored,
+            "unmapped_markers": ",".join(str(marker) for marker in unmapped_markers),
+            "ambiguous_many_to_many_markers": ",".join(str(marker) for marker in ambiguous_markers),
+            "diffusion_dependence_label": _diffusion_dependence_label(null_summary),
             "score": score,
             "empirical_p": empirical_p,
             "fdr": fdr,
@@ -604,6 +675,31 @@ def _quantile(values: list[float], q: float) -> float:
     return ordered[lo] * (hi - pos) + ordered[hi] * (pos - lo)
 
 
+def _tail_quantile(values: list[float], *, mean: float, alternative: str) -> float:
+    if alternative == "less":
+        return _quantile(values, 0.05)
+    if alternative == "two_sided":
+        return _quantile([abs(value - mean) for value in values], 0.95)
+    return _quantile(values, 0.95)
+
+
+def _diffusion_dependence_label(summary: Mapping[str, object]) -> str:
+    status = summary.get("particle_step_convergence_status")
+    if isinstance(status, str) and status.strip().lower() not in {"", "pass", "passed"}:
+        return "diffusion_unstable"
+    stability = _finite_or_nan(summary.get("biology_axis_stability_under_diffusion_ablation"))
+    if math.isfinite(stability) and stability < 0.5:
+        return "diffusion_unstable"
+    delta = _finite_or_nan(summary.get("diffusion_ablation_delta"))
+    if not math.isfinite(delta):
+        return "diffusion_unassessed"
+    if abs(delta) >= 0.5:
+        return "diffusion_dependent"
+    if abs(delta) >= 0.1:
+        return "diffusion_sensitive"
+    return "diffusion_independent"
+
+
 def _finite_or_nan(value: object) -> float:
     try:
         out = float(value)  # type: ignore[arg-type]
@@ -676,6 +772,7 @@ __all__ = [
     "FidelityRecord",
     "baseline_export_manifest",
     "baseline_export_record",
+    "BASELINE_PROVENANCE_FIELDS",
     "claim_grade_convergence_thresholds",
     "estimate_convergence_thresholds_from_pilot",
     "evaluate_biology_axis_gates",
