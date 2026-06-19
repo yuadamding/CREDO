@@ -29,6 +29,7 @@ class ProblemBuilderMetadata:
     normalization_hash: Optional[str] = None
     hvg_preprocessing_hash: Optional[str] = None
     encoder_checkpoint_hash: Optional[str] = None
+    representation_config_sha256: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.builder_name:

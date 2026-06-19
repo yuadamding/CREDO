@@ -305,10 +305,12 @@ def objective_vector(metrics: CREDOTrialMetrics) -> dict[str, float]:
     # from externally-constructed metrics.
     if _finite(metrics.endpoint_sinkhorn):
         vector["endpoint_geometry"] = float(metrics.endpoint_sinkhorn)
+        vector["endpoint_geometry_or_proxy"] = float(metrics.endpoint_sinkhorn)
         _add_if_finite(vector, "endpoint_mass_penalty", metrics.endpoint_mass_penalty)
     else:
         # No finite pure-geometry term -> fall back to the combined proxy.
         vector["endpoint_geom_mass"] = _nan_to(metrics.endpoint_geom_mass, math.inf)
+        vector["endpoint_geometry_or_proxy"] = _nan_to(metrics.endpoint_geom_mass, math.inf)
     _add_if_finite(vector, "mass_error", metrics.mass_error_value)
     _add_if_finite(vector, "count_nll", metrics.count_nll)
     if metrics.validation_source == "held_out":

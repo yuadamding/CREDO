@@ -10,7 +10,7 @@ import math
 import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Mapping, Optional
+from typing import Iterable, Literal, Mapping, Optional
 
 
 BASELINE_KINDS: tuple[str, ...] = (
@@ -62,6 +62,7 @@ class BiologyAxisSpec:
     gene_symbol_namespace: str = "unspecified"
     module_source: Optional[str] = None
     min_coverage: float = 0.0
+    axis_kind: str = "expression_module"
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -70,24 +71,49 @@ class BiologyAxisSpec:
             raise ValueError(f"Biology axis {self.name!r} must include at least one marker.")
         if self.expected_direction not in {None, "positive", "negative", "either"}:
             raise ValueError("expected_direction must be positive, negative, either, or None.")
+        if self.axis_kind not in {"expression_module", "perturbation_anchor", "metadata_artifact"}:
+            raise ValueError("axis_kind must be expression_module, perturbation_anchor, or metadata_artifact.")
         if not 0.0 <= float(self.min_coverage) <= 1.0:
             raise ValueError("min_coverage must be in [0, 1].")
 
 
 DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
     BiologyAxisSpec(
-        name="tnf_expansion",
+        name="renz_expansion_anchor_perturbations",
         markers=("Notch1", "Notch2", "Fat1", "Trp53", "Fgf3"),
         expected_direction="positive",
+        axis_kind="perturbation_anchor",
         organism="mouse",
         gene_symbol_namespace="MGI",
         module_source="Renz_2024_P4_P60_field_expansion",
         min_coverage=0.7,
     ),
     BiologyAxisSpec(
+        name="renz_tnf_ap1_nfkb_expression_module",
+        markers=(
+            "Jun",
+            "Fos",
+            "Junb",
+            "Jund",
+            "Ccn1",
+            "Socs3",
+            "Nfkbiz",
+            "Atf3",
+            "Dusp1",
+            "Ier2",
+        ),
+        expected_direction="positive",
+        axis_kind="expression_module",
+        organism="mouse",
+        gene_symbol_namespace="MGI",
+        module_source="Renz_2024_TNF_AP1_NFkB_expression_module",
+        min_coverage=0.7,
+    ),
+    BiologyAxisSpec(
         name="cis_like_epithelial",
         markers=("TP63", "ATP1B3", "KRT5", "KRT14", "KRT17", "SOX2", "EPCAM"),
         expected_direction="either",
+        axis_kind="expression_module",
         organism="human",
         gene_symbol_namespace="HGNC",
         module_source="Choi_2023_CIS_like_LP",
@@ -97,6 +123,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         name="pemt_tsk",
         markers=("LGALS7B", "VIM", "SNAI2", "LAMC2", "ITGA5"),
         expected_direction="either",
+        axis_kind="expression_module",
         organism="human",
         gene_symbol_namespace="HGNC",
         module_source="Choi_2023_CC1_Punovuori_2024_pEMT",
@@ -106,6 +133,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         name="caf_ecm",
         markers=("COL1A1", "COL1A2", "FN1", "POSTN", "THBS2"),
         expected_direction="either",
+        axis_kind="expression_module",
         organism="human",
         gene_symbol_namespace="HGNC",
         module_source="Punovuori_2024_CAF_ECM",
@@ -115,6 +143,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         name="myeloid",
         markers=("LYZ", "S100A8", "S100A9", "FCGR3A"),
         expected_direction="either",
+        axis_kind="expression_module",
         organism="human",
         gene_symbol_namespace="HGNC",
         module_source="HNSCC_inflammatory_myeloid",
@@ -124,6 +153,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         name="guide_artifact",
         markers=("guide_concordance",),
         expected_direction="negative",
+        axis_kind="metadata_artifact",
         organism="metadata",
         gene_symbol_namespace="metric",
         module_source="CREDO_guide_artifact_axis",
@@ -132,6 +162,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         name="large_gene_artifact",
         markers=("gene_size",),
         expected_direction="negative",
+        axis_kind="metadata_artifact",
         organism="metadata",
         gene_symbol_namespace="metric",
         module_source="CREDO_large_gene_artifact_axis",
@@ -157,6 +188,34 @@ def claim_grade_convergence_thresholds(
         rank_correlation_min=rank_correlation_min,
         sign_stability_min=sign_stability_min,
         endpoint_drift_median_max=float(endpoint_drift_median_max),
+        top_hit_jaccard_min=top_hit_jaccard_min,
+        ess_floor=ess_floor,
+        top_k=top_k,
+    )
+
+
+def estimate_convergence_thresholds_from_pilot(
+    *,
+    between_perturbation_endpoint_distances: Iterable[float],
+    within_perturbation_fold_endpoint_distances: Iterable[float],
+    rank_correlation_min: float = 0.90,
+    sign_stability_min: float = 0.90,
+    top_hit_jaccard_min: float = 0.90,
+    ess_floor: float = 0.10,
+    top_k: int = 20,
+) -> ConvergenceThresholds:
+    """Calibrate endpoint-drift convergence gates from pilot geometry scales."""
+    between = _finite_nonnegative_values(between_perturbation_endpoint_distances)
+    within = _finite_nonnegative_values(within_perturbation_fold_endpoint_distances)
+    if not between or not within:
+        raise ValueError(
+            "pilot calibration requires finite non-negative between and within distances."
+        )
+    endpoint_drift_median_max = min(0.10 * statistics.median(between), 0.25 * statistics.median(within))
+    return claim_grade_convergence_thresholds(
+        endpoint_drift_median_max=endpoint_drift_median_max,
+        rank_correlation_min=rank_correlation_min,
+        sign_stability_min=sign_stability_min,
         top_hit_jaccard_min=top_hit_jaccard_min,
         ess_floor=ess_floor,
         top_k=top_k,
@@ -330,6 +389,8 @@ def evaluate_biology_axis_gates(
     *,
     null_summaries: Optional[Mapping[str, Mapping[str, float]]] = None,
     coverage_by_axis: Optional[Mapping[str, float]] = None,
+    dataset_organism: str | None = None,
+    homolog_mapped_axes: Optional[Iterable[str]] = None,
     axes: Iterable[BiologyAxisSpec] = DEFAULT_BIOLOGY_AXES,
     score_abs_min: float = 0.0,
     empirical_p_max: float = 0.05,
@@ -338,6 +399,7 @@ def evaluate_biology_axis_gates(
     """Gate biology support separately for each configured axis."""
     null_summaries = null_summaries or {}
     coverage_by_axis = coverage_by_axis or {}
+    homolog_mapped = set(homolog_mapped_axes or ())
     out: dict[str, dict[str, object]] = {}
     for axis in axes:
         score = _finite_or_nan(axis_scores.get(axis.name))
@@ -358,16 +420,25 @@ def evaluate_biology_axis_gates(
             failed.append("empirical_p")
         if math.isfinite(fdr) and fdr > fdr_max:
             failed.append("fdr")
-        if math.isfinite(coverage) and coverage < axis.min_coverage:
-            failed.append("marker_coverage")
+        if axis.min_coverage > 0:
+            if not math.isfinite(coverage):
+                failed.append("missing_marker_coverage")
+            elif coverage < axis.min_coverage:
+                failed.append("marker_coverage")
+        organism_mismatch = _organism_mismatch(axis, dataset_organism)
+        if organism_mismatch and axis.name not in homolog_mapped:
+            failed.append("organism_mismatch")
         out[axis.name] = {
             "axis": axis.name,
+            "axis_kind": axis.axis_kind,
             "markers": ",".join(axis.markers),
             "organism": axis.organism,
+            "dataset_organism": dataset_organism,
             "gene_symbol_namespace": axis.gene_symbol_namespace,
             "module_source": axis.module_source,
             "marker_coverage": coverage,
             "min_coverage": axis.min_coverage,
+            "homolog_mapped": bool(axis.name in homolog_mapped),
             "score": score,
             "empirical_p": empirical_p,
             "fdr": fdr,
@@ -375,6 +446,23 @@ def evaluate_biology_axis_gates(
             "failed_gates": ",".join(failed),
         }
     return out
+
+
+def required_baselines_for_claim(
+    claim_scope: Literal["biology", "method_superiority"],
+) -> tuple[str, ...]:
+    """Return baseline exports required for a claim scope."""
+    if claim_scope == "biology":
+        return ("credo_endpoint_proxy",)
+    if claim_scope == "method_superiority":
+        return (
+            "credo_endpoint_proxy",
+            "moscot_time",
+            "wot_temporal_ot",
+            "wfr_mfm_unbalanced_transport",
+            "scdiffeq_sde",
+        )
+    raise ValueError("claim_scope must be 'biology' or 'method_superiority'.")
 
 
 def _pairs(records: list[FidelityRecord]) -> Iterable[tuple[FidelityRecord, FidelityRecord]]:
@@ -492,6 +580,25 @@ def _finite_or_default(value: object, default: float) -> float:
     return out if math.isfinite(out) else default
 
 
+def _finite_nonnegative_values(values: Iterable[float]) -> list[float]:
+    out = []
+    for value in values:
+        finite = _finite_or_nan(value)
+        if math.isfinite(finite) and finite >= 0:
+            out.append(finite)
+    return out
+
+
+def _organism_mismatch(axis: BiologyAxisSpec, dataset_organism: str | None) -> bool:
+    if dataset_organism is None:
+        return False
+    axis_organism = axis.organism.strip().lower()
+    data_organism = dataset_organism.strip().lower()
+    if axis_organism in {"", "unspecified", "metadata"}:
+        return False
+    return bool(data_organism) and axis_organism != data_organism
+
+
 def _min_finite(values: Iterable[float]) -> float:
     finite = [value for value in values if math.isfinite(value)]
     return min(finite) if finite else math.nan
@@ -529,8 +636,10 @@ __all__ = [
     "baseline_export_manifest",
     "baseline_export_record",
     "claim_grade_convergence_thresholds",
+    "estimate_convergence_thresholds_from_pilot",
     "evaluate_biology_axis_gates",
     "particle_step_convergence_diagnostics",
+    "required_baselines_for_claim",
     "summarize_null_distribution",
     "summarize_null_suite",
 ]

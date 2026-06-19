@@ -145,6 +145,7 @@ class CREDOTrainOutput:
     history_path: Optional[str] = None
     eval_summary_path: Optional[str] = None
     resolved_config_path: Optional[str] = None
+    builder_metadata: Optional[Any] = None
     failure_type: Optional[str] = None
     failure_message: Optional[str] = None
 
@@ -164,6 +165,7 @@ class CREDOTrialResult:
     history_path: Optional[str] = None
     eval_summary_path: Optional[str] = None
     resolved_config_path: Optional[str] = None
+    builder_metadata: Optional[Any] = None
     failure_type: Optional[str] = None
     failure_message: Optional[str] = None
 
@@ -402,13 +404,26 @@ def _mass_error_from_epoch(epoch_metrics: Mapping[str, Any]) -> tuple[float, Mas
             epoch_metrics.get("signed_log_mass_residual"),
         )
     )
-    for key in ("mass_error_value", "abs_log_mass_residual", "log_mass_error", "mass_error"):
+    explicit_kind = _last_str(epoch_metrics.get("mass_error_kind"))
+    for key in ("mass_error_value", "mass_error"):
+        value = _opt_value(_first_finite(epoch_metrics.get(key)))
+        if value is not None and explicit_kind in {
+            "abs_log_residual",
+            "relative_error",
+            "unknown",
+        }:
+            return float(value), explicit_kind, signed  # type: ignore[return-value]
+    for key in ("abs_log_mass_residual", "log_mass_error"):
         value = _opt_value(_first_finite(epoch_metrics.get(key)))
         if value is not None:
             return float(value), "abs_log_residual", signed
     value = _opt_value(_first_finite(epoch_metrics.get("mass_rel_error")))
     if value is not None:
         return float(value), "relative_error", signed
+    for key in ("mass_error_value", "mass_error"):
+        value = _opt_value(_first_finite(epoch_metrics.get(key)))
+        if value is not None:
+            return float(value), "unknown", signed
     return math.nan, "unknown", signed
 
 

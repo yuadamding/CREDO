@@ -103,8 +103,31 @@ def suggest_pareto_refit_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSp
     return _spec_from_suggested(base, suggested)
 
 
-def suggest_claim_grade_refit_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSpec":
-    """Sample the final high-fidelity claim-grade refit envelope."""
+def suggest_claim_grade_refit_spec(
+    trial: Any,
+    base: dict[str, Any],
+    *,
+    require_selected_architecture: bool = True,
+) -> "CREDOTrialSpec":
+    """Sample the final high-fidelity envelope for a selected architecture.
+
+    Claim-grade refit does not search model architecture; it should start from a
+    selected Pareto setting and only refit loss/numerical-fidelity knobs.
+    """
+    if require_selected_architecture:
+        required = (
+            "hidden_dim",
+            "depth",
+            "embedding_dim",
+            "n_programs",
+            "mediator_dim",
+        )
+        missing = [name for name in required if name not in base]
+        if missing:
+            raise ValueError(
+                "claim-grade refit requires selected architecture fields in base: "
+                f"{missing}."
+            )
     suggested = {
         "lambda_end": trial.suggest_float("lambda_end", 0.5, 2.0, log=True),
         "lambda_aux": trial.suggest_float("lambda_aux", 1e-4, 0.2, log=True),

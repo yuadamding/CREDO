@@ -39,11 +39,19 @@ def spec_sha256(spec: CREDOTrialSpec) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def setting_sha256(spec: CREDOTrialSpec) -> str:
-    """Hash a setting across folds/seeds by excluding stochastic split identity."""
+def setting_sha256(spec: CREDOTrialSpec, builder_metadata: Any | None = None) -> str:
+    """Hash a setting across folds/seeds by excluding stochastic split identity.
+
+    Builder fingerprints are part of setting identity when present: two studies
+    with the same hyperparameters but different preprocessing or gene panels are
+    not the same final setting.
+    """
     payload_dict = dataclasses.asdict(spec)
     payload_dict.pop("seed", None)
     payload_dict.pop("fold_id", None)
+    builder_record = _builder_metadata_record(builder_metadata)
+    if builder_record:
+        payload_dict["builder_metadata"] = builder_record
     payload = json.dumps(payload_dict, sort_keys=True, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -51,10 +59,11 @@ def setting_sha256(spec: CREDOTrialSpec) -> str:
 def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
     """Flatten a :class:`CREDOTrialResult` into one JSON-serializable row."""
     spec = result.spec
+    builder_record = _builder_metadata_record(result.builder_metadata)
     record: dict[str, Any] = {
         "schema_version": SEARCH_SCHEMA_VERSION,
         "spec_sha256": spec_sha256(spec),
-        "setting_sha256": setting_sha256(spec),
+        "setting_sha256": setting_sha256(spec, builder_record),
         "run_dir": result.run_dir,
         "checkpoint_path": result.checkpoint_path,
         "history_path": result.history_path,
@@ -68,8 +77,64 @@ def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
     record.update({f"spec.{k}": v for k, v in dataclasses.asdict(spec).items()})
     record.update({f"metric.{k}": v for k, v in dataclasses.asdict(result.metrics).items()})
     record.update({f"objective.{k}": v for k, v in result.objective_vector.items()})
+    endpoint_value, endpoint_kind = _canonical_endpoint(result.metrics)
+    record["objective.endpoint_metric_kind"] = endpoint_kind
+    record["objective.endpoint_geometry_or_proxy"] = endpoint_value
+    record["objective.endpoint_mass_penalty_or_nan"] = (
+        float(result.metrics.endpoint_mass_penalty)
+        if _finite(result.metrics.endpoint_mass_penalty)
+        else math.nan
+    )
     record.update({f"constraint.{k}": v for k, v in result.constraints.items()})
+    record.update({f"builder.{k}": v for k, v in builder_record.items()})
     return record
+
+
+def _builder_metadata_record(metadata: Any | None) -> dict[str, Any]:
+    if metadata is None:
+        return {}
+    if hasattr(metadata, "to_record"):
+        metadata = metadata.to_record()
+    elif dataclasses.is_dataclass(metadata):
+        metadata = dataclasses.asdict(metadata)
+    if not isinstance(metadata, dict):
+        raise TypeError(
+            "builder_metadata must be a mapping, dataclass, or object with to_record()."
+        )
+    return {str(key): value for key, value in metadata.items()}
+
+
+def _canonical_endpoint(metrics: Any) -> tuple[float, str]:
+    if _finite(getattr(metrics, "endpoint_sinkhorn", None)):
+        return float(metrics.endpoint_sinkhorn), "decomposed"
+    if _finite(getattr(metrics, "endpoint_geom_mass", None)):
+        return float(metrics.endpoint_geom_mass), "combined_proxy"
+    return math.nan, "missing"
+
+
+def _record_with_canonical_endpoint(record: dict[str, Any]) -> dict[str, Any]:
+    out = dict(record)
+    if "objective.endpoint_metric_kind" not in out:
+        if _finite(out.get("objective.endpoint_geometry")):
+            out["objective.endpoint_metric_kind"] = "decomposed"
+        elif _finite(out.get("objective.endpoint_geom_mass")):
+            out["objective.endpoint_metric_kind"] = "combined_proxy"
+        else:
+            out["objective.endpoint_metric_kind"] = "missing"
+    if "objective.endpoint_geometry_or_proxy" not in out:
+        if _finite(out.get("objective.endpoint_geometry")):
+            out["objective.endpoint_geometry_or_proxy"] = float(out["objective.endpoint_geometry"])
+        elif _finite(out.get("objective.endpoint_geom_mass")):
+            out["objective.endpoint_geometry_or_proxy"] = float(out["objective.endpoint_geom_mass"])
+        else:
+            out["objective.endpoint_geometry_or_proxy"] = math.nan
+    if "objective.endpoint_mass_penalty_or_nan" not in out:
+        out["objective.endpoint_mass_penalty_or_nan"] = (
+            float(out["objective.endpoint_mass_penalty"])
+            if _finite(out.get("objective.endpoint_mass_penalty"))
+            else math.nan
+        )
+    return out
 
 
 def append_trial_record(path: str | Path, result: CREDOTrialResult) -> Path:
@@ -206,12 +271,16 @@ def select_final_candidates(
     profile: SearchProfile | str = SearchProfile.CLAIM_GRADE,
     require_feasible: bool = True,
     require_heldout: bool = True,
+    require_guide_concordance: bool | None = None,
+    require_builder_metadata: bool | None = None,
     group_by: tuple[str, ...] = ("setting_sha256",),
     aggregate_by: tuple[str, ...] = ("spec.fold_id", "spec.seed"),
     objectives: list[str] | None = None,
     sort_by: str | None = None,
     min_folds: int | None = None,
     min_seeds: int | None = None,
+    required_folds: Iterable[Any] | None = None,
+    required_seeds: Iterable[Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Aggregate trial records and return constrained Pareto-final candidates.
 
@@ -227,9 +296,16 @@ def select_final_candidates(
 
     fold_min = _profile_min_folds(profile) if min_folds is None else min_folds
     seed_min = _profile_min_seeds(profile) if min_seeds is None else min_seeds
+    builder_required = (
+        profile is SearchProfile.CLAIM_GRADE
+        if require_builder_metadata is None
+        else bool(require_builder_metadata)
+    )
     group_keys = tuple(_record_key(name) for name in group_by)
     aggregate_keys = tuple(_record_key(name) for name in aggregate_by)
-    all_rows = list(records)
+    required_fold_values = tuple(required_folds) if required_folds is not None else None
+    required_seed_values = tuple(required_seeds) if required_seeds is not None else None
+    all_rows = [_record_with_canonical_endpoint(row) for row in records]
     all_grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for row in all_rows:
         key = tuple(row.get(name) for name in group_keys)
@@ -241,7 +317,15 @@ def select_final_candidates(
     if require_heldout:
         rows = [r for r in rows if r.get("metric.validation_source") == "held_out"]
     if profile is SearchProfile.CLAIM_GRADE:
-        rows = [r for r in rows if _record_claim_grade_ready(r)]
+        rows = [
+            r
+            for r in rows
+            if _record_claim_grade_ready(
+                r,
+                require_guide_concordance=require_guide_concordance,
+                require_builder_metadata=builder_required,
+            )
+        ]
     elif profile is SearchProfile.PARETO_REFIT:
         rows = [r for r in rows if _record_pareto_refit_ready(r)]
     objective_names = objectives or _default_objectives_from_records(rows)
@@ -255,7 +339,14 @@ def select_final_candidates(
     candidates: list[dict[str, Any]] = []
     skipped_for_coverage = False
     for key, group in grouped.items():
-        coverage = _fold_seed_coverage(group, aggregate_keys, min_folds=fold_min, min_seeds=seed_min)
+        coverage = _fold_seed_coverage(
+            group,
+            aggregate_keys,
+            min_folds=fold_min,
+            min_seeds=seed_min,
+            required_folds=required_fold_values,
+            required_seeds=required_seed_values,
+        )
         if not coverage["ok"]:
             skipped_for_coverage = True
             continue
@@ -349,7 +440,17 @@ def _aggregate_group(
 def _default_objectives_from_records(records: list[dict[str, Any]]) -> list[str]:
     if not records:
         return ["endpoint_geom_mass", "mass_error"]
-    if all(_finite(row.get("objective.endpoint_geometry")) for row in records):
+    endpoint_kinds = {
+        row.get("objective.endpoint_metric_kind")
+        for row in records
+        if row.get("objective.endpoint_metric_kind") is not None
+    }
+    if (
+        len(endpoint_kinds) > 1
+        and all(_finite(row.get("objective.endpoint_geometry_or_proxy")) for row in records)
+    ):
+        objectives = ["endpoint_geometry_or_proxy"]
+    elif all(_finite(row.get("objective.endpoint_geometry")) for row in records):
         objectives = ["endpoint_geometry"]
         if all(_finite(row.get("objective.endpoint_mass_penalty")) for row in records):
             objectives.append("endpoint_mass_penalty")
@@ -397,17 +498,26 @@ def _fold_seed_coverage(
     *,
     min_folds: int,
     min_seeds: int,
+    required_folds: Iterable[Any] | None = None,
+    required_seeds: Iterable[Any] | None = None,
 ) -> dict[str, object]:
     if len(aggregate_keys) < 2:
         return {
-            "ok": min_folds <= 1 and min_seeds <= 1,
+            "ok": (
+                min_folds <= 1
+                and min_seeds <= 1
+                and required_folds is None
+                and required_seeds is None
+            ),
             "fold_count": 0,
             "seed_count": 0,
             "missing_pairs": [],
         }
     fold_key, seed_key = aggregate_keys[:2]
-    folds = sorted(_distinct_values(records, fold_key), key=str)
-    seeds = sorted(_distinct_values(records, seed_key), key=str)
+    observed_folds = sorted(_distinct_values(records, fold_key), key=str)
+    observed_seeds = sorted(_distinct_values(records, seed_key), key=str)
+    folds = sorted(tuple(required_folds), key=str) if required_folds is not None else observed_folds
+    seeds = sorted(tuple(required_seeds), key=str) if required_seeds is not None else observed_seeds
     observed_pairs = {(row.get(fold_key), row.get(seed_key)) for row in records}
     required_pairs = {(fold, seed) for fold in folds for seed in seeds}
     missing = sorted(required_pairs - observed_pairs, key=lambda item: (str(item[0]), str(item[1])))
@@ -419,8 +529,8 @@ def _fold_seed_coverage(
     )
     return {
         "ok": ok,
-        "fold_count": len(folds),
-        "seed_count": len(seeds),
+        "fold_count": len(observed_folds),
+        "seed_count": len(observed_seeds),
         "missing_pairs": [f"{fold}:{seed}" for fold, seed in missing],
     }
 
@@ -455,8 +565,33 @@ def _record_pareto_refit_ready(record: dict[str, Any]) -> bool:
     )
 
 
-def _record_claim_grade_ready(record: dict[str, Any]) -> bool:
-    return _record_pareto_refit_ready(record) and all(
+_GUIDE_CONCORDANCE_CLAIM_TYPES = {
+    "same_perturbation_counterfactual",
+    "guide_generalization",
+    "target_gene_generalization",
+}
+
+_REQUIRED_BUILDER_FIELDS = (
+    "builder.builder_name",
+    "builder.builder_version",
+    "builder.data_path_hash",
+    "builder.mass_table_hash",
+    "builder.split_file_hash",
+    "builder.fold_assignment_hash",
+    "builder.latent_source",
+    "builder.latent_key",
+    "builder.gene_panel_hash",
+    "builder.normalization_hash",
+)
+
+
+def _record_claim_grade_ready(
+    record: dict[str, Any],
+    *,
+    require_guide_concordance: bool | None,
+    require_builder_metadata: bool,
+) -> bool:
+    branch_ready = _record_pareto_refit_ready(record) and all(
         _finite(record.get(key))
         for key in (
             "metric.source_ess_frac",
@@ -470,6 +605,30 @@ def _record_claim_grade_ready(record: dict[str, Any]) -> bool:
             "metric.reference_logw_range",
         )
     )
+    if not branch_ready:
+        return False
+    if require_guide_concordance is True or (
+        require_guide_concordance is None
+        and record.get("spec.claim_type") in _GUIDE_CONCORDANCE_CLAIM_TYPES
+    ):
+        if not _finite(record.get("metric.guide_concordance_gap")):
+            return False
+    if require_builder_metadata and not _claim_grade_builder_metadata_ready(record):
+        return False
+    return True
+
+
+def _claim_grade_builder_metadata_ready(record: dict[str, Any]) -> bool:
+    if any(_blank(record.get(key)) for key in _REQUIRED_BUILDER_FIELDS):
+        return False
+    return not (
+        _blank(record.get("builder.encoder_checkpoint_hash"))
+        and _blank(record.get("builder.representation_config_sha256"))
+    )
+
+
+def _blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
 
 
 def _to_float(value: Any) -> float:

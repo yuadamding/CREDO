@@ -25,7 +25,7 @@ data -> problem step stays config-driven and independent of CLI namespaces.
 from __future__ import annotations
 
 import dataclasses
-from typing import Callable, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from .metrics import CREDOTrainOutput, CREDOTrialMetrics, CREDOTrialResult
 from .objective import (
@@ -56,6 +56,7 @@ def run_credo_trial(
     latent_dim: Optional[int] = None,
     device: str = "cpu",
     build_config: Callable[..., object] = spec_to_run_config,
+    builder_metadata: Any | None = None,
 ) -> CREDOTrialResult:
     """Run one CREDO trial end-to-end and return a scored, constrained result.
 
@@ -93,7 +94,11 @@ def run_credo_trial(
     if isinstance(out, CREDOTrainOutput):
         output = out
     elif isinstance(out, CREDOTrialMetrics):
-        output = CREDOTrainOutput(metrics=out, run_dir=output_dir)
+        output = CREDOTrainOutput(
+            metrics=out,
+            run_dir=output_dir,
+            builder_metadata=builder_metadata,
+        )
     else:
         raise TypeError(
             "train_fn must return a CREDOTrialMetrics or CREDOTrainOutput; got "
@@ -120,6 +125,11 @@ def run_credo_trial(
         history_path=output.history_path,
         eval_summary_path=output.eval_summary_path,
         resolved_config_path=output.resolved_config_path,
+        builder_metadata=(
+            output.builder_metadata
+            if output.builder_metadata is not None
+            else builder_metadata
+        ),
         failure_type=output.failure_type,
         failure_message=output.failure_message,
     )
