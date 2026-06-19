@@ -158,6 +158,7 @@ class CREDOTrialResult:
     metrics: CREDOTrialMetrics
     objective_vector: dict[str, float] = field(default_factory=dict)
     constraints: dict[str, bool] = field(default_factory=dict)
+    threshold_metadata: dict[str, Any] = field(default_factory=dict)
     pruner_score: float = math.nan
     feasible: bool = False
     run_dir: Optional[str] = None

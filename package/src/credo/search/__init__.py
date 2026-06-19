@@ -47,6 +47,7 @@ from .objective import (
     hard_constraints,
     objective_vector,
     pruner_score,
+    threshold_metadata,
     thresholds_for_profile,
 )
 from .pruning import (
@@ -179,6 +180,7 @@ __all__ = [
     "summarize_null_distribution",
     "summarize_null_suite",
     "thresholds_for_profile",
+    "threshold_metadata",
     "trial_record",
     "write_trial_dir",
 ]

@@ -18,6 +18,7 @@ from credo.search import (
     TrialPrunedError,
     append_trial_record,
     assert_frozen_semantics,
+    claim_grade_thresholds,
     constraints_satisfied,
     hard_constraints,
     load_trial_records,
@@ -61,7 +62,26 @@ BUILDER_METADATA = {
     "hvg_preprocessing_hash": "hvg",
     "encoder_checkpoint_hash": "encoder",
     "representation_config_sha256": "rep",
+    "dataset_organism": "mouse",
+    "gene_symbol_namespace": "MGI",
+    "expression_gene_universe_hash": "expr-universe",
+    "decoder_gene_panel_hash": "decoder-genes",
+    "fold_grid_sha256": "fold-grid",
+    "seed_grid": "0,1,2",
+    "split_manifest_sha256": "split-manifest",
 }
+REQUIRED_FOLDS = ("fold0", "fold1", "fold2", "fold3")
+REQUIRED_SEEDS = (0, 1, 2)
+CLAIM_GRADE_TEST_THRESHOLDS = claim_grade_thresholds(
+    control_null_max=0.05,
+    log_mass_error_max=0.2,
+)
+CLAIM_GRADE_GUIDE_TEST_THRESHOLDS = claim_grade_thresholds(
+    control_null_max=0.05,
+    log_mass_error_max=0.2,
+    guide_concordance_max=0.1,
+    require_guide_concordance=True,
+)
 
 
 def _claim_grade_output(metrics: CREDOTrialMetrics, **kwargs) -> CREDOTrainOutput:
@@ -83,6 +103,15 @@ def _complete_claim_grade_metrics(**overrides) -> CREDOTrialMetrics:
     }
     payload.update(overrides)
     return CREDOTrialMetrics(**payload)
+
+
+def _claim_grade_grid_kwargs(**overrides):
+    kwargs = {
+        "required_folds": REQUIRED_FOLDS,
+        "required_seeds": REQUIRED_SEEDS,
+    }
+    kwargs.update(overrides)
+    return kwargs
 
 
 # --- space ------------------------------------------------------------------
@@ -107,6 +136,9 @@ def test_field_classes_partition_tunable_fields() -> None:
         "input_data_sha256",
         "mass_table_sha256",
         "split_file_sha256",
+        "parent_setting_sha256",
+        "parent_search_profile",
+        "parent_objective_front_id",
     }
     all_fields = {f.name for f in dataclasses.fields(CREDOTrialSpec)}
     classified = set(SEARCHABLE) | set(ABLATION_ONLY) | set(FROZEN)
@@ -448,6 +480,7 @@ def test_select_final_candidates_refuses_claim_grade_scalar_ranking(tmp_path) ->
         CREDOTrialSpec(seed=1, fold_id="fold0"),
         train_fn=lambda c, s, r: _claim_grade_output(metrics),
         output_dir=str(tmp_path / "r"),
+        thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
     )
     with pytest.raises(ValueError, match="pruner_score"):
         select_final_candidates([trial_record(result)], profile="claim_grade", sort_by="pruner_score")
@@ -475,6 +508,7 @@ def test_select_final_candidates_aggregates_folds_and_seeds(tmp_path) -> None:
             spec,
             train_fn=lambda c, s, r: _claim_grade_output(metrics),
             output_dir=str(tmp_path / f"{hidden_dim}_{fold}_{seed}"),
+            thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
         )
         return trial_record(result)
 
@@ -494,6 +528,7 @@ def test_select_final_candidates_aggregates_folds_and_seeds(tmp_path) -> None:
         profile="claim_grade",
         aggregate_by=("fold_id", "seed"),
         objectives=["endpoint_geom_mass", "mass_error"],
+        **_claim_grade_grid_kwargs(),
     )
     assert len(front) == 2
     assert {row["fold_count"] for row in front} == {4}
@@ -502,7 +537,7 @@ def test_select_final_candidates_aggregates_folds_and_seeds(tmp_path) -> None:
     assert all("objective.endpoint_geom_mass.se" in row for row in front)
 
     with pytest.raises(ValueError, match="4 folds x 3 seeds"):
-        select_final_candidates(records[:9], profile="claim_grade")
+        select_final_candidates(records[:9], profile="claim_grade", **_claim_grade_grid_kwargs())
 
 
 def test_final_selector_accepts_decomposed_endpoint_objectives_by_default(tmp_path) -> None:
@@ -530,15 +565,45 @@ def test_final_selector_accepts_decomposed_endpoint_objectives_by_default(tmp_pa
                 CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
                 train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
                 output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
             )
             records.append(trial_record(result))
 
-    front = select_final_candidates(records, profile="claim_grade")
+    front = select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs())
     assert len(front) == 1
     row = front[0]
     assert "objective.endpoint_geometry.mean" in row
     assert "objective.endpoint_mass_penalty.mean" in row
     assert "objective.endpoint_geom_mass.mean" not in row
+
+
+def test_final_selector_keeps_geometry_when_mass_penalty_missing(tmp_path) -> None:
+    from credo.search import select_final_candidates
+    from credo.search.manifests import trial_record
+
+    records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = _complete_claim_grade_metrics(
+                endpoint_geom_mass=float("nan"),
+                endpoint_sinkhorn=0.2 + fold * 0.001,
+                endpoint_mass_penalty=None,
+                gpu_seconds=10.0,
+            )
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
+                output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
+            )
+            records.append(trial_record(result))
+
+    front = select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs())
+    assert len(front) == 1
+    assert "objective.endpoint_geometry.mean" in front[0]
+    assert "objective.endpoint_mass_penalty.mean" not in front[0]
+    assert "objective.endpoint_geom_mass.mean" not in front[0]
+    assert "objective.gpu_seconds.mean" not in front[0]
 
 
 def test_claim_grade_requires_full_fold_seed_grid_not_distinct_counts_only(tmp_path) -> None:
@@ -566,11 +631,12 @@ def test_claim_grade_requires_full_fold_seed_grid_not_distinct_counts_only(tmp_p
             CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
             train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
             output_dir=str(tmp_path / f"{idx}"),
+            thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
         )
         records.append(trial_record(result))
 
     with pytest.raises(ValueError, match="4 folds x 3 seeds"):
-        select_final_candidates(records, profile="claim_grade")
+        select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs())
 
 
 def test_claim_grade_uses_explicit_required_fold_seed_grid(tmp_path) -> None:
@@ -585,10 +651,18 @@ def test_claim_grade_uses_explicit_required_fold_seed_grid(tmp_path) -> None:
                 CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
                 train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
                 output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
             )
             records.append(trial_record(result))
 
-    assert select_final_candidates(records, profile="claim_grade")
+    with pytest.raises(ValueError, match="explicit required_folds"):
+        select_final_candidates(records, profile="claim_grade")
+    assert select_final_candidates(
+        records,
+        profile="claim_grade",
+        required_folds=("fold0", "fold1", "fold2", "fold3"),
+        required_seeds=(0, 1, 7),
+    )
     with pytest.raises(ValueError, match="4 folds x 3 seeds"):
         select_final_candidates(
             records,
@@ -615,11 +689,18 @@ def test_guide_claim_requires_guide_concordance_gap(tmp_path) -> None:
                 ),
                 train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
                 output_dir=str(tmp_path / f"missing_{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
             )
             records.append(trial_record(result))
 
-    assert select_final_candidates(records, profile="claim_grade", require_guide_concordance=False)
-    assert select_final_candidates(records, profile="claim_grade") == []
+    assert select_final_candidates(
+        records,
+        profile="claim_grade",
+        require_guide_concordance=False,
+        require_finite_thresholds=False,
+        **_claim_grade_grid_kwargs(),
+    )
+    assert select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs()) == []
 
     complete = []
     for fold in range(4):
@@ -634,9 +715,10 @@ def test_guide_claim_requires_guide_concordance_gap(tmp_path) -> None:
                 ),
                 train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
                 output_dir=str(tmp_path / f"complete_{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_GUIDE_TEST_THRESHOLDS,
             )
             complete.append(trial_record(result))
-    assert select_final_candidates(complete, profile="claim_grade")
+    assert select_final_candidates(complete, profile="claim_grade", **_claim_grade_grid_kwargs())
 
 
 def test_claim_grade_requires_builder_metadata_by_default(tmp_path) -> None:
@@ -646,16 +728,71 @@ def test_claim_grade_requires_builder_metadata_by_default(tmp_path) -> None:
     records = []
     for fold in range(4):
         for seed in range(3):
-            metrics = _complete_claim_grade_metrics()
+            metrics = _complete_claim_grade_metrics(guide_concordance_gap=0.0)
             result = run_credo_trial(
                 CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
                 train_fn=lambda c, s, r, metrics=metrics: metrics,
                 output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
             )
             records.append(trial_record(result))
 
-    assert select_final_candidates(records, profile="claim_grade", require_builder_metadata=False)
-    assert select_final_candidates(records, profile="claim_grade") == []
+    assert select_final_candidates(
+        records,
+        profile="claim_grade",
+        require_builder_metadata=False,
+        **_claim_grade_grid_kwargs(),
+    )
+    assert select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs()) == []
+
+
+def test_claim_grade_rejects_presence_only_threshold_profiles(tmp_path) -> None:
+    from credo.search import CLAIM_GRADE_PRESENCE_THRESHOLDS, select_final_candidates
+    from credo.search.manifests import trial_record
+
+    records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = _complete_claim_grade_metrics(guide_concordance_gap=0.0)
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
+                output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_PRESENCE_THRESHOLDS,
+            )
+            records.append(trial_record(result))
+
+    assert select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs()) == []
+    assert select_final_candidates(
+        records,
+        profile="claim_grade",
+        require_finite_thresholds=False,
+        **_claim_grade_grid_kwargs(),
+    )
+
+
+def test_claim_grade_requires_biology_builder_metadata(tmp_path) -> None:
+    from credo.search import select_final_candidates
+    from credo.search.manifests import trial_record
+
+    incomplete_builder = dict(BUILDER_METADATA)
+    incomplete_builder.pop("dataset_organism")
+    records = []
+    for fold in range(4):
+        for seed in range(3):
+            metrics = _complete_claim_grade_metrics()
+            result = run_credo_trial(
+                CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
+                train_fn=lambda c, s, r, metrics=metrics: CREDOTrainOutput(
+                    metrics=metrics,
+                    builder_metadata=incomplete_builder,
+                ),
+                output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
+            )
+            records.append(trial_record(result))
+
+    assert select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs()) == []
 
 
 def test_mixed_endpoint_records_use_canonical_default_objective(tmp_path) -> None:
@@ -677,10 +814,11 @@ def test_mixed_endpoint_records_use_canonical_default_objective(tmp_path) -> Non
                 CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
                 train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
                 output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
             )
             records.append(trial_record(result))
 
-    front = select_final_candidates(records, profile="claim_grade")
+    front = select_final_candidates(records, profile="claim_grade", **_claim_grade_grid_kwargs())
     assert len(front) == 1
     assert "objective.endpoint_geometry_or_proxy.mean" in front[0]
     assert "objective.endpoint_geometry.mean" not in front[0]
@@ -698,7 +836,7 @@ def test_mixed_endpoint_records_use_canonical_default_objective(tmp_path) -> Non
         for record in records
     ]
     assert "objective.endpoint_geometry_or_proxy.mean" in select_final_candidates(
-        legacy_records, profile="claim_grade"
+        legacy_records, profile="claim_grade", **_claim_grade_grid_kwargs()
     )[0]
 
 
@@ -725,6 +863,7 @@ def test_final_selector_reports_attempted_and_feasible_trial_counts(tmp_path) ->
                 CREDOTrialSpec(fold_id=f"fold{fold}", seed=seed),
                 train_fn=lambda c, s, r, metrics=metrics: _claim_grade_output(metrics),
                 output_dir=str(tmp_path / f"{fold}_{seed}"),
+                thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
             )
             records.append(trial_record(result))
 
@@ -746,14 +885,23 @@ def test_final_selector_reports_attempted_and_feasible_trial_counts(tmp_path) ->
             failure_type="RuntimeError",
         ),
         output_dir=str(tmp_path / "failed"),
+        thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
     )
     records.append(trial_record(failed))
 
-    front = select_final_candidates(records, profile="claim_grade", objectives=["endpoint_geom_mass", "mass_error"])
+    front = select_final_candidates(
+        records,
+        profile="claim_grade",
+        objectives=["endpoint_geom_mass", "mass_error"],
+        **_claim_grade_grid_kwargs(),
+    )
     assert len(front) == 1
     assert front[0]["n_trials"] == 12
     assert front[0]["n_trials_total"] == 13
     assert front[0]["n_trials_feasible"] == 12
+    assert front[0]["worst_source_ess_frac"] == pytest.approx(0.4)
+    assert front[0]["worst_factual_max_weight_frac"] == pytest.approx(0.2)
+    assert front[0]["worst_reference_logw_range"] == pytest.approx(3.0)
 
 
 def test_particle_step_convergence_diagnostics_gate_fidelities() -> None:
@@ -855,6 +1003,7 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
     assert "wfr_mfm_unbalanced_transport" in required_baselines_for_claim("method_superiority")
     default_axis_by_name = {axis.name: axis for axis in DEFAULT_BIOLOGY_AXES}
     assert default_axis_by_name["renz_expansion_anchor_perturbations"].axis_kind == "perturbation_anchor"
+    assert default_axis_by_name["renz_expansion_anchor_perturbations"].null_alternative == "greater"
     assert default_axis_by_name["renz_tnf_ap1_nfkb_expression_module"].axis_kind == "expression_module"
     assert "Notch1" not in default_axis_by_name["renz_tnf_ap1_nfkb_expression_module"].markers
 
@@ -880,6 +1029,7 @@ def test_null_suite_baseline_and_biology_axis_helpers() -> None:
     assert gates["tnf"]["pass"] is False
     assert gates["tnf"]["organism"] == "mouse"
     assert gates["tnf"]["axis_kind"] == "expression_module"
+    assert gates["tnf"]["null_alternative"] == "two_sided"
     assert gates["tnf"]["gene_symbol_namespace"] == "MGI"
     assert "marker_coverage" in gates["tnf"]["failed_gates"]
     assert gates["artifact"]["pass"] is False
@@ -937,6 +1087,13 @@ def test_problem_builder_registry_builds_from_config_without_namespace() -> None
         hvg_preprocessing_hash="hvg",
         encoder_checkpoint_hash="encoder",
         representation_config_sha256="rep",
+        dataset_organism="mouse",
+        gene_symbol_namespace="MGI",
+        expression_gene_universe_hash="expr-universe",
+        decoder_gene_panel_hash="decoder-genes",
+        fold_grid_sha256="fold-grid",
+        seed_grid="0,1,2",
+        split_manifest_sha256="split-manifest",
     )
     registry.register(
         "endpoint",
@@ -953,6 +1110,7 @@ def test_problem_builder_registry_builds_from_config_without_namespace() -> None
     record = problem_builder_metadata("endpoint", cfg, registry=registry).to_record()
     assert record["builder_name"] == "tiny_builder"
     assert record["mass_table_hash"] == "mass"
+    assert record["dataset_organism"] == "mouse"
     with pytest.raises(KeyError, match="single_time"):
         build_single_time_problem_from_config(cfg, registry=registry)
     with pytest.raises(ValueError, match="data_id"):
@@ -968,12 +1126,19 @@ def test_trial_record_persists_builder_metadata_and_hashes_identity(tmp_path) ->
         spec,
         train_fn=lambda c, s, r: _claim_grade_output(metrics),
         output_dir=str(tmp_path / "r"),
+        thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
     )
     record = trial_record(result)
 
     assert record["builder.builder_name"] == "test_builder"
     assert record["builder.fold_assignment_hash"] == "folds"
     assert record["builder.representation_config_sha256"] == "rep"
+    assert record["builder.dataset_organism"] == "mouse"
+    assert record["builder.expression_gene_universe_hash"] == "expr-universe"
+    assert record["constraints.threshold_profile"] == "claim_grade_finite"
+    assert record["constraints.control_null_max"] == pytest.approx(0.05)
+    assert record["constraints.log_mass_error_max"] == pytest.approx(0.2)
+    assert record["constraints.thresholds_sha256"]
     assert record["setting_sha256"] == setting_sha256(spec, BUILDER_METADATA)
     changed = dict(BUILDER_METADATA, gene_panel_hash="other-genes")
     assert setting_sha256(spec, BUILDER_METADATA) != setting_sha256(spec, changed)
@@ -983,6 +1148,7 @@ def test_trial_record_persists_builder_metadata_and_hashes_identity(tmp_path) ->
         train_fn=lambda c, s, r: metrics,
         output_dir=str(tmp_path / "bare"),
         builder_metadata=BUILDER_METADATA,
+        thresholds=CLAIM_GRADE_TEST_THRESHOLDS,
     )
     bare_record = trial_record(bare_result)
     assert bare_record["builder.builder_name"] == "test_builder"
@@ -1120,6 +1286,9 @@ def test_scheduler_profiles_use_separate_fidelity_ranges() -> None:
             "embedding_dim": 16,
             "n_programs": 16,
             "mediator_dim": 16,
+            "parent_setting_sha256": "parent",
+            "parent_search_profile": "pareto_refit",
+            "parent_objective_front_id": "front",
         },
     )
     ablation = suggest_ablation_spec(_FakeTrial(), {"data_id": "d"})
@@ -1128,10 +1297,26 @@ def test_scheduler_profiles_use_separate_fidelity_ranges() -> None:
     assert pareto.eval_particles == 2048
     assert claim.n_particles == 2048
     assert claim.eval_particles == 4096
+    assert claim.parent_setting_sha256 == "parent"
     assert ablation.context_kind == "causal_attention"
     assert ablation.ecological_growth is False
     with pytest.raises(ValueError, match="selected architecture"):
         suggest_claim_grade_refit_spec(_FakeTrial(), {"data_id": "d"})
+    with pytest.raises(ValueError, match="parent_search_profile"):
+        suggest_claim_grade_refit_spec(
+            _FakeTrial(),
+            {
+                "data_id": "d",
+                "hidden_dim": 256,
+                "depth": 3,
+                "embedding_dim": 16,
+                "n_programs": 16,
+                "mediator_dim": 16,
+                "parent_setting_sha256": "parent",
+                "parent_search_profile": "light_screen",
+                "parent_objective_front_id": "front",
+            },
+        )
 
 
 def test_spec_to_run_config_sets_latent_dim_via_construction() -> None:
@@ -1372,10 +1557,12 @@ def test_representation_and_claim_identity_are_hashed_separately_from_seed_fold(
     )
     same_setting = dataclasses.replace(base, seed=2, fold_id="fold1")
     different_representation = dataclasses.replace(base, representation_config_sha256="rep2")
+    different_parent = dataclasses.replace(base, parent_setting_sha256="parent-a")
 
     assert spec_sha256(base) != spec_sha256(same_setting)
     assert setting_sha256(base) == setting_sha256(same_setting)
     assert setting_sha256(base) != setting_sha256(different_representation)
+    assert setting_sha256(base) != setting_sha256(different_parent)
 
 
 def test_run_credo_trial_propagates_train_output_provenance() -> None:

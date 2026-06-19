@@ -63,6 +63,7 @@ class BiologyAxisSpec:
     module_source: Optional[str] = None
     min_coverage: float = 0.0
     axis_kind: str = "expression_module"
+    null_alternative: Literal["greater", "less", "two_sided"] = "two_sided"
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -73,6 +74,8 @@ class BiologyAxisSpec:
             raise ValueError("expected_direction must be positive, negative, either, or None.")
         if self.axis_kind not in {"expression_module", "perturbation_anchor", "metadata_artifact"}:
             raise ValueError("axis_kind must be expression_module, perturbation_anchor, or metadata_artifact.")
+        if self.null_alternative not in {"greater", "less", "two_sided"}:
+            raise ValueError("null_alternative must be greater, less, or two_sided.")
         if not 0.0 <= float(self.min_coverage) <= 1.0:
             raise ValueError("min_coverage must be in [0, 1].")
 
@@ -87,6 +90,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         gene_symbol_namespace="MGI",
         module_source="Renz_2024_P4_P60_field_expansion",
         min_coverage=0.7,
+        null_alternative="greater",
     ),
     BiologyAxisSpec(
         name="renz_tnf_ap1_nfkb_expression_module",
@@ -108,6 +112,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         gene_symbol_namespace="MGI",
         module_source="Renz_2024_TNF_AP1_NFkB_expression_module",
         min_coverage=0.7,
+        null_alternative="greater",
     ),
     BiologyAxisSpec(
         name="cis_like_epithelial",
@@ -118,6 +123,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         gene_symbol_namespace="HGNC",
         module_source="Choi_2023_CIS_like_LP",
         min_coverage=0.7,
+        null_alternative="two_sided",
     ),
     BiologyAxisSpec(
         name="pemt_tsk",
@@ -128,6 +134,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         gene_symbol_namespace="HGNC",
         module_source="Choi_2023_CC1_Punovuori_2024_pEMT",
         min_coverage=0.7,
+        null_alternative="two_sided",
     ),
     BiologyAxisSpec(
         name="caf_ecm",
@@ -138,6 +145,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         gene_symbol_namespace="HGNC",
         module_source="Punovuori_2024_CAF_ECM",
         min_coverage=0.7,
+        null_alternative="two_sided",
     ),
     BiologyAxisSpec(
         name="myeloid",
@@ -148,6 +156,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         gene_symbol_namespace="HGNC",
         module_source="HNSCC_inflammatory_myeloid",
         min_coverage=0.7,
+        null_alternative="two_sided",
     ),
     BiologyAxisSpec(
         name="guide_artifact",
@@ -157,6 +166,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         organism="metadata",
         gene_symbol_namespace="metric",
         module_source="CREDO_guide_artifact_axis",
+        null_alternative="less",
     ),
     BiologyAxisSpec(
         name="large_gene_artifact",
@@ -166,6 +176,7 @@ DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
         organism="metadata",
         gene_symbol_namespace="metric",
         module_source="CREDO_large_gene_artifact_axis",
+        null_alternative="less",
     ),
 )
 
@@ -436,6 +447,7 @@ def evaluate_biology_axis_gates(
             "dataset_organism": dataset_organism,
             "gene_symbol_namespace": axis.gene_symbol_namespace,
             "module_source": axis.module_source,
+            "null_alternative": axis.null_alternative,
             "marker_coverage": coverage,
             "min_coverage": axis.min_coverage,
             "homolog_mapped": bool(axis.name in homolog_mapped),

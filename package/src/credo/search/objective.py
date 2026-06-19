@@ -19,6 +19,9 @@ The constraints are deliberately wired to the *fixed* diagnostics:
 """
 from __future__ import annotations
 
+import dataclasses
+import hashlib
+import json
 import math
 from dataclasses import dataclass
 from enum import Enum
@@ -208,6 +211,53 @@ def thresholds_for_profile(
             "from claim_grade_thresholds(...)."
         )
     return claim_thresholds
+
+
+def threshold_metadata(thresholds: ConstraintThresholds) -> dict[str, object]:
+    """Stable manifest metadata for the feasibility threshold profile."""
+    if thresholds is None:
+        raise ValueError("threshold_metadata requires a concrete ConstraintThresholds object.")
+    payload = dataclasses.asdict(thresholds)
+    profile = _threshold_profile(thresholds)
+    encoded = json.dumps({"profile": profile, **payload}, sort_keys=True, default=str)
+    return {
+        "threshold_profile": profile,
+        "thresholds_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+        **payload,
+    }
+
+
+def _threshold_profile(thresholds: ConstraintThresholds) -> str:
+    if thresholds == DEFAULT_THRESHOLDS:
+        return "default"
+    if _is_finite_claim_grade_thresholds(thresholds):
+        return "claim_grade_finite"
+    if _is_claim_grade_presence_thresholds(thresholds):
+        return "claim_grade_presence"
+    return "custom"
+
+
+def _is_claim_grade_presence_thresholds(thresholds: ConstraintThresholds) -> bool:
+    return (
+        thresholds.require_heldout_provenance
+        and thresholds.require_heldout_endpoint
+        and thresholds.require_mass_metric
+        and thresholds.require_control_null
+        and thresholds.require_branch_particle_diagnostics
+        and thresholds.required_mass_error_kind == "abs_log_residual"
+    )
+
+
+def _is_finite_claim_grade_thresholds(thresholds: ConstraintThresholds) -> bool:
+    return (
+        _is_claim_grade_presence_thresholds(thresholds)
+        and math.isfinite(float(thresholds.control_null_max))
+        and math.isfinite(float(thresholds.log_mass_error_max))
+        and (
+            not thresholds.require_guide_concordance
+            or math.isfinite(float(thresholds.guide_concordance_max))
+        )
+    )
 
 
 @dataclass
@@ -523,5 +573,6 @@ __all__ = [
     "hard_constraints",
     "objective_vector",
     "pruner_score",
+    "threshold_metadata",
     "thresholds_for_profile",
 ]

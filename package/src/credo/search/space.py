@@ -126,6 +126,9 @@ class CREDOTrialSpec:
     input_data_sha256: Optional[str] = None
     mass_table_sha256: Optional[str] = None
     split_file_sha256: Optional[str] = None
+    parent_setting_sha256: Optional[str] = None
+    parent_search_profile: Optional[str] = None
+    parent_objective_front_id: Optional[str] = None
 
     # --- model capacity (SEARCHABLE) ---
     embedding_dim: int = 8

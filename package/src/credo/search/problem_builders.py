@@ -30,6 +30,13 @@ class ProblemBuilderMetadata:
     hvg_preprocessing_hash: Optional[str] = None
     encoder_checkpoint_hash: Optional[str] = None
     representation_config_sha256: Optional[str] = None
+    dataset_organism: Optional[str] = None
+    gene_symbol_namespace: Optional[str] = None
+    expression_gene_universe_hash: Optional[str] = None
+    decoder_gene_panel_hash: Optional[str] = None
+    fold_grid_sha256: Optional[str] = None
+    seed_grid: Optional[str] = None
+    split_manifest_sha256: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.builder_name:

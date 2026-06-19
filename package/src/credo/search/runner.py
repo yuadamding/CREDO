@@ -36,6 +36,7 @@ from .objective import (
     constraints_satisfied,
     hard_constraints,
     objective_vector,
+    threshold_metadata,
 )
 from .pruning import NoOpReporter, SearchReporter, TrialPrunedError
 from .space import CREDOTrialSpec, spec_to_run_config
@@ -118,6 +119,7 @@ def run_credo_trial(
         metrics=metrics,
         objective_vector=objective_vector(metrics),
         constraints=constraints,
+        threshold_metadata=threshold_metadata(thresholds),
         pruner_score=score,
         feasible=feasible,
         run_dir=output.run_dir or output_dir,

@@ -86,6 +86,7 @@ def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
         else math.nan
     )
     record.update({f"constraint.{k}": v for k, v in result.constraints.items()})
+    record.update({f"constraints.{k}": v for k, v in result.threshold_metadata.items()})
     record.update({f"builder.{k}": v for k, v in builder_record.items()})
     return record
 
@@ -273,6 +274,8 @@ def select_final_candidates(
     require_heldout: bool = True,
     require_guide_concordance: bool | None = None,
     require_builder_metadata: bool | None = None,
+    require_finite_thresholds: bool | None = None,
+    require_explicit_grid: bool | None = None,
     group_by: tuple[str, ...] = ("setting_sha256",),
     aggregate_by: tuple[str, ...] = ("spec.fold_id", "spec.seed"),
     objectives: list[str] | None = None,
@@ -301,6 +304,20 @@ def select_final_candidates(
         if require_builder_metadata is None
         else bool(require_builder_metadata)
     )
+    finite_thresholds_required = (
+        profile is SearchProfile.CLAIM_GRADE
+        if require_finite_thresholds is None
+        else bool(require_finite_thresholds)
+    )
+    explicit_grid_required = (
+        profile is SearchProfile.CLAIM_GRADE
+        if require_explicit_grid is None
+        else bool(require_explicit_grid)
+    )
+    if explicit_grid_required and (required_folds is None or required_seeds is None):
+        raise ValueError(
+            f"{profile.value} selection requires explicit required_folds and required_seeds."
+        )
     group_keys = tuple(_record_key(name) for name in group_by)
     aggregate_keys = tuple(_record_key(name) for name in aggregate_by)
     required_fold_values = tuple(required_folds) if required_folds is not None else None
@@ -324,11 +341,14 @@ def select_final_candidates(
                 r,
                 require_guide_concordance=require_guide_concordance,
                 require_builder_metadata=builder_required,
+                require_finite_thresholds=finite_thresholds_required,
             )
         ]
     elif profile is SearchProfile.PARETO_REFIT:
         rows = [r for r in rows if _record_pareto_refit_ready(r)]
-    objective_names = objectives or _default_objectives_from_records(rows)
+    objective_names = objectives or _default_objectives_from_records(rows, profile=profile)
+    if not objective_names:
+        return []
     objective_keys = [_objective_key(name) for name in objective_names]
 
     grouped: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
@@ -424,6 +444,23 @@ def _aggregate_group(
             for row in group
         ),
         "worst_fold_max_weight_frac": _max_finite(row.get("metric.max_weight_frac_mean") for row in group),
+        "worst_source_ess_frac": _min_finite(row.get("metric.source_ess_frac") for row in group),
+        "worst_factual_min_ess_frac_over_time": _min_finite(
+            row.get("metric.factual_min_ess_frac_over_time") for row in group
+        ),
+        "worst_reference_min_ess_frac_over_time": _min_finite(
+            row.get("metric.reference_min_ess_frac_over_time") for row in group
+        ),
+        "worst_factual_max_weight_frac": _max_finite(
+            row.get("metric.factual_max_weight_frac") for row in group
+        ),
+        "worst_reference_max_weight_frac": _max_finite(
+            row.get("metric.reference_max_weight_frac") for row in group
+        ),
+        "worst_factual_logw_range": _max_finite(row.get("metric.factual_logw_range") for row in group),
+        "worst_reference_logw_range": _max_finite(
+            row.get("metric.reference_logw_range") for row in group
+        ),
         "pruner_score.mean": _mean_finite(row.get("pruner_score") for row in group),
     }
     for name, value in zip(group_by, key):
@@ -437,7 +474,11 @@ def _aggregate_group(
     return out
 
 
-def _default_objectives_from_records(records: list[dict[str, Any]]) -> list[str]:
+def _default_objectives_from_records(
+    records: list[dict[str, Any]],
+    *,
+    profile: SearchProfile,
+) -> list[str]:
     if not records:
         return ["endpoint_geom_mass", "mass_error"]
     endpoint_kinds = {
@@ -452,19 +493,26 @@ def _default_objectives_from_records(records: list[dict[str, Any]]) -> list[str]
         objectives = ["endpoint_geometry_or_proxy"]
     elif all(_finite(row.get("objective.endpoint_geometry")) for row in records):
         objectives = ["endpoint_geometry"]
-        if all(_finite(row.get("objective.endpoint_mass_penalty")) for row in records):
-            objectives.append("endpoint_mass_penalty")
-    else:
+    elif all(_finite(row.get("objective.endpoint_geometry_or_proxy")) for row in records):
+        objectives = ["endpoint_geometry_or_proxy"]
+    elif all(_finite(row.get("objective.endpoint_geom_mass")) for row in records):
         objectives = ["endpoint_geom_mass"]
+    else:
+        return []
+    if all(_finite(row.get("objective.endpoint_mass_penalty")) for row in records):
+        objectives.append("endpoint_mass_penalty")
     for name in (
         "mass_error",
         "counterfactual_null_gap",
         "guide_concordance_gap",
-        "gpu_seconds",
     ):
         key = _objective_key(name)
         if all(_finite(row.get(key)) for row in records):
             objectives.append(name)
+    if profile is not SearchProfile.CLAIM_GRADE and all(
+        _finite(row.get("objective.gpu_seconds")) for row in records
+    ):
+        objectives.append("gpu_seconds")
     return objectives
 
 
@@ -582,6 +630,11 @@ _REQUIRED_BUILDER_FIELDS = (
     "builder.latent_key",
     "builder.gene_panel_hash",
     "builder.normalization_hash",
+    "builder.hvg_preprocessing_hash",
+    "builder.dataset_organism",
+    "builder.gene_symbol_namespace",
+    "builder.expression_gene_universe_hash",
+    "builder.decoder_gene_panel_hash",
 )
 
 
@@ -590,6 +643,7 @@ def _record_claim_grade_ready(
     *,
     require_guide_concordance: bool | None,
     require_builder_metadata: bool,
+    require_finite_thresholds: bool,
 ) -> bool:
     branch_ready = _record_pareto_refit_ready(record) and all(
         _finite(record.get(key))
@@ -613,7 +667,11 @@ def _record_claim_grade_ready(
     ):
         if not _finite(record.get("metric.guide_concordance_gap")):
             return False
+        if require_finite_thresholds and not _guide_threshold_ready(record):
+            return False
     if require_builder_metadata and not _claim_grade_builder_metadata_ready(record):
+        return False
+    if require_finite_thresholds and not _claim_grade_thresholds_ready(record):
         return False
     return True
 
@@ -624,6 +682,22 @@ def _claim_grade_builder_metadata_ready(record: dict[str, Any]) -> bool:
     return not (
         _blank(record.get("builder.encoder_checkpoint_hash"))
         and _blank(record.get("builder.representation_config_sha256"))
+    )
+
+
+def _claim_grade_thresholds_ready(record: dict[str, Any]) -> bool:
+    return (
+        record.get("constraints.threshold_profile") == "claim_grade_finite"
+        and _finite(record.get("constraints.control_null_max"))
+        and _finite(record.get("constraints.log_mass_error_max"))
+        and not _blank(record.get("constraints.thresholds_sha256"))
+    )
+
+
+def _guide_threshold_ready(record: dict[str, Any]) -> bool:
+    return (
+        bool(record.get("constraints.require_guide_concordance"))
+        and _finite(record.get("constraints.guide_concordance_max"))
     )
 
 

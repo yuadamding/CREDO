@@ -112,7 +112,9 @@ def suggest_claim_grade_refit_spec(
     """Sample the final high-fidelity envelope for a selected architecture.
 
     Claim-grade refit does not search model architecture; it should start from a
-    selected Pareto setting and only refit loss/numerical-fidelity knobs.
+    selected Pareto setting and only refit loss/numerical-fidelity knobs. The
+    selected parent setting/front identifiers are required so claim-grade runs
+    cannot be mistaken for an independent architecture search.
     """
     if require_selected_architecture:
         required = (
@@ -121,6 +123,9 @@ def suggest_claim_grade_refit_spec(
             "embedding_dim",
             "n_programs",
             "mediator_dim",
+            "parent_setting_sha256",
+            "parent_search_profile",
+            "parent_objective_front_id",
         )
         missing = [name for name in required if name not in base]
         if missing:
@@ -128,6 +133,8 @@ def suggest_claim_grade_refit_spec(
                 "claim-grade refit requires selected architecture fields in base: "
                 f"{missing}."
             )
+        if base.get("parent_search_profile") != "pareto_refit":
+            raise ValueError("claim-grade refit requires parent_search_profile='pareto_refit'.")
     suggested = {
         "lambda_end": trial.suggest_float("lambda_end", 0.5, 2.0, log=True),
         "lambda_aux": trial.suggest_float("lambda_aux", 1e-4, 0.2, log=True),
