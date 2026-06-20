@@ -30,9 +30,9 @@ from .objective import SearchProfile
 from .space import CREDOTrialSpec
 
 # Bump when the flattened trial-record schema changes (field names/prefixes).
-SEARCH_SCHEMA_VERSION = "credo.search.v3.claim_audit"
+SEARCH_SCHEMA_VERSION = "credo.search.v4.claim_evidence"
 
-_SETTING_BUILDER_FIELDS = {
+_MODEL_SETTING_BUILDER_FIELDS = {
     "builder_name",
     "builder_version",
     "data_path_hash",
@@ -52,10 +52,23 @@ _SETTING_BUILDER_FIELDS = {
     "fold_grid_sha256",
     "seed_grid",
     "split_manifest_sha256",
+}
+_CLAIM_EVIDENCE_BUILDER_FIELDS = {
     "homolog_map_name",
     "homolog_map_version",
     "homolog_map_sha256",
+    "null_suite_sha256",
+    "biology_axis_spec_sha256",
+    "baseline_manifest_sha256",
+    "search_run_manifest_sha256",
 }
+_SETTING_BUILDER_FIELDS = _MODEL_SETTING_BUILDER_FIELDS | _CLAIM_EVIDENCE_BUILDER_FIELDS
+_CLAIM_EVIDENCE_UNIFORM_FIELDS = (
+    "builder.homolog_map_sha256",
+    "builder.null_suite_sha256",
+    "builder.biology_axis_spec_sha256",
+    "builder.baseline_manifest_sha256",
+)
 
 
 def spec_sha256(spec: CREDOTrialSpec) -> str:
@@ -65,16 +78,35 @@ def spec_sha256(spec: CREDOTrialSpec) -> str:
 
 
 def setting_sha256(spec: CREDOTrialSpec, builder_metadata: Any | None = None) -> str:
-    """Hash a setting across folds/seeds by excluding stochastic split identity.
+    """Hash the legacy full setting/evidence bundle across folds/seeds."""
+    return _hash_spec_and_builder(spec, _setting_builder_metadata_record(builder_metadata))
 
-    Builder fingerprints are part of setting identity when present: two studies
-    with the same hyperparameters but different preprocessing or gene panels are
-    not the same final setting.
-    """
+
+def model_setting_sha256(spec: CREDOTrialSpec, builder_metadata: Any | None = None) -> str:
+    """Hash the trained-model setting, excluding claim-only evidence metadata."""
+    return _hash_spec_and_builder(spec, _model_setting_builder_metadata_record(builder_metadata))
+
+
+def claim_evidence_sha256(
+    spec: CREDOTrialSpec,
+    builder_metadata: Any | None = None,
+    threshold_metadata: Any | None = None,
+) -> str:
+    """Hash the claim-evidence bundle that interprets a model setting."""
+    builder_record = _claim_evidence_builder_metadata_record(builder_metadata)
+    payload = {
+        "model_setting_sha256": model_setting_sha256(spec, builder_metadata),
+        "claim_evidence_builder_metadata": builder_record,
+        "threshold_metadata": dict(threshold_metadata or {}),
+    }
+    encoded = json.dumps(payload, sort_keys=True, default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _hash_spec_and_builder(spec: CREDOTrialSpec, builder_record: dict[str, Any]) -> str:
     payload_dict = dataclasses.asdict(spec)
     payload_dict.pop("seed", None)
     payload_dict.pop("fold_id", None)
-    builder_record = _setting_builder_metadata_record(builder_metadata)
     if builder_record:
         payload_dict["builder_metadata"] = builder_record
     payload = json.dumps(payload_dict, sort_keys=True, default=str)
@@ -89,6 +121,12 @@ def trial_record(result: CREDOTrialResult) -> dict[str, Any]:
         "schema_version": SEARCH_SCHEMA_VERSION,
         "spec_sha256": spec_sha256(spec),
         "setting_sha256": setting_sha256(spec, builder_record),
+        "model_setting_sha256": model_setting_sha256(spec, builder_record),
+        "claim_evidence_sha256": claim_evidence_sha256(
+            spec,
+            builder_record,
+            result.threshold_metadata,
+        ),
         "run_dir": result.run_dir,
         "checkpoint_path": result.checkpoint_path,
         "history_path": result.history_path,
@@ -133,6 +171,16 @@ def _builder_metadata_record(metadata: Any | None) -> dict[str, Any]:
 def _setting_builder_metadata_record(metadata: Any | None) -> dict[str, Any]:
     record = _builder_metadata_record(metadata)
     return {key: value for key, value in record.items() if key in _SETTING_BUILDER_FIELDS}
+
+
+def _model_setting_builder_metadata_record(metadata: Any | None) -> dict[str, Any]:
+    record = _builder_metadata_record(metadata)
+    return {key: value for key, value in record.items() if key in _MODEL_SETTING_BUILDER_FIELDS}
+
+
+def _claim_evidence_builder_metadata_record(metadata: Any | None) -> dict[str, Any]:
+    record = _builder_metadata_record(metadata)
+    return {key: value for key, value in record.items() if key in _CLAIM_EVIDENCE_BUILDER_FIELDS}
 
 
 def search_run_manifest(
@@ -600,7 +648,15 @@ def _aggregate_sort_key(name: str) -> str:
 
 
 def _record_key(name: str) -> str:
-    if "." in name or name in {"spec_sha256", "setting_sha256", "schema_version", "feasible", "pruner_score"}:
+    if "." in name or name in {
+        "spec_sha256",
+        "setting_sha256",
+        "model_setting_sha256",
+        "claim_evidence_sha256",
+        "schema_version",
+        "feasible",
+        "pruner_score",
+    }:
         return name
     return f"spec.{name}"
 
@@ -724,6 +780,8 @@ def _record_claim_grade_ready(
     expected_seed_grid: str | None,
     expected_split_manifest_sha256: str | None,
 ) -> bool:
+    if record.get("schema_version") != SEARCH_SCHEMA_VERSION:
+        return False
     branch_ready = _record_pareto_refit_ready(record) and all(
         _finite(record.get(key))
         for key in (
@@ -764,6 +822,8 @@ def _record_claim_grade_ready(
         record,
         require_guide_concordance=require_guide_concordance,
     ):
+        return False
+    if require_finite_thresholds and not _claim_grade_particle_thresholds_ready(record):
         return False
     return True
 
@@ -812,6 +872,8 @@ def _claim_grade_metric_thresholds_ready(
         return False
     if not _abs_gap_lte(record.get("metric.mass_error_value"), mass_error_max):
         return False
+    if record.get("metric.control_null_gap_kind") != "absolute":
+        return False
     if not _abs_gap_lte(record.get("metric.control_null_gap"), record.get("constraints.control_null_max")):
         return False
     guide_required = bool(record.get("constraints.require_guide_concordance")) or (
@@ -821,12 +883,34 @@ def _claim_grade_metric_thresholds_ready(
             and record.get("spec.claim_type") in _GUIDE_CONCORDANCE_CLAIM_TYPES
         )
     )
-    if guide_required and not _abs_gap_lte(
-        record.get("metric.guide_concordance_gap"),
-        record.get("constraints.guide_concordance_max"),
-    ):
-        return False
+    if guide_required:
+        if record.get("metric.guide_concordance_gap_kind") != "absolute":
+            return False
+        if not _abs_gap_lte(
+            record.get("metric.guide_concordance_gap"),
+            record.get("constraints.guide_concordance_max"),
+        ):
+            return False
     return True
+
+
+def _claim_grade_particle_thresholds_ready(record: dict[str, Any]) -> bool:
+    ess_floor = record.get("constraints.ess_floor")
+    max_weight_ceiling = record.get("constraints.max_weight_ceiling")
+    return (
+        _floor_gte(record.get("metric.terminal_ess_frac_min"), ess_floor)
+        and _floor_gte(record.get("metric.min_ess_frac_over_time"), ess_floor)
+        and _ceiling_lte(record.get("metric.max_weight_frac_mean"), max_weight_ceiling)
+        and _floor_gte(record.get("metric.source_ess_frac"), ess_floor)
+        and _floor_gte(record.get("metric.factual_terminal_ess_frac"), ess_floor)
+        and _floor_gte(record.get("metric.reference_terminal_ess_frac"), ess_floor)
+        and _floor_gte(record.get("metric.factual_min_ess_frac_over_time"), ess_floor)
+        and _floor_gte(record.get("metric.reference_min_ess_frac_over_time"), ess_floor)
+        and _ceiling_lte(record.get("metric.factual_max_weight_frac"), max_weight_ceiling)
+        and _ceiling_lte(record.get("metric.reference_max_weight_frac"), max_weight_ceiling)
+        and _nonnegative_finite(record.get("metric.factual_logw_range"))
+        and _nonnegative_finite(record.get("metric.reference_logw_range"))
+    )
 
 
 def _claim_grade_builder_grid_ready(
@@ -855,7 +939,14 @@ def _claim_grade_group_uniformity_ready(
     if not _threshold_counts_uniform(threshold_counts):
         return False
     threshold_hash = next(iter(threshold_counts))
-    return expected_thresholds_sha256 is None or threshold_hash == expected_thresholds_sha256
+    if expected_thresholds_sha256 is not None and threshold_hash != expected_thresholds_sha256:
+        return False
+    for field in _CLAIM_EVIDENCE_UNIFORM_FIELDS:
+        if any(not _blank(row.get(field)) for row in group):
+            counts = _value_counts(row.get(field) for row in group)
+            if not _threshold_counts_uniform(counts):
+                return False
+    return True
 
 
 def _guide_threshold_ready(record: dict[str, Any]) -> bool:
@@ -910,6 +1001,34 @@ def _abs_gap_lte(value: Any, threshold: Any) -> bool:
         and threshold_float >= 0.0
         and value_float <= threshold_float
     )
+
+
+def _floor_gte(value: Any, floor: Any) -> bool:
+    value_float = _to_float(value)
+    floor_float = _to_float(floor)
+    return (
+        math.isfinite(value_float)
+        and math.isfinite(floor_float)
+        and floor_float >= 0.0
+        and value_float >= floor_float
+    )
+
+
+def _ceiling_lte(value: Any, ceiling: Any) -> bool:
+    value_float = _to_float(value)
+    ceiling_float = _to_float(ceiling)
+    return (
+        math.isfinite(value_float)
+        and value_float >= 0.0
+        and math.isfinite(ceiling_float)
+        and ceiling_float >= 0.0
+        and value_float <= ceiling_float
+    )
+
+
+def _nonnegative_finite(value: Any) -> bool:
+    value_float = _to_float(value)
+    return math.isfinite(value_float) and value_float >= 0.0
 
 
 def _canonical_fold_id(value: Any) -> str:
@@ -1001,7 +1120,9 @@ def _finite(value: Any) -> bool:
 
 __all__ = [
     "append_trial_record",
+    "claim_evidence_sha256",
     "load_trial_records",
+    "model_setting_sha256",
     "pareto_front",
     "reduce_trial_dirs",
     "select_final_candidates",

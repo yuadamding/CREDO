@@ -57,6 +57,7 @@ from .pruning import (
     TrialPrunedError,
 )
 from .diagnostics import (
+    BASELINE_CODE_IDENTITY_KINDS,
     BASELINE_KINDS,
     BASELINE_PROVENANCE_FIELDS,
     BASELINE_STATUSES,
@@ -64,8 +65,10 @@ from .diagnostics import (
     BiologyAxisSpec,
     ConvergenceThresholds,
     FidelityRecord,
+    HomologMarkerStatus,
     baseline_export_manifest,
     baseline_export_record,
+    baseline_export_record_from_file,
     claim_grade_convergence_thresholds,
     estimate_convergence_thresholds_from_pilot,
     evaluate_biology_axis_gates,
@@ -103,7 +106,9 @@ from .space import (
 )
 from .manifests import (
     append_trial_record,
+    claim_evidence_sha256,
     load_trial_records,
+    model_setting_sha256,
     pareto_front,
     reduce_trial_dirs,
     select_final_candidates,
@@ -116,6 +121,7 @@ from .manifests import (
 
 __all__ = [
     "ABLATION_ONLY",
+    "BASELINE_CODE_IDENTITY_KINDS",
     "BASELINE_KINDS",
     "BASELINE_PROVENANCE_FIELDS",
     "BASELINE_STATUSES",
@@ -133,6 +139,7 @@ __all__ = [
     "DEFAULT_THRESHOLDS",
     "FidelityRecord",
     "FROZEN",
+    "HomologMarkerStatus",
     "MassErrorKind",
     "NoOpReporter",
     "ProblemBuilderMetadata",
@@ -147,9 +154,11 @@ __all__ = [
     "assert_frozen_semantics",
     "baseline_export_manifest",
     "baseline_export_record",
+    "baseline_export_record_from_file",
     "build_endpoint_problem_from_config",
     "build_single_time_problem_from_config",
     "build_trajectory_problem_from_config",
+    "claim_evidence_sha256",
     "claim_grade_thresholds",
     "claim_grade_convergence_thresholds",
     "clear_problem_builders",
@@ -162,6 +171,7 @@ __all__ = [
     "load_trial_records",
     "metrics_from_epoch",
     "metrics_from_history",
+    "model_setting_sha256",
     "objective_vector",
     "pareto_front",
     "pruner_score",

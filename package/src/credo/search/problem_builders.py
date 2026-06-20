@@ -40,6 +40,10 @@ class ProblemBuilderMetadata:
     homolog_map_name: Optional[str] = None
     homolog_map_version: Optional[str] = None
     homolog_map_sha256: Optional[str] = None
+    null_suite_sha256: Optional[str] = None
+    biology_axis_spec_sha256: Optional[str] = None
+    baseline_manifest_sha256: Optional[str] = None
+    search_run_manifest_sha256: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.builder_name:

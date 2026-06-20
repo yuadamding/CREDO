@@ -6,6 +6,7 @@ and biology-axis gates are recorded as structured payloads rather than prose.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import statistics
 from dataclasses import dataclass, field
@@ -31,6 +32,12 @@ BASELINE_PROVENANCE_FIELDS: tuple[str, ...] = (
     "latent_space_hash",
     "mass_table_hash",
     "split_manifest_sha256",
+)
+BASELINE_CODE_IDENTITY_KINDS: tuple[str, ...] = (
+    "git_commit",
+    "package_lock",
+    "container_digest",
+    "published_release",
 )
 
 
@@ -91,6 +98,24 @@ class BiologyAxisSpec:
             raise ValueError("min_coverage must be in [0, 1].")
         if int(self.min_markers_scored) < 1:
             raise ValueError("min_markers_scored must be positive.")
+
+
+@dataclass(frozen=True)
+class HomologMarkerStatus:
+    """Original-marker-level homolog mapping and scoring status."""
+
+    original_marker: str
+    mapped_symbols: tuple[str, ...] = ()
+    scored_symbols: tuple[str, ...] = ()
+    mapping_status: Literal["unique_scored", "unique_unscored", "ambiguous", "unmapped"] = "unmapped"
+
+    def __post_init__(self) -> None:
+        if not self.original_marker:
+            raise ValueError("original_marker must not be empty.")
+        if self.mapping_status not in {"unique_scored", "unique_unscored", "ambiguous", "unmapped"}:
+            raise ValueError(f"Unknown homolog mapping_status {self.mapping_status!r}.")
+        object.__setattr__(self, "mapped_symbols", _symbol_tuple(self.mapped_symbols))
+        object.__setattr__(self, "scored_symbols", _symbol_tuple(self.scored_symbols))
 
 
 DEFAULT_BIOLOGY_AXES: tuple[BiologyAxisSpec, ...] = (
@@ -393,6 +418,10 @@ def baseline_export_record(
     notes: str | None = None,
     baseline_version: str | None = None,
     baseline_commit_sha: str | None = None,
+    baseline_code_identity_kind: str | None = None,
+    baseline_code_identity: str | None = None,
+    baseline_package_lock_sha256: str | None = None,
+    baseline_container_digest: str | None = None,
     export_schema_version: str | None = None,
     input_measure_hash: str | None = None,
     latent_space_hash: str | None = None,
@@ -404,6 +433,11 @@ def baseline_export_record(
         raise ValueError(f"Unknown baseline_kind {baseline_kind!r}; expected one of {BASELINE_KINDS}.")
     if status not in BASELINE_STATUSES:
         raise ValueError(f"Unknown baseline status {status!r}; expected one of {BASELINE_STATUSES}.")
+    if baseline_code_identity_kind is not None and baseline_code_identity_kind not in BASELINE_CODE_IDENTITY_KINDS:
+        raise ValueError(
+            f"Unknown baseline_code_identity_kind {baseline_code_identity_kind!r}; "
+            f"expected one of {BASELINE_CODE_IDENTITY_KINDS}."
+        )
     record: dict[str, object] = {
         "baseline_kind": baseline_kind,
         "status": status,
@@ -412,6 +446,10 @@ def baseline_export_record(
         "notes": notes,
         "baseline_version": baseline_version,
         "baseline_commit_sha": baseline_commit_sha,
+        "baseline_code_identity_kind": baseline_code_identity_kind,
+        "baseline_code_identity": baseline_code_identity,
+        "baseline_package_lock_sha256": baseline_package_lock_sha256,
+        "baseline_container_digest": baseline_container_digest,
         "export_schema_version": export_schema_version,
         "input_measure_hash": input_measure_hash,
         "latent_space_hash": latent_space_hash,
@@ -421,6 +459,58 @@ def baseline_export_record(
     for key, value in dict(metrics or {}).items():
         record[f"metric.{key}"] = float(value)
     return record
+
+
+def baseline_export_record_from_file(
+    baseline_kind: str,
+    artifact_path: str | Path,
+    *,
+    artifact_sha256: str | None = None,
+    metrics: Optional[Mapping[str, float]] = None,
+    status: str = "available",
+    notes: str | None = None,
+    baseline_version: str | None = None,
+    baseline_commit_sha: str | None = None,
+    baseline_code_identity_kind: str | None = None,
+    baseline_code_identity: str | None = None,
+    baseline_package_lock_sha256: str | None = None,
+    baseline_container_digest: str | None = None,
+    export_schema_version: str | None = None,
+    input_measure_hash: str | None = None,
+    latent_space_hash: str | None = None,
+    mass_table_hash: str | None = None,
+    split_manifest_sha256: str | None = None,
+) -> dict[str, object]:
+    """Build a baseline record after hashing a local artifact."""
+    path = Path(artifact_path)
+    computed_sha256: str | None = None
+    if status == "available" or path.exists():
+        if not path.is_file():
+            raise FileNotFoundError(f"Baseline artifact does not exist or is not a file: {path}")
+        computed_sha256 = _sha256_file(path)
+        if artifact_sha256 is not None and artifact_sha256 != computed_sha256:
+            raise ValueError(
+                f"artifact_sha256 mismatch for {path}: expected {artifact_sha256}, got {computed_sha256}."
+            )
+    return baseline_export_record(
+        baseline_kind,
+        artifact_path=path,
+        artifact_sha256=computed_sha256 or artifact_sha256,
+        metrics=metrics,
+        status=status,
+        notes=notes,
+        baseline_version=baseline_version,
+        baseline_commit_sha=baseline_commit_sha,
+        baseline_code_identity_kind=baseline_code_identity_kind,
+        baseline_code_identity=baseline_code_identity,
+        baseline_package_lock_sha256=baseline_package_lock_sha256,
+        baseline_container_digest=baseline_container_digest,
+        export_schema_version=export_schema_version,
+        input_measure_hash=input_measure_hash,
+        latent_space_hash=latent_space_hash,
+        mass_table_hash=mass_table_hash,
+        split_manifest_sha256=split_manifest_sha256,
+    )
 
 
 def baseline_export_manifest(
@@ -446,11 +536,13 @@ def baseline_export_manifest(
                 continue
             if _blank(row.get("artifact_path")):
                 provenance_missing.append(f"{baseline}.artifact_path")
-            provenance_missing.extend(
-                f"{baseline}.{field}"
-                for field in BASELINE_PROVENANCE_FIELDS
-                if _blank(row.get(field))
-            )
+            for field in BASELINE_PROVENANCE_FIELDS:
+                if field == "baseline_commit_sha":
+                    if not _baseline_code_identity_ready(row):
+                        provenance_missing.append(f"{baseline}.baseline_commit_sha")
+                    continue
+                if _blank(row.get(field)):
+                    provenance_missing.append(f"{baseline}.{field}")
     return {
         "records": rows,
         "required_missing": missing,
@@ -470,6 +562,9 @@ def evaluate_biology_axis_gates(
     homolog_map_version: str | None = None,
     homolog_map_sha256: str | None = None,
     homolog_marker_counts: Optional[Mapping[str, int]] = None,
+    homolog_marker_status_by_axis: Optional[
+        Mapping[str, Iterable[HomologMarkerStatus | Mapping[str, object]]]
+    ] = None,
     scored_coverage_by_axis: Optional[Mapping[str, float]] = None,
     unmapped_markers_by_axis: Optional[Mapping[str, Iterable[str]]] = None,
     ambiguous_markers_by_axis: Optional[Mapping[str, Iterable[str]]] = None,
@@ -485,6 +580,7 @@ def evaluate_biology_axis_gates(
     unmapped_markers_by_axis = unmapped_markers_by_axis or {}
     ambiguous_markers_by_axis = ambiguous_markers_by_axis or {}
     homolog_marker_counts = homolog_marker_counts or {}
+    homolog_marker_status_by_axis = homolog_marker_status_by_axis or {}
     homolog_mapped = set(homolog_mapped_axes or ())
     out: dict[str, dict[str, object]] = {}
     for axis in axes:
@@ -498,21 +594,41 @@ def evaluate_biology_axis_gates(
         ambiguous_markers = tuple(ambiguous_markers_by_axis.get(axis.name, ()))
         unmapped_set = {str(marker) for marker in unmapped_markers}
         ambiguous_set = {str(marker) for marker in ambiguous_markers}
-        n_markers_after_mapping = int(homolog_marker_counts.get(axis.name, len(axis.markers)))
-        n_markers_scored_including_ambiguous = max(0, n_markers_after_mapping - len(unmapped_set))
-        n_markers_scored_ambiguous = len(ambiguous_set - unmapped_set)
-        n_markers_scored_unique = max(
-            0,
-            n_markers_scored_including_ambiguous - n_markers_scored_ambiguous,
+        raw_statuses = homolog_marker_status_by_axis.get(axis.name)
+        if raw_statuses is None:
+            marker_counts = _homolog_marker_counts_from_aggregates(
+                axis,
+                n_target_symbols_after_mapping=int(homolog_marker_counts.get(axis.name, len(axis.markers))),
+                unmapped_set=unmapped_set,
+                ambiguous_set=ambiguous_set,
+            )
+        else:
+            marker_counts = _homolog_marker_counts_from_statuses(axis, raw_statuses)
+        n_original_markers = int(marker_counts["n_original_markers"])
+        n_original_markers_after_mapping = int(marker_counts["n_original_markers_after_mapping"])
+        n_original_markers_unique_scored = int(marker_counts["n_original_markers_unique_scored"])
+        n_original_markers_ambiguous = int(marker_counts["n_original_markers_ambiguous"])
+        n_original_markers_unmapped = int(marker_counts["n_original_markers_unmapped"])
+        n_original_markers_mapped_unique = int(marker_counts["n_original_markers_mapped_unique"])
+        n_original_markers_scored_ambiguous = int(marker_counts["n_original_markers_scored_ambiguous"])
+        n_original_markers_scored_including_ambiguous = int(
+            marker_counts["n_original_markers_scored_including_ambiguous"]
         )
-        n_markers_mapped_ambiguous = len(ambiguous_set)
-        n_markers_mapped_unique = max(0, n_markers_after_mapping - n_markers_mapped_ambiguous)
-        coverage_scored_unique = n_markers_scored_unique / max(1, len(axis.markers))
-        ambiguous_marker_fraction = n_markers_mapped_ambiguous / max(1, len(axis.markers))
+        n_target_symbols_after_mapping = int(marker_counts["n_target_symbols_after_mapping"])
+        n_target_symbols_scored = int(marker_counts["n_target_symbols_scored"])
+        coverage_scored_unique_computed = _coverage_fraction(
+            n_original_markers_unique_scored,
+            n_original_markers,
+        )
+        coverage_scored_including_ambiguous_computed = _coverage_fraction(
+            n_original_markers_scored_including_ambiguous,
+            n_original_markers,
+        )
+        ambiguous_marker_fraction = _coverage_fraction(n_original_markers_ambiguous, n_original_markers)
         if axis.name in homolog_mapped and math.isfinite(scored_coverage):
-            scored_coverage_for_gate = min(scored_coverage, coverage_scored_unique)
+            scored_coverage_for_gate = min(scored_coverage, coverage_scored_unique_computed)
         elif axis.name in homolog_mapped:
-            scored_coverage_for_gate = coverage_scored_unique
+            scored_coverage_for_gate = coverage_scored_unique_computed
         else:
             scored_coverage_for_gate = scored_coverage
         failed = []
@@ -540,7 +656,7 @@ def evaluate_biology_axis_gates(
             _blank(value) for value in (homolog_map_name, homolog_map_version, homolog_map_sha256)
         ):
             failed.append("missing_homolog_map_provenance")
-        if n_markers_scored_unique < axis.min_markers_scored:
+        if n_original_markers_unique_scored < axis.min_markers_scored:
             failed.append("markers_scored")
         out[axis.name] = {
             "axis": axis.name,
@@ -558,23 +674,34 @@ def evaluate_biology_axis_gates(
             "min_markers_scored": axis.min_markers_scored,
             "coverage_original": coverage,
             "coverage_scored": scored_coverage,
+            "coverage_scored_supplied": scored_coverage,
+            "coverage_scored_for_gate": scored_coverage_for_gate,
             "homolog_mapped": bool(axis.name in homolog_mapped),
             "homolog_map_name": homolog_map_name,
             "homolog_map_version": homolog_map_version,
             "homolog_map_sha256": homolog_map_sha256,
-            "n_markers_before_mapping": len(axis.markers),
-            "n_markers_after_mapping": int(n_markers_after_mapping),
-            "n_markers_original": len(axis.markers),
-            "n_markers_mapped": int(n_markers_after_mapping),
-            "n_markers_mapped_unique": n_markers_mapped_unique,
-            "n_markers_mapped_ambiguous": n_markers_mapped_ambiguous,
-            "n_markers_scored": n_markers_scored_unique,
-            "n_markers_scored_unique": n_markers_scored_unique,
-            "n_markers_scored_ambiguous": n_markers_scored_ambiguous,
-            "n_markers_scored_including_ambiguous": n_markers_scored_including_ambiguous,
-            "coverage_scored_unique": coverage_scored_unique,
-            "coverage_scored_including_ambiguous": scored_coverage,
+            "n_markers_before_mapping": n_original_markers,
+            "n_markers_after_mapping": n_original_markers_after_mapping,
+            "n_markers_original": n_original_markers,
+            "n_markers_mapped": n_original_markers_after_mapping,
+            "n_markers_mapped_unique": n_original_markers_mapped_unique,
+            "n_markers_mapped_ambiguous": n_original_markers_ambiguous,
+            "n_markers_scored": n_original_markers_unique_scored,
+            "n_markers_scored_unique": n_original_markers_unique_scored,
+            "n_markers_scored_ambiguous": n_original_markers_scored_ambiguous,
+            "n_markers_scored_including_ambiguous": n_original_markers_scored_including_ambiguous,
+            "coverage_scored_unique": coverage_scored_unique_computed,
+            "coverage_scored_unique_computed": coverage_scored_unique_computed,
+            "coverage_scored_including_ambiguous": coverage_scored_including_ambiguous_computed,
+            "coverage_scored_including_ambiguous_computed": coverage_scored_including_ambiguous_computed,
             "ambiguous_marker_fraction": ambiguous_marker_fraction,
+            "n_original_markers": n_original_markers,
+            "n_original_markers_after_mapping": n_original_markers_after_mapping,
+            "n_original_markers_unique_scored": n_original_markers_unique_scored,
+            "n_original_markers_ambiguous": n_original_markers_ambiguous,
+            "n_original_markers_unmapped": n_original_markers_unmapped,
+            "n_target_symbols_after_mapping": n_target_symbols_after_mapping,
+            "n_target_symbols_scored": n_target_symbols_scored,
             "unmapped_markers": ",".join(str(marker) for marker in unmapped_markers),
             "ambiguous_many_to_many_markers": ",".join(str(marker) for marker in ambiguous_markers),
             "diffusion_dependence_label": _diffusion_dependence_label(null_summary),
@@ -753,8 +880,163 @@ def _finite_nonnegative_values(values: Iterable[float]) -> list[float]:
     return out
 
 
+def _symbol_tuple(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,) if value else ()
+    try:
+        iterator = iter(value)  # type: ignore[arg-type]
+    except TypeError:
+        return (str(value),)
+    return tuple(str(symbol) for symbol in iterator)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _homolog_marker_counts_from_statuses(
+    axis: BiologyAxisSpec,
+    statuses: Iterable[HomologMarkerStatus | Mapping[str, object]],
+) -> dict[str, int]:
+    status_by_marker = {
+        status.original_marker: status
+        for status in (_coerce_homolog_marker_status(status) for status in statuses)
+    }
+    axis_statuses = [
+        status_by_marker.get(str(marker), HomologMarkerStatus(original_marker=str(marker)))
+        for marker in axis.markers
+    ]
+    n_original_markers = len(axis.markers)
+    n_original_markers_ambiguous = sum(
+        status.mapping_status == "ambiguous" for status in axis_statuses
+    )
+    n_original_markers_unmapped = sum(
+        status.mapping_status == "unmapped" for status in axis_statuses
+    )
+    n_original_markers_unique_scored = sum(
+        status.mapping_status == "unique_scored" for status in axis_statuses
+    )
+    n_original_markers_scored_ambiguous = sum(
+        status.mapping_status == "ambiguous" and bool(status.scored_symbols)
+        for status in axis_statuses
+    )
+    n_original_markers_after_mapping = n_original_markers - n_original_markers_unmapped
+    n_original_markers_mapped_unique = sum(
+        status.mapping_status in {"unique_scored", "unique_unscored"}
+        for status in axis_statuses
+    )
+    n_original_markers_scored_including_ambiguous = (
+        n_original_markers_unique_scored + n_original_markers_scored_ambiguous
+    )
+    target_symbols_after_mapping = {
+        symbol for status in axis_statuses for symbol in status.mapped_symbols
+    }
+    target_symbols_scored = {
+        symbol for status in axis_statuses for symbol in status.scored_symbols
+    }
+    return {
+        "n_original_markers": n_original_markers,
+        "n_original_markers_after_mapping": n_original_markers_after_mapping,
+        "n_original_markers_unique_scored": n_original_markers_unique_scored,
+        "n_original_markers_ambiguous": n_original_markers_ambiguous,
+        "n_original_markers_unmapped": n_original_markers_unmapped,
+        "n_original_markers_mapped_unique": n_original_markers_mapped_unique,
+        "n_original_markers_scored_ambiguous": n_original_markers_scored_ambiguous,
+        "n_original_markers_scored_including_ambiguous": n_original_markers_scored_including_ambiguous,
+        "n_target_symbols_after_mapping": len(target_symbols_after_mapping),
+        "n_target_symbols_scored": len(target_symbols_scored),
+    }
+
+
+def _homolog_marker_counts_from_aggregates(
+    axis: BiologyAxisSpec,
+    *,
+    n_target_symbols_after_mapping: int,
+    unmapped_set: set[str],
+    ambiguous_set: set[str],
+) -> dict[str, int]:
+    n_original_markers = len(axis.markers)
+    n_target_symbols_after_mapping = max(0, int(n_target_symbols_after_mapping))
+    n_original_markers_after_mapping_upper = min(
+        n_original_markers,
+        n_target_symbols_after_mapping,
+    )
+    n_original_markers_unmapped = min(
+        n_original_markers,
+        max(len(unmapped_set), n_original_markers - n_original_markers_after_mapping_upper),
+    )
+    n_original_markers_after_mapping = n_original_markers - n_original_markers_unmapped
+    n_original_markers_ambiguous = min(len(ambiguous_set), n_original_markers_after_mapping)
+    n_original_markers_scored_including_ambiguous = n_original_markers_after_mapping
+    n_original_markers_scored_ambiguous = min(
+        len(ambiguous_set - unmapped_set),
+        n_original_markers_scored_including_ambiguous,
+    )
+    n_original_markers_unique_scored = max(
+        0,
+        n_original_markers_scored_including_ambiguous - n_original_markers_scored_ambiguous,
+    )
+    n_original_markers_mapped_unique = max(
+        0,
+        n_original_markers_after_mapping - n_original_markers_ambiguous,
+    )
+    return {
+        "n_original_markers": n_original_markers,
+        "n_original_markers_after_mapping": n_original_markers_after_mapping,
+        "n_original_markers_unique_scored": n_original_markers_unique_scored,
+        "n_original_markers_ambiguous": n_original_markers_ambiguous,
+        "n_original_markers_unmapped": n_original_markers_unmapped,
+        "n_original_markers_mapped_unique": n_original_markers_mapped_unique,
+        "n_original_markers_scored_ambiguous": n_original_markers_scored_ambiguous,
+        "n_original_markers_scored_including_ambiguous": n_original_markers_scored_including_ambiguous,
+        "n_target_symbols_after_mapping": n_target_symbols_after_mapping,
+        "n_target_symbols_scored": max(0, n_target_symbols_after_mapping - len(unmapped_set)),
+    }
+
+
+def _coerce_homolog_marker_status(status: HomologMarkerStatus | Mapping[str, object]) -> HomologMarkerStatus:
+    if isinstance(status, HomologMarkerStatus):
+        return status
+    if isinstance(status, Mapping):
+        if "original_marker" not in status:
+            raise ValueError("Homolog marker status mappings require original_marker.")
+        return HomologMarkerStatus(
+            original_marker=str(status["original_marker"]),
+            mapped_symbols=_symbol_tuple(status.get("mapped_symbols")),
+            scored_symbols=_symbol_tuple(status.get("scored_symbols")),
+            mapping_status=str(status.get("mapping_status", "unmapped")),
+        )
+    raise TypeError("homolog marker statuses must be HomologMarkerStatus or mapping objects.")
+
+
+def _coverage_fraction(count: int, total: int) -> float:
+    if total <= 0:
+        return math.nan
+    return min(1.0, max(0.0, float(count) / float(total)))
+
+
 def _blank(value: object) -> bool:
     return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _baseline_code_identity_ready(record: Mapping[str, object]) -> bool:
+    if not _blank(record.get("baseline_commit_sha")):
+        return True
+    if not _blank(record.get("baseline_package_lock_sha256")):
+        return True
+    if not _blank(record.get("baseline_container_digest")):
+        return True
+    identity_kind = record.get("baseline_code_identity_kind")
+    return (
+        identity_kind in BASELINE_CODE_IDENTITY_KINDS
+        and not _blank(record.get("baseline_code_identity"))
+    )
 
 
 def _organism_mismatch(axis: BiologyAxisSpec, dataset_organism: str | None) -> bool:
@@ -795,14 +1077,17 @@ def _sign(value: object) -> int:
 
 
 __all__ = [
+    "BASELINE_CODE_IDENTITY_KINDS",
     "BASELINE_KINDS",
     "BASELINE_STATUSES",
     "DEFAULT_BIOLOGY_AXES",
     "BiologyAxisSpec",
     "ConvergenceThresholds",
     "FidelityRecord",
+    "HomologMarkerStatus",
     "baseline_export_manifest",
     "baseline_export_record",
+    "baseline_export_record_from_file",
     "BASELINE_PROVENANCE_FIELDS",
     "claim_grade_convergence_thresholds",
     "estimate_convergence_thresholds_from_pilot",

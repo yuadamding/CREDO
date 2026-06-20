@@ -413,9 +413,13 @@ def hard_constraints(
         "max_weight_ok": _nan_to(metrics.max_weight_frac_mean, 1.0) <= thresholds.max_weight_ceiling,
         # When required, a missing diagnostic (gap is None) is infeasible -- a
         # claim cannot rest on an un-evaluated control-null / guide-concordance.
+        "control_null_gap_kind_ok": (not thresholds.require_control_null)
+        or metrics.control_null_gap_kind == "absolute",
         "control_null_ok": _gap_ok(
             metrics.control_null_gap, thresholds.control_null_max, thresholds.require_control_null
         ),
+        "guide_concordance_gap_kind_ok": (not thresholds.require_guide_concordance)
+        or metrics.guide_concordance_gap_kind == "absolute",
         "guide_concordance_ok": _gap_ok(
             metrics.guide_concordance_gap,
             thresholds.guide_concordance_max,

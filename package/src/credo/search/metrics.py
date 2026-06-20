@@ -95,7 +95,9 @@ class CREDOTrialMetrics:
 
     # Counterfactual sanity / claim diagnostics
     control_null_gap: Optional[float] = None
+    control_null_gap_kind: Optional[str] = "absolute"
     guide_concordance_gap: Optional[float] = None
+    guide_concordance_gap_kind: Optional[str] = "absolute"
 
     # Particle-weight stability
     terminal_ess_frac_min: float = math.nan
@@ -131,6 +133,10 @@ class CREDOTrialMetrics:
     def __post_init__(self) -> None:
         if self.mass_error_kind not in ("abs_log_residual", "relative_error", "unknown"):
             raise ValueError(f"Unknown mass_error_kind: {self.mass_error_kind!r}.")
+        for field_name in ("control_null_gap_kind", "guide_concordance_gap_kind"):
+            value = getattr(self, field_name)
+            if value not in (None, "absolute", "signed", "unknown"):
+                raise ValueError(f"Unknown {field_name}: {value!r}.")
         mass_error = _finite_or_nan(self.mass_error_value)
         legacy = _finite_or_nan(self.log_mass_error)
         if math.isnan(mass_error) and math.isfinite(legacy):
@@ -256,7 +262,9 @@ def metrics_from_history(
         heldout_score=_summary_opt(summary, "heldout_score"),
         validation_source=validation_source,
         control_null_gap=_summary_opt(summary, "control_null_gap"),
+        control_null_gap_kind=str(summary.get("control_null_gap_kind") or "absolute"),
         guide_concordance_gap=_summary_opt(summary, "guide_concordance_gap"),
+        guide_concordance_gap_kind=str(summary.get("guide_concordance_gap_kind") or "absolute"),
         terminal_ess_frac_min=_last(history.get("terminal_ess_frac_min")),
         min_ess_frac_over_time=_last(
             history.get("min_ess_frac_over_time", history.get("min_ess_frac_mean"))
@@ -322,6 +330,10 @@ def metrics_from_epoch(
         count_nll=_opt_value(_first_finite(m.get("val_count_nll"), m.get("loss_count"))),
         weak_loss=_opt_value(_first_finite(m.get("val_weak_loss"), m.get("loss_weak"))),
         validation_source=validation_source,
+        control_null_gap=_opt_value(_first_finite(m.get("control_null_gap"))),
+        control_null_gap_kind=_last_str(m.get("control_null_gap_kind")) or "absolute",
+        guide_concordance_gap=_opt_value(_first_finite(m.get("guide_concordance_gap"))),
+        guide_concordance_gap_kind=_last_str(m.get("guide_concordance_gap_kind")) or "absolute",
         terminal_ess_frac_min=_last(m.get("terminal_ess_frac_min")),
         min_ess_frac_over_time=_last(m.get("min_ess_frac_over_time", m.get("min_ess_frac_mean"))),
         max_weight_frac_mean=_last(m.get("max_weight_frac_mean")),
