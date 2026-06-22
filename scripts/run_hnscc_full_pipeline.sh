@@ -6,11 +6,15 @@ set -euo pipefail
 #   2. score expression signatures once on the input data
 #   3. train CREDO over random-k-fold HNSCC endpoint splits
 #   4. run per-fold factual-vs-reference counterfactual biology
-#   5. export completed folds into the CREDO search/RL selection framework
+#   5. export completed folds into the CREDO search/selection framework
 #   6. merge counterfactual outputs, summarize CV, and rank biology effects
 #
 # Runtime is intentionally controlled through environment variables so the same
 # script can run a short dry/smoke pass or a full claim-grade run.
+# By default RESUME=1 skips completed stage/fold artifacts and restarts only
+# incomplete work; set the FORCE_* flags below to intentionally rerun a stage.
+# Reuse the same RUN_STAMP/OUTPUT_ROOT, or set RESUME_LATEST=1 to pick up the
+# most recent output root recorded by this script.
 
 SCRIPT_DIR_ABS="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 CREDO_DIR_ABS="$(cd -- "${SCRIPT_DIR_ABS}/.." >/dev/null 2>&1 && pwd)"
@@ -25,8 +29,29 @@ PYTHONPATH_VALUE="${CREDO_DIR}/package/src"
 CUDA_DEVICE_ORDER="${CUDA_DEVICE_ORDER:-PCI_BUS_ID}"
 
 DATA_PATH="${DATA_PATH:-inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad}"
-RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-HNSCC/credo_runs/full_pipeline_${RUN_STAMP}}"
+RESUME="${RESUME:-1}"
+RESUME_LATEST="${RESUME_LATEST:-0}"
+RUN_HISTORY_DIR="${RUN_HISTORY_DIR:-HNSCC/credo_runs}"
+LAST_RUN_FILE="${LAST_RUN_FILE:-${RUN_HISTORY_DIR}/.last_hnscc_full_pipeline}"
+RUN_STAMP="${RUN_STAMP:-}"
+if [[ -z "${OUTPUT_ROOT:-}" ]]; then
+  case "${RESUME_LATEST}" in
+    1|true|TRUE|yes|YES|y|Y)
+      if [[ ! -s "${LAST_RUN_FILE}" ]]; then
+        printf 'RESUME_LATEST=1 requested but no last-run file exists: %s\n' "${LAST_RUN_FILE}" >&2
+        exit 1
+      fi
+      read -r OUTPUT_ROOT < "${LAST_RUN_FILE}"
+      RUN_STAMP="${RUN_STAMP:-${OUTPUT_ROOT##*full_pipeline_}}"
+      ;;
+    *)
+      RUN_STAMP="${RUN_STAMP:-$(date +%Y%m%d_%H%M%S)}"
+      OUTPUT_ROOT="HNSCC/credo_runs/full_pipeline_${RUN_STAMP}"
+      ;;
+  esac
+else
+  RUN_STAMP="${RUN_STAMP:-${OUTPUT_ROOT##*full_pipeline_}}"
+fi
 SIGNATURE_DIR="${SIGNATURE_DIR:-${OUTPUT_ROOT}/signature_scores}"
 BIOLOGY_DIR="${BIOLOGY_DIR:-${OUTPUT_ROOT}/biology}"
 SUMMARY_DIR="${SUMMARY_DIR:-${OUTPUT_ROOT}/cv_summary}"
@@ -44,6 +69,12 @@ RUN_MERGE_COUNTERFACTUAL="${RUN_MERGE_COUNTERFACTUAL:-1}"
 RUN_SUMMARY="${RUN_SUMMARY:-1}"
 RUN_SEARCH="${RUN_SEARCH:-1}"
 RUN_BIOLOGY="${RUN_BIOLOGY:-1}"
+
+FORCE_VALIDATE="${FORCE_VALIDATE:-0}"
+FORCE_SIGNATURES="${FORCE_SIGNATURES:-0}"
+FORCE_TRAIN="${FORCE_TRAIN:-0}"
+FORCE_COUNTERFACTUAL="${FORCE_COUNTERFACTUAL:-0}"
+ALLOW_PARTIAL_COUNTERFACTUAL_MERGE="${ALLOW_PARTIAL_COUNTERFACTUAL_MERGE:-0}"
 
 PRECISION="${PRECISION:-bf16}"
 LATENT_SOURCE="${LATENT_SOURCE:-expression}"
@@ -171,6 +202,57 @@ truthy() {
   esac
 }
 
+skip_completed_allowed() {
+  local force="${1:-0}"
+  truthy "${RESUME}" && ! truthy "${force}"
+}
+
+file_nonempty() {
+  [[ -s "$1" ]]
+}
+
+json_file_complete() {
+  local path="$1"
+  file_nonempty "${path}" || return 1
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "${path}" <<'PY' >/dev/null 2>&1
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    json.load(handle)
+PY
+  else
+    return 0
+  fi
+}
+
+csv_has_data_rows() {
+  local path="$1"
+  file_nonempty "${path}" || return 1
+  awk 'NR > 1 { found = 1; exit } END { exit found ? 0 : 1 }' "${path}" >/dev/null 2>&1
+}
+
+validation_complete() {
+  json_file_complete "${OUTPUT_ROOT}/verify_setup_hnscc.json"
+}
+
+signatures_complete() {
+  csv_has_data_rows "${SIGNATURE_DIR}/signature_group_scores.csv"
+}
+
+train_complete() {
+  local run_dir="$1"
+  json_file_complete "${run_dir}/results_summary.json" || return 1
+  json_file_complete "${run_dir}/config.json" || return 1
+  [[ -s "${run_dir}/checkpoint_best_ema.pt" || -s "${run_dir}/checkpoint_best.pt" ]]
+}
+
+counterfactual_complete() {
+  local cf_file="$1"
+  csv_has_data_rows "${cf_file}"
+}
+
 fold_label() {
   printf 'fold%02d' "$1"
 }
@@ -281,6 +363,8 @@ fi
 
 require_file "${DATA_PATH}"
 mkdir -p "${OUTPUT_ROOT}" "${SIGNATURE_DIR}" "${BIOLOGY_DIR}" "${SUMMARY_DIR}" "${SEARCH_DIR}" "${FOLD_JOB_LOG_DIR}"
+mkdir -p "$(dirname -- "${LAST_RUN_FILE}")"
+printf '%s\n' "${OUTPUT_ROOT}" > "${LAST_RUN_FILE}"
 
 mapfile -t GPU_DEVICE_LIST < <(detect_gpu_devices)
 FOLD_JOBS_PER_GPU_INT="${FOLD_JOBS_PER_GPU}"
@@ -301,6 +385,12 @@ log "Workspace: ${WORKSPACE_ROOT}"
 log "Data: ${DATA_PATH}"
 log "Output root: ${OUTPUT_ROOT}"
 log "Conda env: ${ENV_NAME}"
+log "Resume mode: ${RESUME} (set FORCE_TRAIN=1 or FORCE_COUNTERFACTUAL=1 to rerun completed fold work)"
+if truthy "${RESUME_LATEST}"; then
+  log "Resume latest requested; output root came from ${LAST_RUN_FILE}"
+else
+  log "Last-run pointer: ${LAST_RUN_FILE}"
+fi
 if [[ "${#GPU_JOB_SLOTS[@]}" -gt 0 ]]; then
   log "Fold GPU devices: ${GPU_DEVICE_LIST[*]} (${FOLD_JOBS_PER_GPU_INT} fold job per GPU)"
   log "Per-fold runner GPU view: CUDA_VISIBLE_DEVICES=<assigned GPU>, --multi-gpu-devices ${PER_FOLD_MULTI_GPU_DEVICES:-0}"
@@ -309,28 +399,36 @@ else
 fi
 
 if truthy "${RUN_VALIDATE}"; then
-  log "Validating environment and HNSCC AnnData contract"
-  run_py "${CREDO_DIR}/scripts/verify_setup.py" \
-    --check-data \
-    --data-path "${DATA_PATH}" \
-    --data-schema custom \
-    --latent-key "${VERIFY_LATENT_KEY}" \
-    --obs-column Library \
-    --obs-column "Time point" \
-    --obs-column "Cell type annotation" \
-    --json \
-    > "${OUTPUT_ROOT}/verify_setup_hnscc.json"
+  if skip_completed_allowed "${FORCE_VALIDATE}" && validation_complete; then
+    log "Skipping validation; existing output is complete"
+  else
+    log "Validating environment and HNSCC AnnData contract"
+    run_py "${CREDO_DIR}/scripts/verify_setup.py" \
+      --check-data \
+      --data-path "${DATA_PATH}" \
+      --data-schema custom \
+      --latent-key "${VERIFY_LATENT_KEY}" \
+      --obs-column Library \
+      --obs-column "Time point" \
+      --obs-column "Cell type annotation" \
+      --json \
+      > "${OUTPUT_ROOT}/verify_setup_hnscc.json"
+  fi
 fi
 
 if truthy "${RUN_SIGNATURES}"; then
-  log "Scoring HNSCC expression signatures"
-  run_py "${CREDO_DIR}/analysis/score_hnscc_signatures.py" \
-    --data-path "${DATA_PATH}" \
-    --output-dir "${SIGNATURE_DIR}" \
-    --group-cols perturbation_id,time_label \
-    --state-key "Cell type annotation" \
-    --guide-confident-only \
-    --log1p
+  if skip_completed_allowed "${FORCE_SIGNATURES}" && signatures_complete; then
+    log "Skipping signature scoring; existing signature_group_scores.csv is complete"
+  else
+    log "Scoring HNSCC expression signatures"
+    run_py "${CREDO_DIR}/analysis/score_hnscc_signatures.py" \
+      --data-path "${DATA_PATH}" \
+      --output-dir "${SIGNATURE_DIR}" \
+      --group-cols perturbation_id,time_label \
+      --state-key "Cell type annotation" \
+      --guide-confident-only \
+      --log1p
+  fi
 fi
 
 declare -a RUN_DIRS=()
@@ -359,122 +457,154 @@ run_fold_job() {
   fi
 
   if truthy "${RUN_TRAIN}"; then
-    log "Training HNSCC CREDO seed=${seed} fold=${fold}/${CV_FOLDS} gpu=${gpu_device:-auto}"
-    train_args=(
-      "${CREDO_DIR}/runners/run_credo_hnscc_full.py"
-      --data-path "${DATA_PATH}"
-      --output-dir "${run_dir}"
-      "${LATENT_ARGS[@]}"
-      --seed "$((seed + SEED_OFFSET))"
-      --precision "${PRECISION}"
-      --split-strategy random_kfold
-      --cv-folds "${CV_FOLDS}"
-      --cv-fold-index "${fold}"
-      --random-stratify-cols "Time point,perturbation_id"
-      --state-key "Cell type annotation"
-      --guide-confident-only
-      --learned-programs
-      --shared-guide-embedding
-      --control-mode soft_ref
-      --lambda-control-ref 0.0005
-      --control-ref-warmup-epochs 100
-      --training-schedule staged
-      --stage-c-epochs "${STAGE_C_EPOCHS}"
-      --stage-d-epochs "${STAGE_D_EPOCHS}"
-      --ecology-on
-      --growth-intercept-on
-      --activation-checkpointing
-      --context-kind "${CONTEXT_KIND}"
-      --transformer-growth-only
-      --transformer-token-dim "${TRANSFORMER_TOKEN_DIM}"
-      --transformer-heads "${TRANSFORMER_HEADS}"
-      --transformer-within-layers "${TRANSFORMER_WITHIN_LAYERS}"
-      --transformer-cross-layers "${TRANSFORMER_CROSS_LAYERS}"
-      --transformer-inducing "${TRANSFORMER_INDUCING}"
-      --transformer-dropout "${TRANSFORMER_DROPOUT}"
-      --mass-attention-temperature "${MASS_ATTENTION_TEMPERATURE}"
-      --lr-transformer "${LR_TRANSFORMER}"
-      --transformer-weight-decay "${TRANSFORMER_WEIGHT_DECAY}"
-      --causal-growth-only
-      --causal-sparse-edges
-      --causal-token-dim "${CAUSAL_TOKEN_DIM}"
-      --causal-heads "${CAUSAL_HEADS}"
-      --causal-n-mediators "${CAUSAL_N_MEDIATORS}"
-      --causal-dropout "${CAUSAL_DROPOUT}"
-      --causal-mass-attention-temperature "${CAUSAL_MASS_ATTENTION_TEMPERATURE}"
-      --causal-residual-policy "${CAUSAL_RESIDUAL_POLICY}"
-      --lr-causal-attention "${LR_CAUSAL_ATTENTION}"
-      --causal-attention-weight-decay "${CAUSAL_ATTENTION_WEIGHT_DECAY}"
-      --lambda-causal-ctrl-edge "${LAMBDA_CAUSAL_CTRL_EDGE}"
-      --lambda-causal-guide "${LAMBDA_CAUSAL_GUIDE}"
-      --lambda-causal-sparse "${LAMBDA_CAUSAL_SPARSE}"
-      --lambda-causal-orth "${LAMBDA_CAUSAL_ORTH}"
-      --lambda-causal-ctx-smooth "${LAMBDA_CAUSAL_CTX_SMOOTH}"
-      --causal-loss-start-epoch "${CAUSAL_LOSS_START_EPOCH}"
-      --causal-loss-ramp-epochs "${CAUSAL_LOSS_RAMP_EPOCHS}"
-      --n-programs "${N_PROGRAMS}"
-      --embedding-dim "${EMBEDDING_DIM}"
-      --mediator-dim "${MEDIATOR_DIM}"
-      --hidden-dim "${HIDDEN_DIM}"
-      --depth "${DEPTH}"
-      --epochs "${EPOCHS}"
-      --n-particles "${N_PARTICLES}"
-      --n-steps "${N_STEPS}"
-      --eval-particles "${EVAL_PARTICLES}"
-      --eval-steps "${EVAL_STEPS}"
-      --eval-target-particles "${EVAL_TARGET_PARTICLES}"
-      --max-train-target-atoms "${MAX_TRAIN_TARGET_ATOMS}"
-      --n-test-functions 12
-      --lr-net "${LR_NET}"
-      --lr-embed "${LR_EMBED}"
-      --weight-decay "${WEIGHT_DECAY}"
-      --grad-clip "${GRAD_CLIP}"
-      --lambda-weak "${LAMBDA_WEAK}"
-      --lambda-reg-growth-bias "${LAMBDA_REG_GROWTH_BIAS}"
-      --sinkhorn-epsilon "${SINKHORN_EPSILON}"
-      --sinkhorn-tau "${SINKHORN_TAU}"
-      --sinkhorn-max-iter "${SINKHORN_MAX_ITER}"
-      --max-active-perturbations "${MAX_ACTIVE_PERTURBATIONS}"
-      --budget-headroom "${BUDGET_HEADROOM}"
-      --auto-scale-budget
-      --min-cells-p4 20
-      --min-cells-p60 20
-      --mass-scope subset_only
-      --mass-mode count
-      --cpu-threads "${CPU_THREADS}"
-      --cpu-interop-threads "${CPU_INTEROP_THREADS}"
-      "${TRAIN_EXTRA_ARGS[@]}"
-    )
-    if [[ -n "${runner_devices}" ]]; then
-      train_args+=(--multi-gpu-devices "${runner_devices}")
+    if skip_completed_allowed "${FORCE_TRAIN}" && train_complete "${run_dir}"; then
+      log "Skipping training seed=${seed} fold=${fold}/${CV_FOLDS}; completed artifacts already exist"
+    else
+      log "Training HNSCC CREDO seed=${seed} fold=${fold}/${CV_FOLDS} gpu=${gpu_device:-auto}"
+      local -a train_args=(
+        "${CREDO_DIR}/runners/run_credo_hnscc_full.py"
+        --data-path "${DATA_PATH}"
+        --output-dir "${run_dir}"
+        "${LATENT_ARGS[@]}"
+        --seed "$((seed + SEED_OFFSET))"
+        --precision "${PRECISION}"
+        --split-strategy random_kfold
+        --cv-folds "${CV_FOLDS}"
+        --cv-fold-index "${fold}"
+        --random-stratify-cols "Time point,perturbation_id"
+        --state-key "Cell type annotation"
+        --guide-confident-only
+        --learned-programs
+        --shared-guide-embedding
+        --control-mode soft_ref
+        --lambda-control-ref 0.0005
+        --control-ref-warmup-epochs 100
+        --training-schedule staged
+        --stage-c-epochs "${STAGE_C_EPOCHS}"
+        --stage-d-epochs "${STAGE_D_EPOCHS}"
+        --ecology-on
+        --growth-intercept-on
+        --activation-checkpointing
+        --context-kind "${CONTEXT_KIND}"
+        --transformer-growth-only
+        --transformer-token-dim "${TRANSFORMER_TOKEN_DIM}"
+        --transformer-heads "${TRANSFORMER_HEADS}"
+        --transformer-within-layers "${TRANSFORMER_WITHIN_LAYERS}"
+        --transformer-cross-layers "${TRANSFORMER_CROSS_LAYERS}"
+        --transformer-inducing "${TRANSFORMER_INDUCING}"
+        --transformer-dropout "${TRANSFORMER_DROPOUT}"
+        --mass-attention-temperature "${MASS_ATTENTION_TEMPERATURE}"
+        --lr-transformer "${LR_TRANSFORMER}"
+        --transformer-weight-decay "${TRANSFORMER_WEIGHT_DECAY}"
+        --causal-growth-only
+        --causal-sparse-edges
+        --causal-token-dim "${CAUSAL_TOKEN_DIM}"
+        --causal-heads "${CAUSAL_HEADS}"
+        --causal-n-mediators "${CAUSAL_N_MEDIATORS}"
+        --causal-dropout "${CAUSAL_DROPOUT}"
+        --causal-mass-attention-temperature "${CAUSAL_MASS_ATTENTION_TEMPERATURE}"
+        --causal-residual-policy "${CAUSAL_RESIDUAL_POLICY}"
+        --lr-causal-attention "${LR_CAUSAL_ATTENTION}"
+        --causal-attention-weight-decay "${CAUSAL_ATTENTION_WEIGHT_DECAY}"
+        --lambda-causal-ctrl-edge "${LAMBDA_CAUSAL_CTRL_EDGE}"
+        --lambda-causal-guide "${LAMBDA_CAUSAL_GUIDE}"
+        --lambda-causal-sparse "${LAMBDA_CAUSAL_SPARSE}"
+        --lambda-causal-orth "${LAMBDA_CAUSAL_ORTH}"
+        --lambda-causal-ctx-smooth "${LAMBDA_CAUSAL_CTX_SMOOTH}"
+        --causal-loss-start-epoch "${CAUSAL_LOSS_START_EPOCH}"
+        --causal-loss-ramp-epochs "${CAUSAL_LOSS_RAMP_EPOCHS}"
+        --n-programs "${N_PROGRAMS}"
+        --embedding-dim "${EMBEDDING_DIM}"
+        --mediator-dim "${MEDIATOR_DIM}"
+        --hidden-dim "${HIDDEN_DIM}"
+        --depth "${DEPTH}"
+        --epochs "${EPOCHS}"
+        --n-particles "${N_PARTICLES}"
+        --n-steps "${N_STEPS}"
+        --eval-particles "${EVAL_PARTICLES}"
+        --eval-steps "${EVAL_STEPS}"
+        --eval-target-particles "${EVAL_TARGET_PARTICLES}"
+        --max-train-target-atoms "${MAX_TRAIN_TARGET_ATOMS}"
+        --n-test-functions 12
+        --lr-net "${LR_NET}"
+        --lr-embed "${LR_EMBED}"
+        --weight-decay "${WEIGHT_DECAY}"
+        --grad-clip "${GRAD_CLIP}"
+        --lambda-weak "${LAMBDA_WEAK}"
+        --lambda-reg-growth-bias "${LAMBDA_REG_GROWTH_BIAS}"
+        --sinkhorn-epsilon "${SINKHORN_EPSILON}"
+        --sinkhorn-tau "${SINKHORN_TAU}"
+        --sinkhorn-max-iter "${SINKHORN_MAX_ITER}"
+        --max-active-perturbations "${MAX_ACTIVE_PERTURBATIONS}"
+        --budget-headroom "${BUDGET_HEADROOM}"
+        --auto-scale-budget
+        --min-cells-p4 20
+        --min-cells-p60 20
+        --mass-scope subset_only
+        --mass-mode count
+        --cpu-threads "${CPU_THREADS}"
+        --cpu-interop-threads "${CPU_INTEROP_THREADS}"
+        "${TRAIN_EXTRA_ARGS[@]}"
+      )
+      if [[ -n "${runner_devices}" ]]; then
+        train_args+=(--multi-gpu-devices "${runner_devices}")
+      fi
+      run_py_on_gpu "${gpu_device}" "${train_args[@]}"
     fi
-    run_py_on_gpu "${gpu_device}" "${train_args[@]}"
   fi
 
   if truthy "${RUN_COUNTERFACTUAL}"; then
-    require_file "${run_dir}/results_summary.json"
-    log "Running counterfactual biology seed=${seed} fold=${fold}/${CV_FOLDS} gpu=${gpu_device:-auto}"
-    cf_args=(
-      "${CREDO_DIR}/analysis/run_counterfactual_biology.py"
-      --run-dir "${run_dir}"
-      --data-path "${DATA_PATH}"
-      --output-dir "${biology_run_dir}"
-      --source-split test
-      --n-particles "${COUNTERFACTUAL_PARTICLES}"
-      --n-steps "${COUNTERFACTUAL_STEPS}"
-      --device "${COUNTERFACTUAL_DEVICE}"
-      --seed "$((seed * 1000 + fold))"
-      --max-perturbations "${COUNTERFACTUAL_MAX_PERTURBATIONS}"
-      --fold-id "${fold_name}"
-    )
-    if truthy "${COUNTERFACTUAL_CONTEXT_CLAMPED}"; then
-      cf_args+=(--context-clamped)
+    if skip_completed_allowed "${FORCE_COUNTERFACTUAL}" && counterfactual_complete "${cf_file}"; then
+      log "Skipping counterfactual biology seed=${seed} fold=${fold}/${CV_FOLDS}; completed CSV already exists"
+    else
+      require_file "${run_dir}/results_summary.json"
+      log "Running counterfactual biology seed=${seed} fold=${fold}/${CV_FOLDS} gpu=${gpu_device:-auto}"
+      local -a cf_args=(
+        "${CREDO_DIR}/analysis/run_counterfactual_biology.py"
+        --run-dir "${run_dir}"
+        --data-path "${DATA_PATH}"
+        --output-dir "${biology_run_dir}"
+        --source-split test
+        --n-particles "${COUNTERFACTUAL_PARTICLES}"
+        --n-steps "${COUNTERFACTUAL_STEPS}"
+        --device "${COUNTERFACTUAL_DEVICE}"
+        --seed "$((seed * 1000 + fold))"
+        --max-perturbations "${COUNTERFACTUAL_MAX_PERTURBATIONS}"
+        --fold-id "${fold_name}"
+      )
+      if truthy "${COUNTERFACTUAL_CONTEXT_CLAMPED}"; then
+        cf_args+=(--context-clamped)
+      fi
+      if truthy "${COUNTERFACTUAL_INCLUDE_CONTROLS}"; then
+        cf_args+=(--include-controls-for-null)
+      fi
+      run_py_on_gpu "${gpu_device}" "${cf_args[@]}"
     fi
-    if truthy "${COUNTERFACTUAL_INCLUDE_CONTROLS}"; then
-      cf_args+=(--include-controls-for-null)
-    fi
-    run_py_on_gpu "${gpu_device}" "${cf_args[@]}"
   fi
+}
+
+fold_needs_work() {
+  local seed="$1"
+  local fold="$2"
+  local fold_name
+  local run_dir
+  local cf_file
+
+  fold_name="$(fold_label "${fold}")"
+  run_dir="${OUTPUT_ROOT}/seed${seed}_${fold_name}"
+  cf_file="${run_dir}/biology/counterfactual_biology_effects.csv"
+
+  if truthy "${RUN_TRAIN}"; then
+    if ! skip_completed_allowed "${FORCE_TRAIN}" || ! train_complete "${run_dir}"; then
+      return 0
+    fi
+  fi
+  if truthy "${RUN_COUNTERFACTUAL}"; then
+    if ! skip_completed_allowed "${FORCE_COUNTERFACTUAL}" || ! counterfactual_complete "${cf_file}"; then
+      return 0
+    fi
+  fi
+  return 1
 }
 
 launch_fold_job() {
@@ -528,14 +658,18 @@ for seed in ${SEEDS}; do
     COUNTERFACTUAL_FILES+=("${cf_file}")
 
     if truthy "${RUN_TRAIN}" || truthy "${RUN_COUNTERFACTUAL}"; then
-      if [[ "${slot_count}" -gt 0 ]]; then
-        launch_fold_job "${seed}" "${fold}" "${GPU_JOB_SLOTS[$((job_index % slot_count))]}"
-        job_index=$((job_index + 1))
-        if [[ "${#FOLD_JOB_PIDS[@]}" -ge "${slot_count}" ]]; then
-          wait_for_fold_batch
+      if fold_needs_work "${seed}" "${fold}"; then
+        if [[ "${slot_count}" -gt 0 ]]; then
+          launch_fold_job "${seed}" "${fold}" "${GPU_JOB_SLOTS[$((job_index % slot_count))]}"
+          job_index=$((job_index + 1))
+          if [[ "${#FOLD_JOB_PIDS[@]}" -ge "${slot_count}" ]]; then
+            wait_for_fold_batch
+          fi
+        else
+          run_fold_job "${seed}" "${fold}" ""
         fi
       else
-        run_fold_job "${seed}" "${fold}" ""
+        log "Skipping seed=${seed} fold=${fold}/${CV_FOLDS}; requested fold stages are already complete"
       fi
     fi
   done
@@ -547,11 +681,24 @@ fi
 if truthy "${RUN_MERGE_COUNTERFACTUAL}"; then
   log "Merging counterfactual biology tables"
   existing_cf=()
+  missing_cf=()
   for path in "${COUNTERFACTUAL_FILES[@]}"; do
-    if [[ -f "${path}" ]]; then
+    if counterfactual_complete "${path}"; then
       existing_cf+=("${path}")
+    else
+      missing_cf+=("${path}")
     fi
   done
+  if [[ "${#missing_cf[@]}" -gt 0 ]]; then
+    if truthy "${ALLOW_PARTIAL_COUNTERFACTUAL_MERGE}"; then
+      log "Warning: merging partial counterfactual outputs; ${#missing_cf[@]} expected files are missing or incomplete"
+    else
+      printf 'Counterfactual merge is missing %s expected complete CSV file(s):\n' "${#missing_cf[@]}" >&2
+      printf '  %s\n' "${missing_cf[@]}" >&2
+      printf 'Set ALLOW_PARTIAL_COUNTERFACTUAL_MERGE=1 only if you intentionally want a partial merge.\n' >&2
+      exit 1
+    fi
+  fi
   if [[ "${#existing_cf[@]}" -eq 0 ]]; then
     printf 'No counterfactual_biology_effects.csv files found to merge.\n' >&2
     exit 1
