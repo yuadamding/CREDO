@@ -565,7 +565,7 @@ def build_split(
     )
 
 
-def calibrate_train_budget(args: argparse.Namespace, n_supported_pids: int) -> dict:
+def calibrate_train_budget(args: argparse.Namespace, n_supported_pids: int, *, latent_dim: int) -> dict:
     max_complexity = (
         BASELINE_SUPPORTED_PERTURBATIONS * BASELINE_TRAIN_PARTICLES * BASELINE_TEST_FUNCTIONS
     )
@@ -573,6 +573,11 @@ def calibrate_train_budget(args: argparse.Namespace, n_supported_pids: int) -> d
     requested = n_supported_pids * args.n_particles * max(args.n_test_functions, 1)
     eff_particles = args.n_particles
     eff_test_functions = args.n_test_functions
+    eff_steps = args.n_steps
+    requested_max_active = int(args.max_active_perturbations or 0)
+    active_limit = requested_max_active if requested_max_active > 0 else n_supported_pids
+    eff_max_active = active_limit
+    eff_max_target_atoms = args.max_train_target_atoms
 
     if args.auto_scale_budget and requested > target_complexity:
         scale = (target_complexity / requested) ** 0.5
@@ -589,16 +594,79 @@ def calibrate_train_budget(args: argparse.Namespace, n_supported_pids: int) -> d
         ):
             eff_test_functions -= 1
 
+    # Raw-expression causal attention carries a much larger differentiable graph
+    # than the original low-dimensional calibration target. Scale the remaining
+    # memory drivers as a coupled budget so full-cohort HNSCC runs fit on 80GB
+    # GPUs while preserving exact full-context causal attention.
+    graph_units = (
+        max(n_supported_pids, 1)
+        * max(active_limit, 1)
+        * max(eff_particles, 1)
+        * max(eff_steps, 1)
+        * max(int(latent_dim), 1)
+    )
+    target_graph_units = int(
+        float(args.budget_headroom)
+        * BASELINE_SUPPORTED_PERTURBATIONS
+        * 16
+        * 64
+        * 16
+        * max(int(latent_dim), 1)
+    )
+    if (
+        args.auto_scale_budget
+        and args.latent_source == "expression"
+        and args.context_kind == "causal_attention"
+        and graph_units > target_graph_units
+    ):
+        graph_scale = (target_graph_units / graph_units) ** 0.25
+        eff_particles = min(eff_particles, max(32, int(np.floor(eff_particles * graph_scale / 8.0) * 8)))
+        eff_steps = min(eff_steps, max(8, int(np.floor(eff_steps * graph_scale / 4.0) * 4)))
+        eff_max_active = min(eff_max_active, max(4, int(np.floor(eff_max_active * graph_scale))))
+        eff_max_target_atoms = min(
+            eff_max_target_atoms,
+            max(256, int(np.floor(eff_max_target_atoms * graph_scale / 128.0) * 128)),
+        )
+        while (
+            max(n_supported_pids, 1)
+            * max(eff_max_active, 1)
+            * max(eff_particles, 1)
+            * max(eff_steps, 1)
+            * max(int(latent_dim), 1)
+            > target_graph_units
+            and (eff_max_active > 4 or eff_particles > 32 or eff_steps > 8)
+        ):
+            if eff_max_active > 4:
+                eff_max_active -= 1
+            elif eff_particles > 32:
+                eff_particles -= 8
+            elif eff_steps > 8:
+                eff_steps -= 4
+
+    if requested_max_active <= 0 and eff_max_active >= n_supported_pids:
+        effective_max_active = 0
+    else:
+        effective_max_active = int(max(1, min(eff_max_active, n_supported_pids)))
+
     return {
         "effective_n_particles": int(eff_particles),
         "effective_n_test_functions": int(eff_test_functions),
+        "effective_n_steps": int(eff_steps),
+        "effective_max_active_perturbations": effective_max_active,
+        "effective_max_train_target_atoms": int(eff_max_target_atoms),
         "requested_complexity": int(requested),
         "max_complexity": int(max_complexity),
         "target_complexity": int(target_complexity),
+        "requested_graph_units": int(graph_units),
+        "target_graph_units": int(target_graph_units),
         "headroom_fraction": float(args.budget_headroom),
         "auto_scale_budget": bool(args.auto_scale_budget),
         "budget_scaled": bool(
-            eff_particles != args.n_particles or eff_test_functions != args.n_test_functions
+            eff_particles != args.n_particles
+            or eff_test_functions != args.n_test_functions
+            or eff_steps != args.n_steps
+            or effective_max_active != requested_max_active
+            or eff_max_target_atoms != args.max_train_target_atoms
         ),
     }
 
@@ -892,9 +960,13 @@ def main() -> None:
             program_centroids = train_centroids
     else:
         program_centroids = None
-    budget = calibrate_train_budget(args, len(supported_pids))
+    latent_dim = train_data.latent_dim
+    budget = calibrate_train_budget(args, len(supported_pids), latent_dim=latent_dim)
     train_particles = budget["effective_n_particles"]
     train_test_functions = budget["effective_n_test_functions"]
+    train_steps = budget["effective_n_steps"]
+    train_max_active_perturbations = budget["effective_max_active_perturbations"]
+    train_max_target_atoms = budget["effective_max_train_target_atoms"]
     training_schedule = resolve_training_schedule(args)
     if not training_schedule:
         raise ValueError("Resolved training schedule is empty; increase --epochs.")
@@ -910,6 +982,9 @@ def main() -> None:
         print(
             "Adjusted training budget for VRAM target: "
             f"particles {args.n_particles}->{train_particles}, "
+            f"steps {args.n_steps}->{train_steps}, "
+            f"active_pids {args.max_active_perturbations}->{train_max_active_perturbations}, "
+            f"target_atoms {args.max_train_target_atoms}->{train_max_target_atoms}, "
             f"test_functions {args.n_test_functions}->{train_test_functions}"
         )
 
@@ -925,7 +1000,7 @@ def main() -> None:
     )
     train_ep = cap_endpoint_problem_terminal(
         train_ep_full,
-        max_terminal_atoms=args.max_train_target_atoms,
+        max_terminal_atoms=train_max_target_atoms,
         seed=args.seed,
     )
 
@@ -945,7 +1020,6 @@ def main() -> None:
             state_key=state_key,
         )
 
-    latent_dim = train_data.latent_dim
     if args.latent_source == "vae":
         latent_config_source = "vae"
         latent_config_key = "X_vae"
@@ -1038,7 +1112,7 @@ def main() -> None:
         ),
         simulation=SimulationConfig(
             n_particles=train_particles,
-            n_steps=args.n_steps,
+            n_steps=train_steps,
             store_history=True,
         ),
         training=TrainingConfig(
@@ -1069,7 +1143,7 @@ def main() -> None:
             training_schedule=args.training_schedule,
             stage_c_epochs=args.stage_c_epochs,
             stage_d_epochs=args.stage_d_epochs,
-            max_active_perturbations=args.max_active_perturbations,
+            max_active_perturbations=train_max_active_perturbations,
             freeze_transformer_context_after_epoch=args.freeze_transformer_context_after_epoch,
             control_ref_warmup_epochs=args.control_ref_warmup_epochs,
             seed=args.seed,
@@ -1224,13 +1298,15 @@ def main() -> None:
         "resolved_n_programs": resolved_n_programs,
         "requested_n_particles": args.n_particles,
         "effective_n_particles": train_particles,
-        "n_steps": args.n_steps,
+        "requested_n_steps": args.n_steps,
+        "n_steps": train_steps,
         "eval_particles": args.eval_particles,
         "eval_steps": args.eval_steps,
         "eval_target_particles": args.eval_target_particles,
         "requested_n_test_functions": args.n_test_functions,
         "effective_n_test_functions": train_test_functions,
-        "max_active_perturbations": args.max_active_perturbations,
+        "requested_max_active_perturbations": args.max_active_perturbations,
+        "max_active_perturbations": train_max_active_perturbations,
         "vram_budget": budget,
         "budget_headroom": args.budget_headroom,
         "lambda_weak": args.lambda_weak,
@@ -1248,7 +1324,8 @@ def main() -> None:
         "cpu_threads": args.cpu_threads,
         "cpu_interop_threads": args.cpu_interop_threads,
         "multi_gpu_devices": multi_gpu_devices,
-        "max_train_target_atoms": args.max_train_target_atoms,
+        "requested_max_train_target_atoms": args.max_train_target_atoms,
+        "max_train_target_atoms": train_max_target_atoms,
         "mass_value_col": args.mass_value_col,
         "mass_scope": args.mass_scope,
         "mass_mode": args.mass_mode,
@@ -1436,7 +1513,8 @@ def main() -> None:
         "train_mass_mode_resolution_reason": train_data.mass_table.df.attrs.get("mass_mode_resolution_reason"),
         "test_mass_mode_resolution_reason": test_data.mass_table.df.attrs.get("mass_mode_resolution_reason"),
         "lambda_reg_growth_bias": args.lambda_reg_growth_bias,
-        "max_active_perturbations": args.max_active_perturbations,
+        "requested_max_active_perturbations": args.max_active_perturbations,
+        "max_active_perturbations": train_max_active_perturbations,
         "use_growth_intercept": args.use_growth_intercept,
         "embedding_dim": args.embedding_dim,
         "mediator_dim": args.mediator_dim,
@@ -1457,10 +1535,13 @@ def main() -> None:
         "resolved_n_programs": resolved_n_programs,
         "requested_n_particles": args.n_particles,
         "effective_n_particles": train_particles,
-        "n_steps": args.n_steps,
+        "requested_n_steps": args.n_steps,
+        "n_steps": train_steps,
         "eval_particles": args.eval_particles,
         "eval_steps": args.eval_steps,
         "eval_target_particles": args.eval_target_particles,
+        "requested_max_train_target_atoms": args.max_train_target_atoms,
+        "max_train_target_atoms": train_max_target_atoms,
         "train_peak_gpu_mb": train_peak_gpu_mb,
         "eval_peak_gpu_mb": eval_peak_gpu_mb,
     }
@@ -1510,12 +1591,12 @@ def main() -> None:
         f"- Training schedule: `{args.training_schedule}`",
         f"- Resolved training stages: `{format_training_schedule(training_schedule)}`",
         f"- Resolved program count: `{resolved_n_programs}`",
-        f"- Train particles / steps: `{train_particles}` / `{args.n_steps}`",
+        f"- Train particles / steps: `{train_particles}` / `{train_steps}`",
         f"- Eval particles / steps: `{args.eval_particles}` / `{args.eval_steps}`",
         f"- Eval target atoms per perturbation: `{args.eval_target_particles}`",
         f"- Weak-form test functions: `{train_test_functions}`",
         f"- Max active perturbations per train step: "
-        f"`{args.max_active_perturbations if args.max_active_perturbations > 0 else 'all'}`",
+        f"`{train_max_active_perturbations if train_max_active_perturbations > 0 else 'all'}`",
         f"- Auto-scale VRAM budget: `{args.auto_scale_budget}`",
         f"- Budget headroom fraction: `{args.budget_headroom}`",
         f"- VRAM budget scaled: `{budget['budget_scaled']}`",
@@ -1523,7 +1604,7 @@ def main() -> None:
         f"- Growth-bias regularization: `{args.lambda_reg_growth_bias}`",
         f"- Precision: `{args.precision}`",
         f"- CPU threads / interop threads: `{args.cpu_threads}` / `{args.cpu_interop_threads}`",
-        f"- Max train target atoms per perturbation: `{args.max_train_target_atoms}`",
+        f"- Max train target atoms per perturbation: `{train_max_target_atoms}`",
         f"- Mass scope: `{args.mass_scope}`",
         f"- Requested mass mode: `{args.mass_mode}`",
         f"- Train mass mode: `{train_data.mass_table.df.attrs.get('mass_mode')}`",
