@@ -43,6 +43,28 @@ def _model() -> FullDynamicsModel:
     )
 
 
+def _causal_attention_model() -> FullDynamicsModel:
+    torch.manual_seed(0)
+    return FullDynamicsModel(
+        perturbation_ids=["pert", "ctrl"],
+        control_ids=["ctrl"],
+        latent_dim=2,
+        embedding_dim=4,
+        n_programs=2,
+        mediator_dim=2,
+        hidden_dim=8,
+        depth=1,
+        ecological_growth=True,
+        control_mode="soft_ref",
+        context_kind="causal_attention",
+        causal_token_dim=8,
+        causal_heads=1,
+        causal_n_mediators=2,
+        causal_dropout=0.0,
+        causal_growth_only=True,
+    )
+
+
 def test_counterfactual_engine_clamp_context_requires_history() -> None:
     engine = CounterfactualEngine(
         model=_model(),
@@ -84,6 +106,25 @@ def test_counterfactual_engine_clamp_context_returns_same_start_branches() -> No
     assert torch.allclose(result.rollout_control.logw_steps, result.rollout_control_clamped.logw_steps)
     assert torch.equal(result.rollout_control.tau_steps, result.rollout_control_clamped.tau_steps)
     assert isinstance(result.terminal_log_mass_diff(), float)
+
+
+def test_counterfactual_engine_causal_attention_clamp_context_keeps_growth_context() -> None:
+    engine = CounterfactualEngine(
+        model=_causal_attention_model(),
+        simulator=WeightedParticleSimulator(n_steps=2, store_history=True),
+        n_particles=5,
+    )
+
+    result = engine.run(_endpoint(), ["pert"], clamp_context=True, seed=7, common_noise=True)[0]
+
+    assert result.rollout_clamped is not None
+    assert result.rollout_control_clamped is not None
+    assert result.rollout_control.base_context_steps is not None
+    assert result.rollout_control.growth_context_steps is not None
+    assert result.rollout_clamped.base_context_steps is not None
+    assert result.rollout_clamped.growth_context_steps is not None
+    assert torch.isfinite(result.rollout_clamped.terminal_z).all()
+    assert torch.isfinite(result.rollout_clamped.terminal_logw).all()
 
 
 def test_counterfactual_common_noise_does_not_mutate_global_rng() -> None:

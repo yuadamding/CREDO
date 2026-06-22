@@ -42,6 +42,32 @@ def test_summarizer_handles_missing_state_metrics(tmp_path: Path) -> None:
     assert "n/a" in text
 
 
+def test_summarizer_default_control_mode_group_does_not_duplicate_group_key(tmp_path: Path) -> None:
+    run_dir = tmp_path / "setting_a" / "fold_0"
+    run_dir.mkdir(parents=True)
+    (run_dir / "config.json").write_text(
+        json.dumps({"split": {"split_strategy": "random_kfold", "fold_index": 0}, "config": {}})
+    )
+    (run_dir / "results_summary.json").write_text(
+        json.dumps(
+            {
+                "control_mode": "soft_ref",
+                "test_summary": {"mean_uot": 1.0, "mean_mass_rel_error": 0.1},
+                "train_summary": {"mean_uot": 0.9, "mean_mass_rel_error": 0.08},
+                "test_state_summary": {"mean_state_tv": 0.2, "dominant_state_accuracy": 0.5},
+                "train_state_summary": {"mean_state_tv": 0.1, "dominant_state_accuracy": 0.6},
+                "train_time_s": 12.0,
+            }
+        )
+    )
+
+    per_fold = pd.DataFrame(collect_run_rows(tmp_path))
+    summary = build_group_summary(per_fold, group_by="control_mode", ranking_mode="balanced")
+
+    assert list(summary["control_mode"]) == ["soft_ref"]
+    assert summary.loc[0, "n_folds_completed"] == 1
+
+
 def test_summarizer_ranks_and_labels_test_acc(tmp_path: Path) -> None:
     for setting, acc, uot in [("setting_low", 0.25, 0.7), ("setting_high", 0.75, 1.1)]:
         run_dir = tmp_path / setting / "fold_0"

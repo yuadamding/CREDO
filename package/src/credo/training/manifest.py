@@ -37,6 +37,16 @@ def _dependency_versions() -> dict[str, str | None]:
     return versions
 
 
+def _relative_to_cwd(path: str | Path) -> str:
+    resolved = Path(path).expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        rel = resolved.relative_to(cwd)
+    except ValueError:
+        return str(resolved)
+    return str(rel) if str(rel) else "."
+
+
 def build_run_manifest(
     *,
     config: Mapping[str, Any],
@@ -61,10 +71,10 @@ def build_run_manifest(
         "package_version": credo_version,
         "python": sys.version,
         "platform": platform.platform(),
-        "cwd": str(Path.cwd()),
+        "cwd": _relative_to_cwd(Path.cwd()),
         "command": " ".join(sys.argv),
         "argv": list(sys.argv),
-        "output_dir": str(output_dir) if output_dir is not None else None,
+        "output_dir": _relative_to_cwd(output_dir) if output_dir is not None else None,
         "torch": torch.__version__,
         "torch_cuda_version": torch.version.cuda,
         "cuda_available": bool(torch.cuda.is_available()),

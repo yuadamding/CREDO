@@ -715,6 +715,51 @@ def test_control_null_loss_does_not_cancel_time_sign_flips(tmp_path) -> None:
     assert loss.item() > 0.0
 
 
+def test_control_null_loss_zero_edges_has_finite_backward(tmp_path) -> None:
+    endpoint = _endpoint()
+    model = _model()
+    cfg = RunConfig(
+        device="cpu",
+        latent={"dim": 2},
+        model={
+            "context_kind": "causal_attention",
+            "embedding_dim": 4,
+            "n_programs": 3,
+            "mediator_dim": 2,
+            "causal_token_dim": 16,
+            "causal_heads": 4,
+            "causal_n_mediators": 4,
+            "hidden_dim": 12,
+            "depth": 1,
+        },
+        training=TrainingConfig(
+            lambda_causal_ctrl_edge=1.0,
+            lambda_causal_guide=0.0,
+            lambda_causal_sparse=0.0,
+            lambda_causal_orth=0.0,
+            lambda_causal_ctx_smooth=0.0,
+            causal_loss_start_epoch=0,
+            causal_loss_ramp_epochs=1,
+        ),
+    )
+    trainer = Trainer(model, cfg, endpoint, ["ctrl", "gene_a", "gene_b"], output_dir=str(tmp_path))
+    residual_steps = torch.zeros(2, 3, 2, requires_grad=True)
+
+    loss = trainer._causal_attention_loss_from_tensors(
+        edge_scores_steps=None,
+        residual_edge_scores_steps=residual_steps,
+        residual_edge_magnitude_steps=None,
+        mediator_tokens_steps=None,
+        growth_context_steps=None,
+        tau_steps=torch.linspace(0.0, 1.0, 3),
+        perturbation_ids=["ctrl", "gene_a", "gene_b"],
+        epoch=0,
+    )
+    loss.backward()
+
+    assert torch.isfinite(residual_steps.grad).all()
+
+
 def test_context_smoothness_regularizes_causal_delta_not_global_context(tmp_path) -> None:
     endpoint = _endpoint()
     model = _model()

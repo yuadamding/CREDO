@@ -73,6 +73,7 @@ def suggest_light_screen_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSp
         "n_particles": trial.suggest_categorical("n_particles", [64, 128, 256]),
         "n_steps": trial.suggest_categorical("n_steps", [8, 16, 24]),
     }
+    suggested.update(_suggest_causal_attention_architecture(trial, base, profile="light_screen"))
     return _spec_from_suggested(base, suggested)
 
 
@@ -100,6 +101,7 @@ def suggest_pareto_refit_spec(trial: Any, base: dict[str, Any]) -> "CREDOTrialSp
         "n_steps": trial.suggest_categorical("n_steps", [24, 48, 96]),
         "eval_particles": trial.suggest_categorical("eval_particles", [512, 1024, 2048]),
     }
+    suggested.update(_suggest_causal_attention_architecture(trial, base, profile="pareto_refit"))
     return _spec_from_suggested(base, suggested)
 
 
@@ -117,7 +119,7 @@ def suggest_claim_grade_refit_spec(
     cannot be mistaken for an independent architecture search.
     """
     if require_selected_architecture:
-        required = (
+        required = [
             "hidden_dim",
             "depth",
             "embedding_dim",
@@ -126,7 +128,17 @@ def suggest_claim_grade_refit_spec(
             "parent_setting_sha256",
             "parent_search_profile",
             "parent_objective_front_id",
-        )
+        ]
+        if base.get("context_kind") == "causal_attention":
+            required.extend(
+                [
+                    "causal_token_dim",
+                    "causal_heads",
+                    "causal_n_mediators",
+                    "causal_dropout",
+                    "causal_mass_attention_temperature",
+                ]
+            )
         missing = [name for name in required if name not in base]
         if missing:
             raise ValueError(
@@ -149,6 +161,7 @@ def suggest_claim_grade_refit_spec(
         "n_steps": trial.suggest_categorical("n_steps", [24, 48, 96]),
         "eval_particles": trial.suggest_categorical("eval_particles", [1024, 2048, 4096]),
     }
+    suggested.update(_suggest_causal_attention_architecture(trial, base, profile="claim_grade"))
     return _spec_from_suggested(base, suggested)
 
 
@@ -205,6 +218,36 @@ def _suggest_lambda_count(trial: Any) -> float:
     if regime < 0.85:
         return float(trial.suggest_float("lambda_count_low", 1e-3, 1.0, log=True))
     return float(trial.suggest_float("lambda_count_high", 1.0, 10.0, log=True))
+
+
+def _suggest_causal_attention_architecture(
+    trial: Any,
+    base: dict[str, Any],
+    *,
+    profile: str,
+) -> dict[str, Any]:
+    """Search causal-attention capacity only inside causal-attention studies."""
+    if base.get("context_kind") != "causal_attention":
+        return {}
+    if profile == "claim_grade":
+        return {
+            "causal_token_dim": base.get("causal_token_dim", 64),
+            "causal_heads": base.get("causal_heads", 4),
+            "causal_n_mediators": base.get("causal_n_mediators", 12),
+            "causal_dropout": base.get("causal_dropout", 0.05),
+            "causal_mass_attention_temperature": base.get("causal_mass_attention_temperature", 0.5),
+        }
+    token_dim = trial.suggest_categorical("causal_token_dim", [32, 64, 128])
+    return {
+        "causal_token_dim": token_dim,
+        "causal_heads": trial.suggest_categorical("causal_heads", [1, 2, 4, 8]),
+        "causal_n_mediators": trial.suggest_categorical("causal_n_mediators", [8, 12, 16, 24]),
+        "causal_dropout": trial.suggest_categorical("causal_dropout", [0.0, 0.05, 0.1]),
+        "causal_mass_attention_temperature": trial.suggest_categorical(
+            "causal_mass_attention_temperature",
+            [0.25, 0.5, 1.0],
+        ),
+    }
 
 
 def make_study(

@@ -9,6 +9,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 
 pytestmark = pytest.mark.biology
@@ -77,6 +78,50 @@ def test_counterfactual_biology_build_model_honors_transformer_config() -> None:
     assert model.transformer_growth_only is True
     assert model.context_agg.token_in[0].out_features == 16
     assert model.meanfield_context_agg is not None
+
+
+def test_counterfactual_biology_program_fractions_supports_causal_attention() -> None:
+    mod = _counterfactual_biology_module()
+    from credo.models.weighted_sde import ParticleRollout
+
+    config = {
+        "supported_perturbations": ["gene_a", "ctrl"],
+        "control_ids": ["ctrl"],
+        "shared_guide_embedding": False,
+        "resolved_n_programs": 3,
+        "program_assignment_scale": 1.0,
+        "config": {
+            "model": {
+                "embedding_dim": 4,
+                "n_programs": 3,
+                "mediator_dim": 2,
+                "hidden_dim": 8,
+                "depth": 1,
+                "ecological_growth": True,
+                "use_growth_intercept": True,
+                "control_mode": "soft_ref",
+                "context_kind": "causal_attention",
+                "causal_token_dim": 8,
+                "causal_heads": 1,
+                "causal_n_mediators": 2,
+                "causal_dropout": 0.0,
+                "causal_growth_only": True,
+            }
+        },
+    }
+    model = mod._build_model(config, latent_dim=4, program_centroids=None, device="cpu")
+    rollout = ParticleRollout(
+        z_steps=torch.randn(2, 1, 5, 4),
+        logw_steps=torch.zeros(2, 1, 5),
+        tau_steps=torch.linspace(0.0, 1.0, 2),
+        log_m0=torch.zeros(1),
+    )
+
+    fractions = mod._program_fractions(model, rollout)
+
+    assert fractions.shape == (3,)
+    assert torch.isfinite(fractions).all()
+    assert torch.allclose(fractions.sum(), torch.tensor(1.0), atol=1e-5)
 
 
 def test_extract_biology_effects_with_shared_and_signatures(tmp_path: Path) -> None:

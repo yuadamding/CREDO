@@ -37,6 +37,7 @@ from credo.data.hnscc import (
     DEFAULT_TEST_WTAS,
     DEFAULT_TRAIN_WTAS,
     DEFAULT_WTA_COLUMN,
+    build_expression_latent,
     build_split_summary,
     build_study_from_split,
     build_study_from_vae_latent,
@@ -64,6 +65,7 @@ from credo.training.trainer import Trainer
 
 
 DEFAULT_DATA_CANDIDATES = [
+    "inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad",
     "../inputs/hnscc/GSE235325_P4P60_allgenes_allcells_latest_states.h5ad",
 ]
 DEFAULT_OUTPUT = "runs/hnscc_credo_full_random"
@@ -83,7 +85,7 @@ def default_data_path() -> str:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run full CREDO training on HNSCC perturb-seq data.")
     parser.add_argument("--data-path", default=default_data_path())
-    parser.add_argument("--latent-source", choices=["obsm", "vae"], default="vae")
+    parser.add_argument("--latent-source", choices=["obsm", "vae", "expression"], default="expression")
     parser.add_argument("--latent-key", default=DEFAULT_LATENT_KEY)
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT)
     parser.add_argument("--epochs", type=int, default=500)
@@ -141,7 +143,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--mediator-dim", type=int, default=8)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--depth", type=int, default=3)
-    parser.add_argument("--context-kind", choices=["mlp", "transformer"], default="mlp")
+    parser.add_argument("--context-kind", choices=["mlp", "transformer", "causal_attention"], default="causal_attention")
     parser.add_argument("--transformer-token-dim", type=int, default=128)
     parser.add_argument("--transformer-heads", type=int, default=4)
     parser.add_argument("--transformer-within-layers", type=int, default=2)
@@ -152,8 +154,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--transformer-growth-only", dest="transformer_growth_only", action="store_true")
     parser.add_argument("--transformer-all-coefficients", dest="transformer_growth_only", action="store_false")
     parser.set_defaults(transformer_growth_only=True)
+    parser.add_argument("--causal-token-dim", type=int, default=64)
+    parser.add_argument("--causal-heads", type=int, default=4)
+    parser.add_argument("--causal-n-mediators", type=int, default=12)
+    parser.add_argument("--causal-dropout", type=float, default=0.05)
+    parser.add_argument("--causal-mass-attention-temperature", type=float, default=0.5)
+    parser.add_argument("--causal-growth-only", dest="causal_growth_only", action="store_true")
+    parser.add_argument("--causal-all-coefficients", dest="causal_growth_only", action="store_false")
+    parser.set_defaults(causal_growth_only=True)
+    parser.add_argument("--causal-sparse-edges", dest="causal_sparse_edges", action="store_true")
+    parser.add_argument("--causal-dense-edges", dest="causal_sparse_edges", action="store_false")
+    parser.set_defaults(causal_sparse_edges=True)
+    parser.add_argument(
+        "--causal-residual-policy",
+        choices=["edges_only", "tokens_and_edges"],
+        default="edges_only",
+    )
     parser.add_argument("--lr-transformer", type=float, default=1e-4)
     parser.add_argument("--transformer-weight-decay", type=float, default=1e-4)
+    parser.add_argument("--lr-net", type=float, default=3e-4)
+    parser.add_argument("--lr-embed", type=float, default=1e-3)
+    parser.add_argument("--weight-decay", type=float, default=1e-6)
+    parser.add_argument("--grad-clip", type=float, default=1.0)
+    parser.add_argument("--lr-causal-attention", type=float, default=5e-5)
+    parser.add_argument("--causal-attention-weight-decay", type=float, default=1e-4)
+    parser.add_argument("--lambda-causal-ctrl-edge", type=float, default=1e-3)
+    parser.add_argument("--lambda-causal-guide", type=float, default=0.0)
+    parser.add_argument("--lambda-causal-sparse", type=float, default=1e-4)
+    parser.add_argument("--lambda-causal-orth", type=float, default=1e-4)
+    parser.add_argument("--lambda-causal-ctx-smooth", type=float, default=1e-4)
+    parser.add_argument("--causal-loss-start-epoch", type=int, default=100)
+    parser.add_argument("--causal-loss-ramp-epochs", type=int, default=200)
     parser.add_argument(
         "--freeze-transformer-context-after-epoch",
         type=int,
@@ -172,6 +203,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-test-functions", type=int, default=12)
     parser.add_argument("--lambda-weak", type=float, default=0.1)
     parser.add_argument("--lambda-reg-growth-bias", type=float, default=1e-4)
+    parser.add_argument("--sinkhorn-epsilon", type=float, default=0.1)
+    parser.add_argument("--sinkhorn-tau", type=float, default=1.0)
+    parser.add_argument("--sinkhorn-max-iter", type=int, default=100)
     parser.add_argument(
         "--max-active-perturbations",
         type=int,
@@ -201,9 +235,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--guide-confident-only", dest="guide_confident_only", action="store_true")
     parser.add_argument("--include-nonconfident", dest="guide_confident_only", action="store_false")
     parser.add_argument("--expression-gene-mask-col", default="hv_gene")
-    parser.add_argument("--expression-top-genes", type=int, default=2000)
+    parser.add_argument("--expression-top-genes", type=int, default=1024)
     parser.add_argument("--vae-allow-empty-gene-mask-fallback", dest="vae_allow_empty_gene_mask_fallback", action="store_true")
     parser.add_argument("--no-vae-allow-empty-gene-mask-fallback", dest="vae_allow_empty_gene_mask_fallback", action="store_false")
+    parser.add_argument("--expression-allow-empty-gene-mask-fallback", dest="vae_allow_empty_gene_mask_fallback", action="store_true")
+    parser.add_argument("--no-expression-allow-empty-gene-mask-fallback", dest="vae_allow_empty_gene_mask_fallback", action="store_false")
     parser.add_argument("--vae-latent-dim", type=int, default=50)
     parser.add_argument("--vae-hidden-dim", type=int, default=512)
     parser.add_argument("--vae-depth", type=int, default=2)
@@ -218,23 +254,38 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vae-early-stop-patience", type=int, default=15)
     parser.add_argument("--vae-grad-clip", type=float, default=1.0)
     parser.add_argument("--vae-layer", type=str, default=None)
+    parser.add_argument("--expression-layer", dest="vae_layer", type=str)
     parser.add_argument("--vae-use-raw", dest="vae_use_raw", action="store_true")
     parser.add_argument("--no-vae-use-raw", dest="vae_use_raw", action="store_false")
+    parser.add_argument("--expression-use-raw", dest="vae_use_raw", action="store_true")
+    parser.add_argument("--no-expression-use-raw", dest="vae_use_raw", action="store_false")
     parser.add_argument("--vae-target-sum", type=float, default=1e4)
+    parser.add_argument("--expression-target-sum", dest="vae_target_sum", type=float)
     parser.add_argument("--vae-strict-layer", dest="vae_strict_layer", action="store_true")
     parser.add_argument("--no-vae-strict-layer", dest="vae_strict_layer", action="store_false")
+    parser.add_argument("--expression-strict-layer", dest="vae_strict_layer", action="store_true")
+    parser.add_argument("--no-expression-strict-layer", dest="vae_strict_layer", action="store_false")
     parser.add_argument("--vae-strict-counts", dest="vae_strict_counts", action="store_true")
     parser.add_argument("--no-vae-strict-counts", dest="vae_strict_counts", action="store_false")
+    parser.add_argument("--expression-strict-counts", dest="vae_strict_counts", action="store_true")
+    parser.add_argument("--no-expression-strict-counts", dest="vae_strict_counts", action="store_false")
     parser.add_argument("--vae-encode-batch-size", type=int, default=4096)
     parser.add_argument("--expression-workers", type=int, default=0)
     parser.add_argument("--expression-chunk-size", type=int, default=1024)
     parser.add_argument("--vae-batch-aware-hvg", dest="vae_batch_aware_hvg", action="store_true")
     parser.add_argument("--no-vae-batch-aware-hvg", dest="vae_batch_aware_hvg", action="store_false")
+    parser.add_argument("--expression-batch-aware-hvg", dest="vae_batch_aware_hvg", action="store_true")
+    parser.add_argument("--no-expression-batch-aware-hvg", dest="vae_batch_aware_hvg", action="store_false")
     parser.add_argument("--vae-hvg-batch-col", type=str, default=DEFAULT_WTA_COLUMN)
+    parser.add_argument("--expression-hvg-batch-col", dest="vae_hvg_batch_col", type=str)
     parser.add_argument("--vae-hvg-time-col", type=str, default="Time point")
+    parser.add_argument("--expression-hvg-time-col", dest="vae_hvg_time_col", type=str)
     parser.add_argument("--vae-hvg-min-cells-per-batch", type=int, default=256)
+    parser.add_argument("--expression-hvg-min-cells-per-batch", dest="vae_hvg_min_cells_per_batch", type=int)
     parser.add_argument("--vae-allow-full-gene-scan", dest="vae_allow_full_gene_scan", action="store_true")
     parser.add_argument("--no-vae-allow-full-gene-scan", dest="vae_allow_full_gene_scan", action="store_false")
+    parser.add_argument("--expression-allow-full-gene-scan", dest="vae_allow_full_gene_scan", action="store_true")
+    parser.add_argument("--no-expression-allow-full-gene-scan", dest="vae_allow_full_gene_scan", action="store_false")
     parser.add_argument("--vae-preload-dense-max-gb", type=float, default=4.0)
     parser.add_argument("--vae-reuse-artifact", dest="vae_reuse_artifact", action="store_true")
     parser.add_argument("--no-vae-reuse-artifact", dest="vae_reuse_artifact", action="store_false")
@@ -316,14 +367,24 @@ def resolve_git_dirty(repo_root: Path) -> bool | None:
     return None
 
 
+def relative_to_cwd(path: str | Path) -> str:
+    resolved = Path(path).expanduser().resolve()
+    cwd = Path.cwd().resolve()
+    try:
+        rel = resolved.relative_to(cwd)
+    except ValueError:
+        return str(resolved)
+    return str(rel) if str(rel) else "."
+
+
 def file_metadata(path: str | None) -> dict:
     if not path:
         return {"path": None, "exists": False}
     data_path = Path(path).expanduser()
     exists = data_path.exists()
     out = {
-        "path": str(data_path),
-        "resolved_path": str(data_path.resolve()) if exists else None,
+        "path": relative_to_cwd(data_path) if exists else str(data_path),
+        "resolved_path": relative_to_cwd(data_path) if exists else None,
         "exists": exists,
     }
     if exists:
@@ -624,17 +685,14 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Loading HNSCC data from {args.data_path}")
-    if args.latent_source == "vae":
+    expr_gene_names: list[str] = []
+    expr_meta: dict = {}
+    if args.latent_source in {"vae", "expression"}:
         raw_obs = load_hnscc_obs(args.data_path)
         raw_latent = None
-        expr_gene_names: list[str] = []
-        expr_meta: dict = {}
-        print(f"Loaded obs={raw_obs.shape} for VAE latent construction")
+        print(f"Loaded obs={raw_obs.shape} for {args.latent_source} latent construction")
     else:
         raw_obs, raw_latent = load_hnscc(args.data_path, latent_key=args.latent_key)
-        raw_expr = None
-        expr_gene_names = []
-        expr_meta = {}
         print(f"Loaded obs={raw_obs.shape} latent={raw_latent.shape}")
 
     obs, kept_positions = prepare_hnscc_obs(
@@ -665,6 +723,7 @@ def main() -> None:
     vae_summary = None
     vae_bundle = None
     vae_result = None
+    expression_result = None
     if args.latent_source == "vae":
         vae_device = primary_device if primary_device != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
         print(
@@ -733,6 +792,45 @@ def main() -> None:
             f"early_stopped={vae_summary.early_stopped}, "
             f"best_val={vae_summary.best_val_loss:.4f} at epoch {vae_summary.best_epoch}"
         )
+    elif args.latent_source == "expression":
+        print(
+            "Building split-safe raw-expression latent "
+            f"(expression_workers={args.expression_workers}, "
+            f"expression_chunk_size={args.expression_chunk_size}) ..."
+        )
+        expression_result = build_expression_latent(
+            args.data_path,
+            split=split,
+            obs=obs,
+            kept_positions=kept_positions,
+            layer=args.vae_layer,
+            use_raw=args.vae_use_raw,
+            gene_mask_col=args.expression_gene_mask_col,
+            n_genes=args.expression_top_genes,
+            allow_empty_gene_mask_fallback=args.vae_allow_empty_gene_mask_fallback,
+            batch_aware_hvg=args.vae_batch_aware_hvg,
+            hvg_batch_col=args.vae_hvg_batch_col,
+            hvg_time_col=args.vae_hvg_time_col,
+            hvg_min_cells_per_batch=args.vae_hvg_min_cells_per_batch,
+            allow_full_gene_scan=args.vae_allow_full_gene_scan,
+            target_sum=args.vae_target_sum,
+            strict_layer=args.vae_strict_layer,
+            strict_counts=args.vae_strict_counts,
+            expression_workers=args.expression_workers,
+            expression_chunk_size=args.expression_chunk_size,
+            state_key=state_key,
+            compute_centroids=args.use_state_centroids,
+            save_dir=str(output_dir / "expression_artifact"),
+            commit_sha=git_sha,
+        )
+        latent = expression_result.latent
+        expr_gene_names = list(expression_result.gene_names)
+        expr_meta = dict(expression_result.metadata)
+        (output_dir / "expression_genes.txt").write_text("\n".join(expr_gene_names) + "\n")
+        print(
+            f"Raw-expression latent ready: {latent.shape[0]} cells x {latent.shape[1]} genes, "
+            f"source layer={expr_meta.get('layer')!r}"
+        )
     else:
         latent = raw_latent[kept_positions]
 
@@ -788,6 +886,8 @@ def main() -> None:
     if args.use_state_centroids:
         if args.latent_source == "vae":
             program_centroids = vae_result.program_centroids
+        elif args.latent_source == "expression":
+            program_centroids = expression_result.program_centroids if expression_result is not None else train_centroids
         else:
             program_centroids = train_centroids
     else:
@@ -846,14 +946,23 @@ def main() -> None:
         )
 
     latent_dim = train_data.latent_dim
+    if args.latent_source == "vae":
+        latent_config_source = "vae"
+        latent_config_key = "X_vae"
+    elif args.latent_source == "expression":
+        latent_config_source = "expression"
+        latent_config_key = "raw_expression_log1p_hvg"
+    else:
+        latent_config_source = "pca"
+        latent_config_key = args.latent_key
     cfg = RunConfig(
         git_sha=git_sha,
         device=primary_device,
         multi_gpu_devices=multi_gpu_devices,
         output_dir=str(output_dir),
         latent=LatentConfig(
-            source="vae" if args.latent_source == "vae" else "pca",
-            key="X_vae" if args.latent_source == "vae" else args.latent_key,
+            source=latent_config_source,
+            key=latent_config_key,
             dim=latent_dim,
             whiten=False,
             vae=VAEConfig(
@@ -918,6 +1027,14 @@ def main() -> None:
             transformer_dropout=args.transformer_dropout,
             mass_attention_temperature=args.mass_attention_temperature,
             transformer_growth_only=args.transformer_growth_only,
+            causal_token_dim=args.causal_token_dim,
+            causal_heads=args.causal_heads,
+            causal_n_mediators=args.causal_n_mediators,
+            causal_dropout=args.causal_dropout,
+            causal_mass_attention_temperature=args.causal_mass_attention_temperature,
+            causal_growth_only=args.causal_growth_only,
+            causal_sparse_edges=args.causal_sparse_edges,
+            causal_residual_policy=args.causal_residual_policy,
         ),
         simulation=SimulationConfig(
             n_particles=train_particles,
@@ -927,9 +1044,12 @@ def main() -> None:
         training=TrainingConfig(
             precision=args.precision,
             epochs=args.epochs,
-            lr_net=3e-4,
-            lr_embed=1e-3,
+            lr_net=args.lr_net,
+            lr_embed=args.lr_embed,
             lr_transformer=args.lr_transformer,
+            lr_causal_attention=args.lr_causal_attention,
+            weight_decay=args.weight_decay,
+            grad_clip=args.grad_clip,
             lambda_end=1.0,
             lambda_weak=args.lambda_weak,
             lambda_count=0.0,
@@ -938,6 +1058,14 @@ def main() -> None:
             lambda_reg_net=1e-4,
             lambda_reg_diffusion=1e-4,
             transformer_weight_decay=args.transformer_weight_decay,
+            causal_attention_weight_decay=args.causal_attention_weight_decay,
+            lambda_causal_ctrl_edge=args.lambda_causal_ctrl_edge,
+            lambda_causal_guide=args.lambda_causal_guide,
+            lambda_causal_sparse=args.lambda_causal_sparse,
+            lambda_causal_orth=args.lambda_causal_orth,
+            lambda_causal_ctx_smooth=args.lambda_causal_ctx_smooth,
+            causal_loss_start_epoch=args.causal_loss_start_epoch,
+            causal_loss_ramp_epochs=args.causal_loss_ramp_epochs,
             training_schedule=args.training_schedule,
             stage_c_epochs=args.stage_c_epochs,
             stage_d_epochs=args.stage_d_epochs,
@@ -948,8 +1076,9 @@ def main() -> None:
             early_stop_patience=args.epochs,
             log_every=25,
             checkpoint_every=100,
-            sinkhorn_epsilon=0.1,
-            sinkhorn_tau=1.0,
+            sinkhorn_epsilon=args.sinkhorn_epsilon,
+            sinkhorn_tau=args.sinkhorn_tau,
+            sinkhorn_max_iter=args.sinkhorn_max_iter,
             n_test_functions=train_test_functions,
             test_function_bandwidth=1.0,
         ),
@@ -981,6 +1110,14 @@ def main() -> None:
         transformer_dropout=args.transformer_dropout,
         mass_attention_temperature=args.mass_attention_temperature,
         transformer_growth_only=args.transformer_growth_only,
+        causal_token_dim=args.causal_token_dim,
+        causal_heads=args.causal_heads,
+        causal_n_mediators=args.causal_n_mediators,
+        causal_dropout=args.causal_dropout,
+        causal_mass_attention_temperature=args.causal_mass_attention_temperature,
+        causal_growth_only=args.causal_growth_only,
+        causal_sparse_edges=args.causal_sparse_edges,
+        causal_residual_policy=args.causal_residual_policy,
     ).to(cfg.resolve_device())
 
     trainer = Trainer(model, cfg, train_ep, supported_pids, output_dir=str(output_dir))
@@ -1001,13 +1138,19 @@ def main() -> None:
         "data_path": args.data_path,
         "latent_source": args.latent_source,
         "latent_key": args.latent_key if args.latent_source == "obsm" else None,
-        "expression_gene_mask_col": args.expression_gene_mask_col if args.latent_source == "vae" else None,
-        "expression_top_genes": args.expression_top_genes if args.latent_source == "vae" else None,
-        "expression_selected_genes": expr_gene_names if args.latent_source == "vae" else None,
-        "expression_selected_gene_indices": expr_meta.get("selected_gene_indices") if args.latent_source == "vae" else None,
-        "expression_requested_layer": expr_meta.get("requested_layer") if args.latent_source == "vae" else None,
-        "expression_resolved_layer": expr_meta.get("layer") if args.latent_source == "vae" else None,
-        "expression_split_manifest_hash": expr_meta.get("split_manifest_hash") if args.latent_source == "vae" else None,
+        "expression_gene_mask_col": args.expression_gene_mask_col if args.latent_source in {"vae", "expression"} else None,
+        "expression_top_genes": args.expression_top_genes if args.latent_source in {"vae", "expression"} else None,
+        "expression_selected_genes": expr_gene_names if args.latent_source in {"vae", "expression"} else None,
+        "expression_selected_gene_indices": (
+            expr_meta.get("selected_gene_indices") if args.latent_source in {"vae", "expression"} else None
+        ),
+        "expression_requested_layer": (
+            expr_meta.get("requested_layer") if args.latent_source in {"vae", "expression"} else None
+        ),
+        "expression_resolved_layer": expr_meta.get("layer") if args.latent_source in {"vae", "expression"} else None,
+        "expression_split_manifest_hash": (
+            expr_meta.get("split_manifest_hash") if args.latent_source in {"vae", "expression"} else None
+        ),
         "expression_encoder": {
             **vae_summary.__dict__,
             "kl_warmup_epochs": args.vae_kl_warmup_epochs,
@@ -1032,6 +1175,7 @@ def main() -> None:
             "expression_workers": args.expression_workers,
             "expression_chunk_size": args.expression_chunk_size,
         } if vae_summary is not None else None,
+        "expression_latent": expr_meta if args.latent_source == "expression" else None,
         "guide_confident_only": args.guide_confident_only,
         "split": split_meta,
         "state_key": state_key,
@@ -1053,6 +1197,23 @@ def main() -> None:
         "ecological_growth": args.ecological_growth,
         "use_growth_intercept": args.use_growth_intercept,
         "activation_checkpointing": args.activation_checkpointing,
+        "context_kind": args.context_kind,
+        "transformer_token_dim": args.transformer_token_dim,
+        "transformer_heads": args.transformer_heads,
+        "transformer_within_layers": args.transformer_within_layers,
+        "transformer_cross_layers": args.transformer_cross_layers,
+        "transformer_inducing": args.transformer_inducing,
+        "transformer_dropout": args.transformer_dropout,
+        "mass_attention_temperature": args.mass_attention_temperature,
+        "transformer_growth_only": args.transformer_growth_only,
+        "causal_token_dim": args.causal_token_dim,
+        "causal_heads": args.causal_heads,
+        "causal_n_mediators": args.causal_n_mediators,
+        "causal_dropout": args.causal_dropout,
+        "causal_mass_attention_temperature": args.causal_mass_attention_temperature,
+        "causal_growth_only": args.causal_growth_only,
+        "causal_sparse_edges": args.causal_sparse_edges,
+        "causal_residual_policy": args.causal_residual_policy,
         "training_schedule": args.training_schedule,
         "stage_c_epochs": args.stage_c_epochs,
         "stage_d_epochs": args.stage_d_epochs,
@@ -1074,6 +1235,15 @@ def main() -> None:
         "budget_headroom": args.budget_headroom,
         "lambda_weak": args.lambda_weak,
         "lambda_reg_growth_bias": args.lambda_reg_growth_bias,
+        "lr_causal_attention": args.lr_causal_attention,
+        "causal_attention_weight_decay": args.causal_attention_weight_decay,
+        "lambda_causal_ctrl_edge": args.lambda_causal_ctrl_edge,
+        "lambda_causal_guide": args.lambda_causal_guide,
+        "lambda_causal_sparse": args.lambda_causal_sparse,
+        "lambda_causal_orth": args.lambda_causal_orth,
+        "lambda_causal_ctx_smooth": args.lambda_causal_ctx_smooth,
+        "causal_loss_start_epoch": args.causal_loss_start_epoch,
+        "causal_loss_ramp_epochs": args.causal_loss_ramp_epochs,
         "precision": args.precision,
         "cpu_threads": args.cpu_threads,
         "cpu_interop_threads": args.cpu_interop_threads,
@@ -1237,6 +1407,8 @@ def main() -> None:
         "data_path": args.data_path,
         "latent_source": args.latent_source,
         "latent_key": args.latent_key if args.latent_source == "obsm" else None,
+        "expression_top_genes": args.expression_top_genes if args.latent_source == "expression" else None,
+        "expression_resolved_layer": expr_meta.get("layer") if args.latent_source == "expression" else None,
         "output_dir": str(output_dir),
         "state_key": state_key,
         "state_eval_enabled": state_eval_enabled,
@@ -1270,6 +1442,15 @@ def main() -> None:
         "mediator_dim": args.mediator_dim,
         "hidden_dim": args.hidden_dim,
         "depth": args.depth,
+        "context_kind": args.context_kind,
+        "causal_token_dim": args.causal_token_dim,
+        "causal_heads": args.causal_heads,
+        "causal_n_mediators": args.causal_n_mediators,
+        "causal_dropout": args.causal_dropout,
+        "causal_mass_attention_temperature": args.causal_mass_attention_temperature,
+        "causal_growth_only": args.causal_growth_only,
+        "causal_sparse_edges": args.causal_sparse_edges,
+        "causal_residual_policy": args.causal_residual_policy,
         "resolved_training_schedule": [
             {"stage": stage, "epochs": epochs} for stage, epochs in training_schedule
         ],
@@ -1296,6 +1477,12 @@ def main() -> None:
         f"- Latent source: `{args.latent_source}`",
         f"- Latent key: `{args.latent_key}`" if args.latent_source == "obsm" else None,
         f"- Expression genes for VAE: `{len(expr_gene_names)}`" if args.latent_source == "vae" else None,
+        (
+            f"- Raw-expression genes: `{len(expr_gene_names)}` "
+            f"(layer `{expr_meta.get('layer')}`, train-standardized)"
+            if args.latent_source == "expression"
+            else None
+        ),
         "",
         f"- Guide-confident only: `{args.guide_confident_only}`",
         *format_split_lines(split_meta),
@@ -1309,6 +1496,17 @@ def main() -> None:
         f"- Control reference warmup active: `{args.training_schedule == 'joint' and args.control_mode == 'soft_ref'}`",
         f"- Ecological growth enabled: `{args.ecological_growth}`",
         f"- Growth intercept enabled: `{args.use_growth_intercept}`",
+        f"- Context backend: `{args.context_kind}`",
+        (
+            f"- Causal mediators / heads: `{args.causal_n_mediators}` / `{args.causal_heads}`"
+            if args.context_kind == "causal_attention"
+            else None
+        ),
+        (
+            f"- Causal residual policy: `{args.causal_residual_policy}`"
+            if args.context_kind == "causal_attention"
+            else None
+        ),
         f"- Training schedule: `{args.training_schedule}`",
         f"- Resolved training stages: `{format_training_schedule(training_schedule)}`",
         f"- Resolved program count: `{resolved_n_programs}`",

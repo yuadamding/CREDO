@@ -46,6 +46,11 @@ SEARCHABLE: frozenset[str] = frozenset(
         "lr_transformer",
         "lr_causal_attention",
         "weight_decay",
+        "causal_token_dim",
+        "causal_heads",
+        "causal_n_mediators",
+        "causal_dropout",
+        "causal_mass_attention_temperature",
         "lambda_end",
         "lambda_weak",
         "lambda_count",
@@ -64,6 +69,8 @@ SEARCHABLE: frozenset[str] = frozenset(
 ABLATION_ONLY: frozenset[str] = frozenset(
     {
         "context_kind",
+        "causal_growth_only",
+        "causal_residual_policy",
         "ecological_growth",
         "training_schedule",
     }
@@ -74,6 +81,7 @@ FROZEN: dict[str, object] = {
     "same_start_counterfactuals": True,
     "mass_faithful_context": True,
     "global_context_batching": "full_context_cache",
+    "causal_sparse_edges": True,
 }
 
 
@@ -139,6 +147,14 @@ class CREDOTrialSpec:
 
     # --- context backend / variant (ABLATION_ONLY) ---
     context_kind: Literal["mlp", "transformer", "causal_attention"] = "mlp"
+    causal_token_dim: int = 64
+    causal_heads: int = 4
+    causal_n_mediators: int = 12
+    causal_dropout: float = 0.05
+    causal_mass_attention_temperature: float = 0.5
+    causal_growth_only: bool = True
+    causal_sparse_edges: bool = True
+    causal_residual_policy: Literal["edges_only", "tokens_and_edges"] = "edges_only"
     ecological_growth: bool = True
     training_schedule: Literal["joint", "staged"] = "staged"
 
@@ -181,6 +197,9 @@ class CREDOTrialSpec:
             "mediator_dim",
             "hidden_dim",
             "depth",
+            "causal_token_dim",
+            "causal_heads",
+            "causal_n_mediators",
             "epochs",
             "n_particles",
             "n_steps",
@@ -189,6 +208,8 @@ class CREDOTrialSpec:
             value = getattr(self, name)
             if int(value) <= 0:
                 raise ValueError(f"{name} must be a positive integer, got {value!r}.")
+        if int(self.causal_token_dim) % int(self.causal_heads) != 0:
+            raise ValueError("causal_token_dim must be divisible by causal_heads.")
         for name in (
             "lr_net",
             "lr_embed",
@@ -200,6 +221,13 @@ class CREDOTrialSpec:
             value = getattr(self, name)
             if float(value) <= 0.0:
                 raise ValueError(f"{name} must be > 0, got {value!r}.")
+        if not 0.0 <= float(self.causal_dropout) < 1.0:
+            raise ValueError(f"causal_dropout must be in [0, 1), got {self.causal_dropout!r}.")
+        if float(self.causal_mass_attention_temperature) < 0.0:
+            raise ValueError(
+                "causal_mass_attention_temperature must be >= 0, "
+                f"got {self.causal_mass_attention_temperature!r}."
+            )
         for name in (
             "weight_decay",
             "lambda_end",
@@ -269,6 +297,14 @@ def spec_to_run_config(
         ecological_growth=spec.ecological_growth,
         control_mode=spec.control_mode,
         context_kind=spec.context_kind,
+        causal_token_dim=spec.causal_token_dim,
+        causal_heads=spec.causal_heads,
+        causal_n_mediators=spec.causal_n_mediators,
+        causal_dropout=spec.causal_dropout,
+        causal_mass_attention_temperature=spec.causal_mass_attention_temperature,
+        causal_growth_only=spec.causal_growth_only,
+        causal_sparse_edges=spec.causal_sparse_edges,
+        causal_residual_policy=spec.causal_residual_policy,
     )
     simulation = SimulationConfig(
         n_particles=spec.n_particles,
@@ -300,11 +336,14 @@ def spec_to_run_config(
     # Explicit latent_dim arg overrides the spec; otherwise the spec's own
     # latent_dim (which is hashed) is used.
     effective_latent_dim = latent_dim if latent_dim is not None else spec.latent_dim
-    latent = (
-        LatentConfig(dim=int(effective_latent_dim))
-        if effective_latent_dim is not None
-        else LatentConfig()
-    )
+    latent_kwargs: dict[str, object] = {}
+    if spec.latent_source:
+        latent_kwargs["source"] = spec.latent_source
+    if spec.latent_key:
+        latent_kwargs["key"] = spec.latent_key
+    if effective_latent_dim is not None:
+        latent_kwargs["dim"] = int(effective_latent_dim)
+    latent = LatentConfig(**latent_kwargs)
 
     cfg = RunConfig(
         run_id=f"{spec.data_id}:{spec.fold_id or 'all'}:seed{spec.seed}",

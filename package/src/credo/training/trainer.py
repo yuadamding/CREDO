@@ -492,6 +492,7 @@ class Trainer:
             eps=tc.sinkhorn_epsilon,
             tau=tc.sinkhorn_tau,
             max_iter=tc.sinkhorn_max_iter,
+            use_geomloss=False,
         )
         self.weak_loss = WeakFormLoss(
             n_test_functions=tc.n_test_functions,
@@ -850,7 +851,7 @@ class Trainer:
         residual_edges_for_control = (
             None
             if residual_edge_scores_steps is None
-            else residual_edge_scores_steps.float().square().mean(dim=0).sqrt()
+            else (residual_edge_scores_steps.float().square().mean(dim=0) + 1e-12).sqrt()
         )
         residual_edge_magnitude = (
             None if residual_edges is None else residual_edges.abs()

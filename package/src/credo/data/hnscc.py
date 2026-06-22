@@ -1072,6 +1072,235 @@ class VAELatentResult:
     bundle: object                       # VAEArtifactBundle
 
 
+@dataclass(frozen=True)
+class ExpressionLatentResult:
+    """Raw-expression latent arrays and provenance for direct CREDO training."""
+    latent: np.ndarray                   # [n_cells, n_genes] — log-normalized, train-standardized
+    train_mask: np.ndarray               # [n_cells] bool
+    test_mask: np.ndarray                # [n_cells] bool
+    gene_names: list[str]
+    selected_gene_indices: list[int]
+    metadata: dict
+    program_centroids: np.ndarray | None = None
+
+
+def _expression_cache_paths(save_dir: str | Path) -> tuple[Path, Path, Path, Path]:
+    save_path = Path(save_dir)
+    return (
+        save_path,
+        save_path / "expression_metadata.json",
+        save_path / "latent_all_std.npy",
+        save_path / "expression_genes.txt",
+    )
+
+
+def _standardize_expression_features(
+    matrix: sp.csr_matrix | np.ndarray,
+    *,
+    train_mask: np.ndarray,
+    chunk_size: int = 4096,
+    save_path: str | Path | None = None,
+) -> tuple[np.ndarray, dict]:
+    """Z-score expression features with train-only moments, returning dense float32."""
+    if not train_mask.any():
+        raise ValueError("Expression latent construction requires at least one training cell.")
+
+    train_matrix = matrix[train_mask]
+    mean, variance = _gene_mean_variance(train_matrix)
+    std = np.sqrt(np.maximum(variance, 1e-12)).astype(np.float32)
+    mean = mean.astype(np.float32)
+    std[std < 1e-6] = 1.0
+
+    n_rows, n_cols = matrix.shape
+    chunk_size = max(1, int(chunk_size))
+    if save_path is not None:
+        save_path = Path(save_path)
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        out = np.lib.format.open_memmap(
+            save_path,
+            mode="w+",
+            dtype=np.float32,
+            shape=(int(n_rows), int(n_cols)),
+        )
+    else:
+        out = np.empty((int(n_rows), int(n_cols)), dtype=np.float32)
+
+    for start in range(0, int(n_rows), chunk_size):
+        stop = min(start + chunk_size, int(n_rows))
+        batch = matrix[start:stop]
+        if sp.issparse(batch):
+            arr = np.asarray(batch.toarray(), dtype=np.float32)
+        else:
+            arr = np.asarray(batch, dtype=np.float32)
+        arr = (arr - mean) / std
+        out[start:stop] = arr
+
+    if isinstance(out, np.memmap):
+        out.flush()
+
+    stats = {
+        "mean": mean.astype(float).tolist(),
+        "std": std.astype(float).tolist(),
+        "min_std": float(np.min(std)) if len(std) else None,
+        "max_std": float(np.max(std)) if len(std) else None,
+    }
+    return out, stats
+
+
+def build_expression_latent(
+    h5ad_path: str,
+    *,
+    split: pd.Series,
+    obs: pd.DataFrame,
+    kept_positions: np.ndarray | None = None,
+    layer: str | None = None,
+    use_raw: bool = False,
+    gene_mask_col: str | None = None,
+    n_genes: int = 2000,
+    batch_aware_hvg: bool = True,
+    hvg_batch_col: str = DEFAULT_WTA_COLUMN,
+    hvg_time_col: str = "Time point",
+    hvg_min_cells_per_batch: int = 256,
+    allow_full_gene_scan: bool = False,
+    target_sum: float = 1e4,
+    expression_workers: int = 0,
+    expression_chunk_size: int = 1024,
+    state_key: str | None = None,
+    compute_centroids: bool = False,
+    save_dir: str | None = None,
+    commit_sha: str | None = None,
+    strict_layer: bool = True,
+    strict_counts: bool = True,
+    allow_empty_gene_mask_fallback: bool = False,
+) -> ExpressionLatentResult:
+    """Build a direct raw-expression latent without PCA or VAE compression.
+
+    The expression source is validated as raw counts, genes are selected using
+    training cells only, values are library-normalized/log1p transformed, and
+    features are z-scored from train-only moments.
+    """
+    from ..models.expression_vae import log1p_normalize_expression_matrix
+
+    _, expr_candidate, candidate_gene_names, expr_meta = load_hnscc_expression(
+        h5ad_path,
+        layer=layer,
+        use_raw=use_raw,
+        gene_mask_col=gene_mask_col,
+        top_genes=0,
+        validate_counts=True,
+        strict_layer=strict_layer,
+        strict_counts=strict_counts,
+        allow_full_gene_scan=allow_full_gene_scan,
+        allow_empty_gene_mask_fallback=allow_empty_gene_mask_fallback,
+        row_indices=kept_positions,
+        n_workers=expression_workers,
+        chunk_size=expression_chunk_size,
+    )
+    candidate_gene_indices = np.asarray(expr_meta["selected_gene_indices"], dtype=np.int64)
+    library_totals = np.asarray(expr_meta["full_library_totals"], dtype=np.float32)
+
+    n_cells = expr_candidate.shape[0]
+    if n_cells != len(obs):
+        raise ValueError(
+            f"Expression matrix has {n_cells} rows but obs has {len(obs)} rows. "
+            "Pass kept_positions from prepare_hnscc_obs if cells were filtered."
+        )
+
+    train_mask = split.eq("train").to_numpy()
+    test_mask = split.eq("test").to_numpy()
+    train_indices = np.flatnonzero(train_mask).tolist()
+    if not train_mask.any():
+        raise ValueError("Expression latent construction requires at least one training cell.")
+
+    train_candidate = expr_candidate[train_mask]
+    if batch_aware_hvg:
+        selected_local_idx = _rank_train_hv_genes_batch_aware(
+            train_candidate,
+            obs.loc[train_mask],
+            n_genes=n_genes,
+            batch_col=hvg_batch_col,
+            time_col=hvg_time_col,
+            min_cells_per_batch=hvg_min_cells_per_batch,
+        )
+    else:
+        selected_local_idx = _rank_train_hv_genes(train_candidate, n_genes=n_genes)
+
+    selected_gene_indices = candidate_gene_indices[selected_local_idx]
+    gene_names = [candidate_gene_names[int(i)] for i in selected_local_idx.tolist()]
+    expr_selected = expr_candidate[:, selected_local_idx]
+    expr_norm = log1p_normalize_expression_matrix(
+        expr_selected,
+        target_sum=target_sum,
+        library_totals=library_totals,
+    )
+
+    split_hash = _split_manifest_hash(obs, split)
+    save_path = meta_path = genes_path = latent_path = None
+    if save_dir is not None:
+        save_path, meta_path, latent_path, genes_path = _expression_cache_paths(save_dir)
+
+    z_all_std, standardization = _standardize_expression_features(
+        expr_norm,
+        train_mask=train_mask,
+        chunk_size=expression_chunk_size,
+        save_path=latent_path,
+    )
+
+    program_centroids = None
+    if compute_centroids:
+        if not state_key:
+            raise ValueError("compute_centroids=True requires a non-empty state_key.")
+        train_obs = obs.loc[train_mask]
+        _, program_centroids, _ = compute_state_centroids(
+            train_obs,
+            z_all_std[train_mask],
+            state_key=state_key,
+        )
+
+    metadata = {
+        "source": "raw_expression_log1p_hvg",
+        "requested_layer": expr_meta.get("requested_layer"),
+        "layer": expr_meta.get("layer"),
+        "target_sum": float(target_sum),
+        "gene_mask_col": gene_mask_col,
+        "n_genes": int(n_genes),
+        "n_selected_genes": int(len(gene_names)),
+        "gene_names": gene_names,
+        "selected_gene_indices": selected_gene_indices.astype(np.int64).tolist(),
+        "batch_aware_hvg": bool(batch_aware_hvg),
+        "hvg_batch_col": hvg_batch_col,
+        "hvg_time_col": hvg_time_col,
+        "hvg_min_cells_per_batch": int(hvg_min_cells_per_batch),
+        "train_cell_indices": train_indices,
+        "kept_positions": kept_positions.tolist() if kept_positions is not None else None,
+        "split_manifest_hash": split_hash,
+        "latent_standardized": True,
+        "standardization": standardization,
+        "expression_workers": int(expression_workers),
+        "expression_chunk_size": int(expression_chunk_size),
+        "allow_full_gene_scan": bool(allow_full_gene_scan),
+        "allow_empty_gene_mask_fallback": bool(allow_empty_gene_mask_fallback),
+        "commit_sha": commit_sha,
+    }
+
+    if save_dir is not None:
+        save_path.mkdir(parents=True, exist_ok=True)
+        if not isinstance(z_all_std, np.memmap):
+            np.save(latent_path, z_all_std)
+        meta_path.write_text(json.dumps(metadata, indent=2))
+        genes_path.write_text("\n".join(gene_names) + "\n")
+
+    return ExpressionLatentResult(
+        latent=z_all_std,
+        train_mask=train_mask,
+        test_mask=test_mask,
+        gene_names=gene_names,
+        selected_gene_indices=selected_gene_indices.astype(np.int64).tolist(),
+        metadata=metadata,
+        program_centroids=program_centroids,
+    )
+
+
 def build_vae_latent(
     h5ad_path: str,
     *,

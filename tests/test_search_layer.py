@@ -170,6 +170,14 @@ def test_spec_to_run_config_maps_searchable_fields() -> None:
         lambda_count=0.0,
         sinkhorn_tau=2.5,
         sinkhorn_epsilon=0.2,
+        context_kind="causal_attention",
+        causal_token_dim=32,
+        causal_heads=4,
+        causal_n_mediators=16,
+        causal_dropout=0.1,
+        causal_mass_attention_temperature=0.25,
+        latent_source="expression",
+        latent_key="raw_expression_log1p_hvg",
         epochs=42,
         seed=7,
     )
@@ -185,7 +193,15 @@ def test_spec_to_run_config_maps_searchable_fields() -> None:
     assert cfg.training.sinkhorn_tau == pytest.approx(2.5)
     assert cfg.training.epochs == 42
     assert cfg.training.seed == 7
+    assert cfg.latent.source == "expression"
+    assert cfg.latent.key == "raw_expression_log1p_hvg"
     assert cfg.latent.dim == 12
+    assert cfg.model.context_kind == "causal_attention"
+    assert cfg.model.causal_token_dim == 32
+    assert cfg.model.causal_heads == 4
+    assert cfg.model.causal_n_mediators == 16
+    assert cfg.model.causal_dropout == pytest.approx(0.1)
+    assert cfg.model.causal_mass_attention_temperature == pytest.approx(0.25)
     assert cfg.model.control_mode == "soft_ref"
     # Single-device by construction: search parallelizes across trials.
     assert cfg.multi_gpu_devices == []
@@ -195,6 +211,8 @@ def test_assert_frozen_semantics_rejects_mutated_contract() -> None:
     bad_control = CREDOTrialSpec(control_mode="free")
     with pytest.raises(ValueError, match="frozen method semantics"):
         assert_frozen_semantics(bad_control)
+    with pytest.raises(ValueError, match="frozen method semantics"):
+        assert_frozen_semantics(CREDOTrialSpec(causal_sparse_edges=False))
     with pytest.raises(ValueError):
         spec_to_run_config(CREDOTrialSpec(same_start_counterfactuals=False))
 
@@ -1830,6 +1848,22 @@ def test_scheduler_profiles_use_separate_fidelity_ranges() -> None:
     assert ablation.ecological_growth is False
     with pytest.raises(ValueError, match="selected architecture"):
         suggest_claim_grade_refit_spec(_FakeTrial(), {"data_id": "d"})
+    with pytest.raises(ValueError, match="causal_token_dim"):
+        suggest_claim_grade_refit_spec(
+            _FakeTrial(),
+            {
+                "data_id": "d",
+                "context_kind": "causal_attention",
+                "hidden_dim": 256,
+                "depth": 3,
+                "embedding_dim": 16,
+                "n_programs": 16,
+                "mediator_dim": 16,
+                "parent_setting_sha256": "parent",
+                "parent_search_profile": "pareto_refit",
+                "parent_objective_front_id": "front",
+            },
+        )
     with pytest.raises(ValueError, match="parent_search_profile"):
         suggest_claim_grade_refit_spec(
             _FakeTrial(),

@@ -99,7 +99,7 @@ class VAEConfig(BaseModel):
 
 
 class LatentConfig(BaseModel):
-    source: Literal["pca", "vae"] = "pca"
+    source: Literal["pca", "vae", "expression"] = "pca"
     key: Optional[str] = "X_pca"
     dim: int = 16
     whiten: bool = True
@@ -114,6 +114,9 @@ class LatentConfig(BaseModel):
                     f"{self.key!r}. Use 'X_vae' or omit the key."
                 )
             self.key = "X_vae"
+        elif self.source == "expression":
+            if self.key in (None, ""):
+                self.key = "raw_expression_log1p_hvg"
         elif not self.key:
             raise ValueError("latent.key must be provided when latent.source='pca'.")
         return self

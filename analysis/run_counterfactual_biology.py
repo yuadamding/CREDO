@@ -135,6 +135,19 @@ def _load_obs_latent(run_dir: Path, config: dict, data_path: str) -> tuple[pd.Da
                 f"Missing {latent_path}; rerun with VAE artifact caching or use --latent-source obsm runs."
             )
         latent = np.load(latent_path)
+    elif latent_source == "expression":
+        raw_obs = load_hnscc_obs(data_path)
+        obs, _ = prepare_hnscc_obs(
+            raw_obs,
+            guide_confident_only=guide_confident_only,
+            state_key=state_key,
+        )
+        latent_path = run_dir / "expression_artifact" / "latent_all_std.npy"
+        if not latent_path.exists():
+            raise FileNotFoundError(
+                f"Missing {latent_path}; rerun the raw-expression run to cache expression_artifact."
+            )
+        latent = np.load(latent_path)
     else:
         raw_obs, raw_latent = load_hnscc(data_path, latent_key=config.get("latent_key"))
         obs, kept_positions = prepare_hnscc_obs(
@@ -209,7 +222,7 @@ def _build_model(config: dict, latent_dim: int, program_centroids: np.ndarray | 
         program_assignment_scale=float(config.get("program_assignment_scale") or 1.0),
         control_mode=str(cfg("control_mode", config.get("control_mode", "soft_ref"))),
         control_ref_penalty=float(cfg("control_ref_penalty", config.get("lambda_control_ref", 5e-4))),
-        context_kind=str(cfg("context_kind", "mlp")),
+        context_kind=str(cfg("context_kind", "causal_attention")),
         transformer_token_dim=int(cfg("transformer_token_dim", 64)),
         transformer_heads=int(cfg("transformer_heads", 4)),
         transformer_within_layers=int(cfg("transformer_within_layers", 1)),
@@ -358,7 +371,14 @@ def _action_summary(rollout: ParticleRollout) -> dict:
 
 @torch.no_grad()
 def _program_fractions(model: FullDynamicsModel, rollout: ParticleRollout) -> torch.Tensor:
-    eta = model.context_agg.encoder.eta(rollout.terminal_z)[0]
+    encoder = getattr(model.context_agg, "program_encoder", None)
+    if encoder is None:
+        encoder = getattr(model.context_agg, "encoder", None)
+    if encoder is None:
+        raise AttributeError(
+            f"{type(model.context_agg).__name__} does not expose a program encoder for biology summaries."
+        )
+    eta = encoder.eta(rollout.terminal_z)[0]
     w = torch.softmax(rollout.terminal_logw[0], dim=-1)
     return (w.unsqueeze(-1) * eta).sum(dim=0)
 
@@ -476,6 +496,15 @@ def main() -> None:
         clamped = None
         reference_clamped = None
         if args.context_clamped and reference.context_steps is not None:
+            if (
+                getattr(model, "transformer_growth_only", False)
+                and getattr(model, "meanfield_context_agg", None) is not None
+                and (reference.base_context_steps is None or reference.growth_context_steps is None)
+            ):
+                raise ValueError("Reference rollout did not store base/growth context steps for clamped context.")
+            tau_grid = reference.tau_steps.detach()
+            tau_start = float(tau_grid[0].item())
+            tau_end = float(tau_grid[-1].item())
             clamped_noise_steps = noise_steps.clone()
             clamped = rollout_with_clamped_context(
                 model=model,
@@ -484,7 +513,11 @@ def main() -> None:
                 log_m0=log_m0.clone(),
                 perturbation_ids=[pid],
                 context_steps=reference.context_steps,
-                n_steps=args.n_steps,
+                base_context_steps=reference.base_context_steps,
+                growth_context_steps=reference.growth_context_steps,
+                tau_start=tau_start,
+                tau_end=tau_end,
+                tau_grid=tau_grid,
                 noise_steps=clamped_noise_steps,
                 return_noise_used=True,
             )
@@ -497,7 +530,11 @@ def main() -> None:
                     log_m0=log_m0.clone(),
                     perturbation_ids=[pid],
                     context_steps=reference.context_steps,
-                    n_steps=args.n_steps,
+                    base_context_steps=reference.base_context_steps,
+                    growth_context_steps=reference.growth_context_steps,
+                    tau_start=tau_start,
+                    tau_end=tau_end,
+                    tau_grid=tau_grid,
                     noise_steps=reference_clamped_noise_steps,
                     return_noise_used=True,
                 )
