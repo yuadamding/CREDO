@@ -317,6 +317,52 @@ def _replicate_key(df: pd.DataFrame) -> str | None:
     return None
 
 
+def _counterfactual_replicate_keys(df: pd.DataFrame) -> list[str]:
+    keys = []
+    if "fold_id" in df.columns:
+        keys.append("fold_id")
+    for candidate in ("seed", "run_seed", "run_dir", "source_file"):
+        if candidate in df.columns:
+            keys.append(candidate)
+    return keys
+
+
+def _validate_counterfactual_replicates(raw: pd.DataFrame) -> None:
+    if "fold_id" not in raw.columns:
+        return
+    duplicate_fold = raw.duplicated(["perturbation_id", "fold_id"], keep=False)
+    if not duplicate_fold.any():
+        return
+    replicate_keys = _counterfactual_replicate_keys(raw)
+    if len(replicate_keys) <= 1:
+        preview = raw.loc[duplicate_fold, ["perturbation_id", "fold_id"]].head(5).to_dict("records")
+        raise ValueError(
+            "Duplicate counterfactual rows for perturbation/fold without a "
+            f"replicate identifier: {preview}"
+        )
+    duplicate_replicate = raw.duplicated(["perturbation_id", *replicate_keys], keep=False)
+    if duplicate_replicate.any():
+        preview_cols = ["perturbation_id", *replicate_keys]
+        preview = raw.loc[duplicate_replicate, preview_cols].head(5).to_dict("records")
+        raise ValueError(f"Duplicate counterfactual rows for perturbation/replicate: {preview}")
+
+
+def _counterfactual_fold_counts(raw: pd.DataFrame) -> pd.Series:
+    if "fold_id" in raw.columns:
+        return raw.groupby("perturbation_id", dropna=False)["fold_id"].nunique()
+    if "run_dir" in raw.columns:
+        return raw.groupby("perturbation_id", dropna=False)["run_dir"].nunique()
+    return raw.groupby("perturbation_id", dropna=False)["perturbation_id"].size()
+
+
+def _counterfactual_replicate_counts(raw: pd.DataFrame) -> pd.Series:
+    replicate_keys = _counterfactual_replicate_keys(raw)
+    if not replicate_keys:
+        return raw.groupby("perturbation_id", dropna=False)["perturbation_id"].size()
+    work = raw[["perturbation_id", *replicate_keys]].drop_duplicates()
+    return work.groupby("perturbation_id", dropna=False).size()
+
+
 def _sample_key(df: pd.DataFrame) -> str | None:
     for col in ["patient_id", "sample_id", "donor_id", "subject_id"]:
         if col in df.columns:
@@ -574,11 +620,7 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
     raw = df.copy()
     if "is_control" in raw.columns:
         raw["is_control"] = _parse_bool_series(raw["is_control"])
-    if "fold_id" in raw.columns:
-        dup = raw.duplicated(["perturbation_id", "fold_id"], keep=False)
-        if dup.any():
-            preview = raw.loc[dup, ["perturbation_id", "fold_id"]].head(5).to_dict("records")
-            raise ValueError(f"Duplicate counterfactual rows for perturbation/fold: {preview}")
+    _validate_counterfactual_replicates(raw)
     raw["mass_counterfactual_effect"] = pd.to_numeric(
         raw.get("delta_log_mass_fact_vs_ref", pd.Series(np.nan, index=raw.index)),
         errors="coerce",
@@ -636,12 +678,10 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
             else:
                 agg_spec[col] = _mode_or_first
         out = raw.groupby("perturbation_id", dropna=False).agg(agg_spec).reset_index()
-        rep_key = _replicate_key(raw)
-        if rep_key is not None:
-            n_reps = raw.groupby("perturbation_id", dropna=False)[rep_key].nunique()
-        else:
-            n_reps = raw.groupby("perturbation_id", dropna=False)["perturbation_id"].size()
-        out["counterfactual_n_folds"] = out["perturbation_id"].map(n_reps).astype(int)
+        n_folds = _counterfactual_fold_counts(raw)
+        n_reps = _counterfactual_replicate_counts(raw)
+        out["counterfactual_n_folds"] = out["perturbation_id"].map(n_folds).astype(int)
+        out["counterfactual_n_replicates"] = out["perturbation_id"].map(n_reps).astype(int)
         for col in stability_cols:
             if col in raw.columns:
                 stability = (
@@ -710,6 +750,7 @@ def _load_counterfactual_effects(path: str | Path) -> pd.DataFrame:
     else:
         out = raw
         out["counterfactual_n_folds"] = 1
+        out["counterfactual_n_replicates"] = 1
     if "geometry_shift_l2" in out.columns and "geom_shift_fact_vs_ref" not in out.columns:
         out["geom_shift_fact_vs_ref"] = out["geometry_shift_l2"]
     if "geom_shift_fact_vs_ref" in out.columns and "legacy_geom_shift_fact_vs_ref" not in out.columns:

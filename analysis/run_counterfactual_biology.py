@@ -24,6 +24,7 @@ from credo.data.hnscc import (  # noqa: E402
 from credo.models.full_model import FullDynamicsModel  # noqa: E402
 from credo.models.simulator import (  # noqa: E402
     _control_embedding_context,
+    embedding_ids_from_endpoint,
     initialise_particles,
     rollout_with_clamped_context,
 )
@@ -294,6 +295,44 @@ def _tensor_sha256(tensor: torch.Tensor) -> str:
     return hasher.hexdigest()
 
 
+def _clone_optional_tensor(value: torch.Tensor | None) -> torch.Tensor | None:
+    return None if value is None else value.detach().clone()
+
+
+def _materialize_rollout(rollout: ParticleRollout) -> ParticleRollout:
+    diagnostics = None
+    if rollout.context_diagnostics is not None:
+        diagnostics = {
+            key: value.detach().clone() if torch.is_tensor(value) else value
+            for key, value in rollout.context_diagnostics.items()
+        }
+    return ParticleRollout(
+        z_steps=rollout.z_steps.detach().clone(),
+        logw_steps=rollout.logw_steps.detach().clone(),
+        tau_steps=rollout.tau_steps.detach().clone(),
+        log_m0=_clone_optional_tensor(rollout.log_m0),
+        drift_steps=_clone_optional_tensor(rollout.drift_steps),
+        sigma_steps=_clone_optional_tensor(rollout.sigma_steps),
+        growth_steps=_clone_optional_tensor(rollout.growth_steps),
+        context_steps=_clone_optional_tensor(rollout.context_steps),
+        base_context_steps=_clone_optional_tensor(rollout.base_context_steps),
+        growth_context_steps=_clone_optional_tensor(rollout.growth_context_steps),
+        context_diagnostics=diagnostics,
+        causal_edge_scores_steps=_clone_optional_tensor(rollout.causal_edge_scores_steps),
+        causal_baseline_edge_scores_steps=_clone_optional_tensor(rollout.causal_baseline_edge_scores_steps),
+        causal_residual_edge_scores_steps=_clone_optional_tensor(rollout.causal_residual_edge_scores_steps),
+        causal_residual_edge_magnitude_steps=_clone_optional_tensor(rollout.causal_residual_edge_magnitude_steps),
+        causal_mediator_tokens_steps=_clone_optional_tensor(rollout.causal_mediator_tokens_steps),
+        causal_growth_context_steps=_clone_optional_tensor(rollout.causal_growth_context_steps),
+        causal_delta_steps=_clone_optional_tensor(rollout.causal_delta_steps),
+        noise_steps=_clone_optional_tensor(rollout.noise_steps),
+        ess_steps=_clone_optional_tensor(rollout.ess_steps),
+        ess_frac_steps=_clone_optional_tensor(rollout.ess_frac_steps),
+        logw_range_steps=_clone_optional_tensor(rollout.logw_range_steps),
+        max_weight_frac_steps=_clone_optional_tensor(rollout.max_weight_frac_steps),
+    )
+
+
 def _counterfactual_context_metadata(
     model: FullDynamicsModel,
     endpoint,
@@ -446,12 +485,81 @@ def main() -> None:
     ckpt = torch.load(checkpoint, map_location=device)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
+    if bool(getattr(model.embedding, "shared_guide_embedding", False)):
+        raise ValueError(
+            "Counterfactual biology requires distinct guide embeddings. "
+            "shared_guide_embedding uses one effective embedding for every perturbation, "
+            "so per-perturbation factual-vs-reference effects are not identifiable."
+        )
     simulator = WeightedParticleSimulator(n_steps=args.n_steps, store_history=True)
     context_metadata = _counterfactual_context_metadata(model, endpoint)
     row_context_metadata = {
         key: value for key, value in context_metadata.items()
         if key != "context_missing_perturbations"
     }
+    use_global_context = getattr(model, "context_kind", "mlp") in {"transformer", "causal_attention"}
+    global_all_pids: list[str] = []
+    global_pid_to_idx: dict[str, int] = {}
+    global_embedding_ids: list[str] = []
+    global_z0_all = None
+    global_lw0_all = None
+    global_lm0_all = None
+    global_noise_steps = None
+    global_noise_seed = int(args.seed) + 10_000
+    global_factual_by_pid = {}
+    global_metadata_by_pid = {}
+    if use_global_context:
+        model_pids = list(model.perturbation_ids)
+        global_all_pids = [pid for pid in model_pids if pid in endpoint.initial]
+        missing = [pid for pid in model_pids if pid not in endpoint.initial]
+        context_fraction = len(global_all_pids) / float(max(1, len(model_pids)))
+        if len(global_all_pids) < 2:
+            raise ValueError("Global-context counterfactuals require at least two perturbations.")
+        if missing or context_fraction < 0.95:
+            raise ValueError(
+                "Global-context counterfactual context is incomplete: "
+                f"{len(global_all_pids)}/{len(model_pids)} perturbations available."
+            )
+        global_pid_to_idx = {pid: idx for idx, pid in enumerate(global_all_pids)}
+        global_z0_all, global_lw0_all, global_lm0_all = initialise_particles(
+            endpoint,
+            global_all_pids,
+            n_particles=args.n_particles,
+            device=device,
+            seed=args.seed,
+        )
+        global_embedding_ids = embedding_ids_from_endpoint(endpoint, global_all_pids)
+        global_noise_steps = simulator.sample_noise_like(
+            global_z0_all,
+            args.n_steps,
+            seed=global_noise_seed,
+        )
+        factual_all = simulator.rollout(
+            z0=global_z0_all,
+            logw0=global_lw0_all,
+            model=model,
+            log_m0=global_lm0_all,
+            perturbation_ids=global_all_pids,
+            embedding_ids=global_embedding_ids,
+            noise_steps=global_noise_steps,
+            return_noise_used=True,
+        )
+        for pid in supported:
+            idx = global_pid_to_idx[pid]
+            global_factual_by_pid[pid] = _materialize_rollout(factual_all.slice_group(idx))
+            global_metadata_by_pid[pid] = {
+                "context_kind": getattr(model, "context_kind", "mlp"),
+                "target_perturbation_id": pid,
+                "counterfactual_seed_mode": "global_common",
+                "same_start": True,
+                "same_noise": True,
+                "initial_seed": int(args.seed),
+                "noise_seed": global_noise_seed,
+                "factual_full_context_reused": True,
+            }
+        del factual_all
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     state_labels = config.get("state_labels") if bool(config.get("use_state_centroids", False)) else None
     split_meta = config.get("split", {})
@@ -461,6 +569,208 @@ def main() -> None:
         fold_id = f"fold_{fold_index}" if fold_index is not None else run_dir.name
     rows = []
     for i, pid in enumerate(supported):
+        if use_global_context:
+            if pid not in global_factual_by_pid:
+                raise RuntimeError(f"Missing global-context factual result for {pid!r}.")
+            factual = global_factual_by_pid[pid]
+            target_idx = global_pid_to_idx[pid]
+            embed_pid = embedding_ids_from_endpoint(endpoint, [pid])[0]
+            with _control_embedding_context(model, embed_pid, mode="reference_consistent"):
+                reference_all = simulator.rollout(
+                    z0=global_z0_all.clone(),
+                    logw0=global_lw0_all.clone(),
+                    model=model,
+                    log_m0=global_lm0_all.clone(),
+                    perturbation_ids=global_all_pids,
+                    embedding_ids=global_embedding_ids,
+                    noise_steps=global_noise_steps.clone(),
+                    return_noise_used=True,
+                )
+            reference = _materialize_rollout(reference_all.slice_group(target_idx))
+            del reference_all
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            clamped = None
+            reference_clamped = None
+            if factual.noise_steps is None or reference.noise_steps is None:
+                raise RuntimeError("Global-context counterfactual did not return noise_steps for provenance.")
+            if args.context_clamped:
+                if (
+                    reference.context_steps is None
+                    or reference.base_context_steps is None
+                    or reference.growth_context_steps is None
+                ):
+                    raise ValueError("Reference rollout did not store target context steps for clamped context.")
+                tau_grid = reference.tau_steps.detach()
+                tau_start = float(tau_grid[0].item())
+                tau_end = float(tau_grid[-1].item())
+                clamped = rollout_with_clamped_context(
+                    model=model,
+                    z0=factual.z_steps[0].clone(),
+                    logw0=factual.logw_steps[0].clone(),
+                    log_m0=factual.log_m0.clone(),
+                    perturbation_ids=[pid],
+                    embedding_ids=[embed_pid],
+                    context_steps=reference.context_steps,
+                    base_context_steps=reference.base_context_steps,
+                    growth_context_steps=reference.growth_context_steps,
+                    tau_start=tau_start,
+                    tau_end=tau_end,
+                    tau_grid=tau_grid,
+                    noise_steps=factual.noise_steps.clone(),
+                    return_noise_used=True,
+                )
+                with _control_embedding_context(model, embed_pid, mode="reference_consistent"):
+                    reference_clamped = rollout_with_clamped_context(
+                        model=model,
+                        z0=reference.z_steps[0].clone(),
+                        logw0=reference.logw_steps[0].clone(),
+                        log_m0=reference.log_m0.clone(),
+                        perturbation_ids=[pid],
+                        embedding_ids=[embed_pid],
+                        context_steps=reference.context_steps,
+                        base_context_steps=reference.base_context_steps,
+                        growth_context_steps=reference.growth_context_steps,
+                        tau_start=tau_start,
+                        tau_end=tau_end,
+                        tau_grid=tau_grid,
+                        noise_steps=reference.noise_steps.clone(),
+                        return_noise_used=True,
+                    )
+
+            fact_z0_hash = _tensor_sha256(factual.z_steps[0])
+            ref_z0_hash = _tensor_sha256(reference.z_steps[0])
+            fact_logw0_hash = _tensor_sha256(factual.logw_steps[0])
+            ref_logw0_hash = _tensor_sha256(reference.logw_steps[0])
+            fact_log_m0_hash = _tensor_sha256(factual.log_m0)
+            ref_log_m0_hash = _tensor_sha256(reference.log_m0)
+            fact_noise_hash = _tensor_sha256(factual.noise_steps)
+            ref_noise_hash = _tensor_sha256(reference.noise_steps)
+            fact_log_mass = float(_terminal_log_mass(factual)[0].item())
+            ref_log_mass = float(_terminal_log_mass(reference)[0].item())
+            fact_mean = _weighted_mean(factual.terminal_z[0], factual.terminal_logw[0])
+            ref_mean = _weighted_mean(reference.terminal_z[0], reference.terminal_logw[0])
+            mean_shift_l2 = float(torch.linalg.norm(fact_mean - ref_mean).item())
+            energy_distance = _weighted_energy_distance(
+                factual.terminal_z[0],
+                factual.terminal_logw[0],
+                reference.terminal_z[0],
+                reference.terminal_logw[0],
+            )
+            fact_program = _program_summary(model, factual, state_labels)
+            ref_program = _program_summary(model, reference, state_labels)
+            fact_program_fractions = _program_fractions(model, factual)
+            ref_program_fractions = _program_fractions(model, reference)
+            fact_actions = _action_summary(factual)
+            ref_actions = _action_summary(reference)
+            terminal_entropy_factual = _entropy(factual.terminal_logw[0])
+            terminal_entropy_reference = _entropy(reference.terminal_logw[0])
+            row = {
+                "perturbation_id": pid,
+                "target_gene": infer_target_gene(pid),
+                "sgRNA_id": pid,
+                "is_control": pid in controls,
+                "fold_id": fold_id,
+                "run_dir": str(run_dir),
+                "source_split": args.source_split,
+                "n_p4": int(endpoint.initial[pid].n_atoms),
+                "n_p60": int(endpoint.terminal[pid].n_atoms),
+                "log_mass_factual": fact_log_mass,
+                "log_mass_reference": ref_log_mass,
+                "delta_log_mass_fact_vs_ref": fact_log_mass - ref_log_mass,
+                "mass_ratio_fact_vs_ref": float(np.exp(fact_log_mass - ref_log_mass)),
+                "weighted_mean_shift_l2_fact_vs_ref": mean_shift_l2,
+                "energy_distance_fact_vs_ref": energy_distance,
+                "geometry_shift_l2": mean_shift_l2,
+                "legacy_geom_shift_fact_vs_ref": mean_shift_l2,
+                "geom_shift_fact_vs_ref": mean_shift_l2,
+                "geometry_metric": "weighted_mean_l2",
+                "control_rollout_mode": "reference_consistent",
+                "counterfactual_context_protocol": "global_full_context",
+                "initial_particles_sha256_factual": fact_z0_hash,
+                "initial_particles_sha256_reference": ref_z0_hash,
+                "initial_logw_sha256_factual": fact_logw0_hash,
+                "initial_logw_sha256_reference": ref_logw0_hash,
+                "initial_log_m0_sha256_factual": fact_log_m0_hash,
+                "initial_log_m0_sha256_reference": ref_log_m0_hash,
+                "noise_seed": global_metadata_by_pid[pid].get("noise_seed"),
+                "noise_sha256_factual": fact_noise_hash,
+                "noise_sha256_reference": ref_noise_hash,
+                "same_initial_particles": fact_z0_hash == ref_z0_hash,
+                "same_initial_logw": fact_logw0_hash == ref_logw0_hash,
+                "same_initial_log_m0": fact_log_m0_hash == ref_log_m0_hash,
+                "common_noise": fact_noise_hash == ref_noise_hash,
+                "terminal_entropy_factual": terminal_entropy_factual,
+                "terminal_entropy_reference": terminal_entropy_reference,
+                "terminal_state_entropy_fact": terminal_entropy_factual,
+                "terminal_state_entropy_ref": terminal_entropy_reference,
+                "terminal_entropy_delta_fact_vs_ref": terminal_entropy_factual - terminal_entropy_reference,
+                "dominant_program_factual": fact_program.get("dominant_program_label", fact_program["dominant_program_index"]),
+                "dominant_program_reference": ref_program.get("dominant_program_label", ref_program["dominant_program_index"]),
+                "program_fraction_shift_abs": abs(
+                    fact_program["dominant_program_fraction"] - ref_program["dominant_program_fraction"]
+                ),
+                "program_occupancy_tv_fact_vs_ref": float(
+                    0.5 * torch.abs(fact_program_fractions - ref_program_fractions).sum().item()
+                ),
+            }
+            row.update(row_context_metadata)
+            for key, value in global_metadata_by_pid[pid].items():
+                if key != "context_missing_perturbations" and isinstance(value, (str, int, float, bool, type(None))):
+                    row.setdefault(key, value)
+            for key, value in fact_actions.items():
+                row[key] = value
+                row[f"{key}_fact"] = value
+            for key, value in ref_actions.items():
+                row[f"{key}_ref"] = value
+            row.update(_action_deltas(fact_actions, ref_actions))
+            if clamped is not None:
+                clamped_mean = _weighted_mean(clamped.terminal_z[0], clamped.terminal_logw[0])
+                context_geom = float(torch.linalg.norm(fact_mean - clamped_mean).item())
+                row["log_mass_clamped_context"] = float(_terminal_log_mass(clamped)[0].item())
+                context_mass = row["log_mass_factual"] - row["log_mass_clamped_context"]
+                row["context_dependence"] = context_geom
+                row["context_dependence_geom"] = context_geom
+                row["delta_log_mass_self_vs_clamped"] = context_mass
+                row["context_dependence_mass"] = abs(context_mass)
+                row["terminal_state_entropy_clamped"] = _entropy(clamped.terminal_logw[0])
+                if clamped.noise_steps is None:
+                    raise RuntimeError("Clamped counterfactual rollout did not return noise_steps for provenance.")
+                clamped_noise_hash = _tensor_sha256(clamped.noise_steps)
+                row["noise_sha256_clamped_context"] = clamped_noise_hash
+                row["clamped_same_noise_as_factual"] = clamped_noise_hash == fact_noise_hash
+                row["clamped_same_initial_particles"] = _tensor_sha256(clamped.z_steps[0]) == fact_z0_hash
+                row["clamped_same_initial_logw"] = _tensor_sha256(clamped.logw_steps[0]) == fact_logw0_hash
+                row["clamped_same_initial_log_m0"] = _tensor_sha256(clamped.log_m0) == fact_log_m0_hash
+                for key, value in _action_summary(clamped).items():
+                    row[f"{key}_clamped_context"] = value
+            if reference_clamped is not None:
+                reference_clamped_mean = _weighted_mean(
+                    reference_clamped.terminal_z[0],
+                    reference_clamped.terminal_logw[0],
+                )
+                row["log_mass_reference_clamped_context"] = float(_terminal_log_mass(reference_clamped)[0].item())
+                row["geom_shift_ref_vs_ref_clamped"] = float(torch.linalg.norm(ref_mean - reference_clamped_mean).item())
+                row["delta_log_mass_ref_vs_ref_clamped"] = row["log_mass_reference"] - row["log_mass_reference_clamped_context"]
+                row["terminal_state_entropy_reference_clamped"] = _entropy(reference_clamped.terminal_logw[0])
+                if reference_clamped.noise_steps is None:
+                    raise RuntimeError("Reference-clamped counterfactual rollout did not return noise_steps for provenance.")
+                row["noise_sha256_reference_clamped_context"] = _tensor_sha256(reference_clamped.noise_steps)
+            if args.context_clamped and clamped is not None:
+                for flag in [
+                    "clamped_same_noise_as_factual",
+                    "clamped_same_initial_particles",
+                    "clamped_same_initial_logw",
+                    "clamped_same_initial_log_m0",
+                ]:
+                    if not bool(row[flag]):
+                        raise RuntimeError(f"Clamped counterfactual invariant failed for {pid}: {flag}")
+            for flag in ["same_initial_particles", "same_initial_logw", "same_initial_log_m0", "common_noise"]:
+                if not bool(row[flag]):
+                    raise RuntimeError(f"Counterfactual invariant failed for {pid}: {flag}")
+            rows.append(row)
+            continue
+
         seed = int(args.seed + i)
         z0, logw0, log_m0 = initialise_particles(
             endpoint,

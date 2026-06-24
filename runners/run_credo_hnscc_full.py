@@ -1361,6 +1361,9 @@ def main() -> None:
     t0 = time.time()
     history = trainer.history
     for stage_name, stage_epochs in training_schedule:
+        if torch.cuda.is_available():
+            synchronize_devices(multi_gpu_devices or [cfg.resolve_device()])
+            torch.cuda.empty_cache()
         print(f"Training stage {stage_name} for {stage_epochs} epochs ...")
         history = trainer.train(stage=stage_name, n_epochs=stage_epochs)
     if torch.cuda.is_available():

@@ -81,13 +81,58 @@ LATENT_SOURCE="${LATENT_SOURCE:-expression}"
 LATENT_KEY="${LATENT_KEY:-}"
 VERIFY_LATENT_KEY="${VERIFY_LATENT_KEY:-}"
 CONTEXT_KIND="${CONTEXT_KIND:-causal_attention}"
+GUIDE_EMBEDDING_MODE="${GUIDE_EMBEDDING_MODE:-distinct}"
 EPOCHS="${EPOCHS:-500}"
 STAGE_C_EPOCHS="${STAGE_C_EPOCHS:-100}"
 STAGE_D_EPOCHS="${STAGE_D_EPOCHS:-100}"
 SEED_OFFSET="${SEED_OFFSET:-0}"
+# Measured-safe default for the local RTX 3080 10GB class GPU. Use
+# GPU_VRAM_PROFILE=default to bypass this profile and apply raw knob defaults.
+GPU_VRAM_PROFILE="${GPU_VRAM_PROFILE:-rtx3080_9p5gb}"
+
+profile_default() {
+  local name="$1"
+  local value="$2"
+  if [[ -z "${!name-}" ]]; then
+    printf -v "${name}" '%s' "${value}"
+  fi
+}
+
+case "${GPU_VRAM_PROFILE}" in
+  ""|default)
+    ;;
+  rtx3080_9p5gb|9p5gb|9.5gb|local_10gb)
+    profile_default PYTORCH_CUDA_ALLOC_CONF "expandable_segments:True"
+    profile_default EXPRESSION_TOP_GENES "768"
+    profile_default N_PARTICLES "32"
+    profile_default N_STEPS "8"
+    profile_default N_TEST_FUNCTIONS "4"
+    profile_default MAX_ACTIVE_PERTURBATIONS "2"
+    profile_default MAX_TRAIN_TARGET_ATOMS "384"
+    profile_default EVAL_PARTICLES "256"
+    profile_default EVAL_STEPS "16"
+    profile_default EVAL_TARGET_PARTICLES "512"
+    profile_default COUNTERFACTUAL_PARTICLES "64"
+    profile_default COUNTERFACTUAL_STEPS "12"
+    profile_default HIDDEN_DIM "256"
+    profile_default EMBEDDING_DIM "32"
+    profile_default MEDIATOR_DIM "32"
+    profile_default CAUSAL_TOKEN_DIM "48"
+    profile_default CAUSAL_N_MEDIATORS "8"
+    profile_default BUDGET_HEADROOM "0.60"
+    ;;
+  *)
+    printf 'Unknown GPU_VRAM_PROFILE: %s\n' "${GPU_VRAM_PROFILE}" >&2
+    exit 1
+    ;;
+esac
+if [[ -n "${PYTORCH_CUDA_ALLOC_CONF:-}" ]]; then
+  export PYTORCH_CUDA_ALLOC_CONF
+fi
 
 N_PARTICLES="${N_PARTICLES:-64}"
 N_STEPS="${N_STEPS:-16}"
+N_TEST_FUNCTIONS="${N_TEST_FUNCTIONS:-12}"
 EVAL_PARTICLES="${EVAL_PARTICLES:-384}"
 EVAL_STEPS="${EVAL_STEPS:-24}"
 EVAL_TARGET_PARTICLES="${EVAL_TARGET_PARTICLES:-768}"
@@ -361,6 +406,20 @@ elif [[ -n "${LATENT_KEY}" ]]; then
   LATENT_ARGS+=(--latent-key "${LATENT_KEY}")
 fi
 
+GUIDE_EMBEDDING_ARGS=()
+case "${GUIDE_EMBEDDING_MODE}" in
+  distinct|DISTINCT)
+    GUIDE_EMBEDDING_ARGS=(--distinct-guide-embedding)
+    ;;
+  shared|SHARED)
+    GUIDE_EMBEDDING_ARGS=(--shared-guide-embedding)
+    ;;
+  *)
+    printf 'GUIDE_EMBEDDING_MODE must be distinct or shared, got: %s\n' "${GUIDE_EMBEDDING_MODE}" >&2
+    exit 1
+    ;;
+esac
+
 require_file "${DATA_PATH}"
 mkdir -p "${OUTPUT_ROOT}" "${SIGNATURE_DIR}" "${BIOLOGY_DIR}" "${SUMMARY_DIR}" "${SEARCH_DIR}" "${FOLD_JOB_LOG_DIR}"
 mkdir -p "$(dirname -- "${LAST_RUN_FILE}")"
@@ -385,6 +444,8 @@ log "Workspace: ${WORKSPACE_ROOT}"
 log "Data: ${DATA_PATH}"
 log "Output root: ${OUTPUT_ROOT}"
 log "Conda env: ${ENV_NAME}"
+log "Guide embedding mode: ${GUIDE_EMBEDDING_MODE}"
+log "GPU VRAM profile: ${GPU_VRAM_PROFILE:-default}"
 log "Resume mode: ${RESUME} (set FORCE_TRAIN=1 or FORCE_COUNTERFACTUAL=1 to rerun completed fold work)"
 if truthy "${RESUME_LATEST}"; then
   log "Resume latest requested; output root came from ${LAST_RUN_FILE}"
@@ -475,7 +536,7 @@ run_fold_job() {
         --state-key "Cell type annotation"
         --guide-confident-only
         --learned-programs
-        --shared-guide-embedding
+        "${GUIDE_EMBEDDING_ARGS[@]}"
         --control-mode soft_ref
         --lambda-control-ref 0.0005
         --control-ref-warmup-epochs 100
@@ -525,7 +586,7 @@ run_fold_job() {
         --eval-steps "${EVAL_STEPS}"
         --eval-target-particles "${EVAL_TARGET_PARTICLES}"
         --max-train-target-atoms "${MAX_TRAIN_TARGET_ATOMS}"
-        --n-test-functions 12
+        --n-test-functions "${N_TEST_FUNCTIONS}"
         --lr-net "${LR_NET}"
         --lr-embed "${LR_EMBED}"
         --weight-decay "${WEIGHT_DECAY}"

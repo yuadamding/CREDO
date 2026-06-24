@@ -616,6 +616,40 @@ def test_duplicate_counterfactual_fold_rows_raise(tmp_path: Path) -> None:
         mod._load_counterfactual_effects(path)
 
 
+def test_counterfactual_same_fold_seed_replicates_are_allowed(tmp_path: Path) -> None:
+    mod = _biology_module()
+    path = tmp_path / "seed_replicate_cf.csv"
+    pd.DataFrame(
+        [
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold00",
+                "run_dir": "run/seed1_fold00",
+                "delta_log_mass_fact_vs_ref": 0.6,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold00",
+                "run_dir": "run/seed2_fold00",
+                "delta_log_mass_fact_vs_ref": 0.8,
+            },
+            {
+                "perturbation_id": "GeneA_sg1",
+                "fold_id": "fold01",
+                "run_dir": "run/seed1_fold01",
+                "delta_log_mass_fact_vs_ref": 1.0,
+            },
+        ]
+    ).to_csv(path, index=False)
+
+    out = mod._load_counterfactual_effects(path)
+    row = out.loc[out["perturbation_id"].eq("GeneA_sg1")].iloc[0]
+
+    assert row["counterfactual_n_folds"] == 2
+    assert row["counterfactual_n_replicates"] == 3
+    assert np.isclose(row["delta_log_mass_fact_vs_ref"], 0.8)
+
+
 def test_plasticity_claim_requires_distributional_metric_null() -> None:
     mod = _biology_module()
     df = pd.DataFrame(
