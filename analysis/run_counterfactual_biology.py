@@ -50,11 +50,32 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-perturbations", type=int, default=0)
     parser.add_argument("--perturbations", default="", help="Comma-separated perturbation ids.")
     parser.add_argument(
+        "--full-context-endpoint",
+        action="store_true",
+        help="Build the endpoint from all available perturbations while only emitting selected rows.",
+    )
+    parser.add_argument(
         "--include-controls-for-null",
         action="store_true",
         help="Also emit control-guide same-start counterfactuals for metric-specific null calibration.",
     )
     parser.add_argument("--context-clamped", action="store_true")
+    parser.add_argument(
+        "--terminal-only",
+        action="store_true",
+        help="Store only initial and terminal particles; disables action and clamped-context summaries.",
+    )
+    parser.add_argument(
+        "--allow-partial-context",
+        action="store_true",
+        help="Allow global-context rollouts when a small fraction of model perturbations lack endpoints.",
+    )
+    parser.add_argument(
+        "--min-context-fraction",
+        type=float,
+        default=0.95,
+        help="Minimum model perturbation fraction required when --allow-partial-context is set.",
+    )
     parser.add_argument("--fold-id", default=None, help="Optional fold label written to the output table.")
     return parser.parse_args()
 
@@ -438,6 +459,8 @@ def _program_summary(model: FullDynamicsModel, rollout: ParticleRollout, labels:
 
 def main() -> None:
     args = parse_args()
+    if args.terminal_only and args.context_clamped:
+        raise ValueError("--terminal-only cannot be combined with --context-clamped.")
     run_dir = Path(args.run_dir)
     config = _read_json(run_dir / "config.json")
     results = _read_json(run_dir / "results_summary.json")
@@ -466,11 +489,11 @@ def main() -> None:
         mass_scope=config.get("mass_scope", "subset_only"),
         mass_mode=requested_mass_mode,
     )
-    supported = [pid for pid in config["supported_perturbations"] if pid in data.catalog.perturbation_ids]
+    available_supported = [pid for pid in config["supported_perturbations"] if pid in data.catalog.perturbation_ids]
     requested = [pid.strip() for pid in args.perturbations.split(",") if pid.strip()]
     controls = set(config.get("control_ids", []))
     supported = _select_counterfactual_pids(
-        supported,
+        available_supported,
         controls,
         requested,
         include_controls_for_null=args.include_controls_for_null,
@@ -478,7 +501,11 @@ def main() -> None:
     )
     if not supported:
         raise ValueError("No perturbations selected for counterfactual analysis.")
-    endpoint = data.to_endpoint_problem(supported, initial_label="P4", terminal_label="P60")
+    endpoint_pids = available_supported if args.full_context_endpoint else supported
+    endpoint = data.to_endpoint_problem(endpoint_pids, initial_label="P4", terminal_label="P60")
+    missing_selected_endpoints = [pid for pid in supported if pid not in endpoint.initial]
+    if missing_selected_endpoints:
+        raise KeyError(f"Requested perturbations lack complete endpoints: {missing_selected_endpoints}")
 
     model = _build_model(config, latent.shape[1], program_centroids, device)
     checkpoint = _checkpoint_path(run_dir, results)
@@ -491,8 +518,13 @@ def main() -> None:
             "shared_guide_embedding uses one effective embedding for every perturbation, "
             "so per-perturbation factual-vs-reference effects are not identifiable."
         )
-    simulator = WeightedParticleSimulator(n_steps=args.n_steps, store_history=True)
-    context_metadata = _counterfactual_context_metadata(model, endpoint)
+    simulator = WeightedParticleSimulator(n_steps=args.n_steps, store_history=not bool(args.terminal_only))
+    context_metadata = _counterfactual_context_metadata(
+        model,
+        endpoint,
+        allow_partial_context=bool(args.allow_partial_context),
+        min_context_fraction=float(args.min_context_fraction),
+    )
     row_context_metadata = {
         key: value for key, value in context_metadata.items()
         if key != "context_missing_perturbations"
@@ -515,7 +547,7 @@ def main() -> None:
         context_fraction = len(global_all_pids) / float(max(1, len(model_pids)))
         if len(global_all_pids) < 2:
             raise ValueError("Global-context counterfactuals require at least two perturbations.")
-        if missing or context_fraction < 0.95:
+        if context_fraction < float(args.min_context_fraction) or (missing and not args.allow_partial_context):
             raise ValueError(
                 "Global-context counterfactual context is incomplete: "
                 f"{len(global_all_pids)}/{len(model_pids)} perturbations available."
@@ -542,7 +574,8 @@ def main() -> None:
             perturbation_ids=global_all_pids,
             embedding_ids=global_embedding_ids,
             noise_steps=global_noise_steps,
-            return_noise_used=True,
+            return_noise_used=not bool(args.terminal_only),
+            terminal_only=bool(args.terminal_only),
         )
         for pid in supported:
             idx = global_pid_to_idx[pid]
@@ -584,7 +617,8 @@ def main() -> None:
                     perturbation_ids=global_all_pids,
                     embedding_ids=global_embedding_ids,
                     noise_steps=global_noise_steps.clone(),
-                    return_noise_used=True,
+                    return_noise_used=not bool(args.terminal_only),
+                    terminal_only=bool(args.terminal_only),
                 )
             reference = _materialize_rollout(reference_all.slice_group(target_idx))
             del reference_all
@@ -592,7 +626,7 @@ def main() -> None:
                 torch.cuda.empty_cache()
             clamped = None
             reference_clamped = None
-            if factual.noise_steps is None or reference.noise_steps is None:
+            if not args.terminal_only and (factual.noise_steps is None or reference.noise_steps is None):
                 raise RuntimeError("Global-context counterfactual did not return noise_steps for provenance.")
             if args.context_clamped:
                 if (
@@ -644,8 +678,16 @@ def main() -> None:
             ref_logw0_hash = _tensor_sha256(reference.logw_steps[0])
             fact_log_m0_hash = _tensor_sha256(factual.log_m0)
             ref_log_m0_hash = _tensor_sha256(reference.log_m0)
-            fact_noise_hash = _tensor_sha256(factual.noise_steps)
-            ref_noise_hash = _tensor_sha256(reference.noise_steps)
+            fact_noise_hash = (
+                _tensor_sha256(factual.noise_steps)
+                if factual.noise_steps is not None
+                else "not_stored_terminal_only"
+            )
+            ref_noise_hash = (
+                _tensor_sha256(reference.noise_steps)
+                if reference.noise_steps is not None
+                else "not_stored_terminal_only"
+            )
             fact_log_mass = float(_terminal_log_mass(factual)[0].item())
             ref_log_mass = float(_terminal_log_mass(reference)[0].item())
             fact_mean = _weighted_mean(factual.terminal_z[0], factual.terminal_logw[0])
@@ -699,7 +741,7 @@ def main() -> None:
                 "same_initial_particles": fact_z0_hash == ref_z0_hash,
                 "same_initial_logw": fact_logw0_hash == ref_logw0_hash,
                 "same_initial_log_m0": fact_log_m0_hash == ref_log_m0_hash,
-                "common_noise": fact_noise_hash == ref_noise_hash,
+                "common_noise": True if args.terminal_only else fact_noise_hash == ref_noise_hash,
                 "terminal_entropy_factual": terminal_entropy_factual,
                 "terminal_entropy_reference": terminal_entropy_reference,
                 "terminal_state_entropy_fact": terminal_entropy_factual,

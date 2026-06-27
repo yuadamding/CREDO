@@ -147,6 +147,7 @@ class WeightedParticleSimulator(nn.Module):
         return_noise_used: bool = False,
         intervention: Optional[object] = None,
         context_override: Any = None,
+        terminal_only: bool = False,
     ) -> ParticleRollout:
         """Run the full Euler-Maruyama rollout.
 
@@ -210,8 +211,8 @@ class WeightedParticleSimulator(nn.Module):
                 )
 
         # Storage
-        z_list = [z0]
-        logw_list = [logw0]
+        z_list = [] if terminal_only else [z0]
+        logw_list = [] if terminal_only else [logw0]
         drift_list, sigma_list, growth_list = [], [], []
         ctx_list, base_ctx_list, growth_ctx_list = [], [], []
         causal_edge_scores_list = []
@@ -309,25 +310,40 @@ class WeightedParticleSimulator(nn.Module):
             # Log-weight update (Euler for log-weight ODE)
             logw = logw + r * dtau
 
-            z_list.append(z)
-            logw_list.append(logw)
+            if not terminal_only:
+                z_list.append(z)
+                logw_list.append(logw)
             ess_list.append(self.effective_sample_size(logw).detach())
             ess_frac_list.append(self.ess_fraction(logw).detach())
             logw_range_list.append(self.log_weight_range(logw).detach())
             max_weight_frac_list.append(self.max_weight_fraction(logw).detach())
 
-        z_steps = torch.stack(z_list, dim=0)     # [K+1, G, N, d]
-        logw_steps = torch.stack(logw_list, dim=0)  # [K+1, G, N]
+        if terminal_only:
+            z_steps = torch.stack([z0, z], dim=0)
+            logw_steps = torch.stack([logw0, logw], dim=0)
+            out_tau_steps = torch.stack([tau_steps[0], tau_steps[-1]], dim=0)
+            ess_steps = torch.stack([ess_list[0], ess_list[-1]], dim=0)
+            ess_frac_steps = torch.stack([ess_frac_list[0], ess_frac_list[-1]], dim=0)
+            logw_range_steps = torch.stack([logw_range_list[0], logw_range_list[-1]], dim=0)
+            max_weight_frac_steps = torch.stack([max_weight_frac_list[0], max_weight_frac_list[-1]], dim=0)
+        else:
+            z_steps = torch.stack(z_list, dim=0)     # [K+1, G, N, d]
+            logw_steps = torch.stack(logw_list, dim=0)  # [K+1, G, N]
+            out_tau_steps = tau_steps
+            ess_steps = torch.stack(ess_list, dim=0)
+            ess_frac_steps = torch.stack(ess_frac_list, dim=0)
+            logw_range_steps = torch.stack(logw_range_list, dim=0)
+            max_weight_frac_steps = torch.stack(max_weight_frac_list, dim=0)
 
         result = ParticleRollout(
             z_steps=z_steps,
             logw_steps=logw_steps,
-            tau_steps=tau_steps,
+            tau_steps=out_tau_steps,
             log_m0=log_m0.detach().clone(),
-            ess_steps=torch.stack(ess_list, dim=0),
-            ess_frac_steps=torch.stack(ess_frac_list, dim=0),
-            logw_range_steps=torch.stack(logw_range_list, dim=0),
-            max_weight_frac_steps=torch.stack(max_weight_frac_list, dim=0),
+            ess_steps=ess_steps,
+            ess_frac_steps=ess_frac_steps,
+            logw_range_steps=logw_range_steps,
+            max_weight_frac_steps=max_weight_frac_steps,
         )
         if self.store_history and drift_list:
             result.drift_steps = torch.stack(drift_list, dim=0)
