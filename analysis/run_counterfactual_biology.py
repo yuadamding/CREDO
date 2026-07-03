@@ -457,6 +457,7 @@ def _program_summary(model: FullDynamicsModel, rollout: ParticleRollout, labels:
     return out
 
 
+@torch.no_grad()
 def main() -> None:
     args = parse_args()
     if args.terminal_only and args.context_clamped:

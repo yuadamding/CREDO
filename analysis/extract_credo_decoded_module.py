@@ -268,6 +268,7 @@ def _aggregate(per_fold: pd.DataFrame, min_concordance: float, min_folds: int) -
     return out
 
 
+@torch.no_grad()
 def main() -> None:
     args = parse_args()
     out_dir = Path(args.output_dir)
