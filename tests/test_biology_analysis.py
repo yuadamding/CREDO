@@ -1959,20 +1959,22 @@ def test_score_hnscc_signatures_smoke(tmp_path: Path) -> None:
         ],
         dtype=np.float32,
     )
-    obs = pd.DataFrame(
-        {
-            "target_gene": ["GeneA", "GeneA", "GeneA", "GeneA"],
-            "perturbation_gene": ["GeneA", "GeneA", "GeneA", "GeneA"],
-            "is_control": [False, False, False, False],
-            "Time point": [4, 4, 60, 60],
-            "Library": ["L1", "L1", "L1", "L1"],
-            "cell_id": ["c1", "c2", "c3", "c4"],
-            "Cell type annotation": ["basal", "basal", "TSK", "TSK"],
-        }
-    )
-    var = pd.DataFrame(index=["JUN", "FOS", "TNF", "MMP9", "Trp63", "Atp1b3"])
     data_path = tmp_path / "mini.h5ad"
-    ad.AnnData(X=x, obs=obs, var=var).write_h5ad(data_path)
+    with pd.option_context("future.infer_string", False):
+        obs = pd.DataFrame(
+            {
+                "target_gene": ["GeneA", "GeneA", "GeneA", "GeneA"],
+                "perturbation_gene": ["GeneA", "GeneA", "GeneA", "GeneA"],
+                "is_control": [False, False, False, False],
+                "Time point": [4, 4, 60, 60],
+                "Library": ["L1", "L1", "L1", "L1"],
+                "cell_id": ["c1", "c2", "c3", "c4"],
+                "Cell type annotation": ["basal", "basal", "TSK", "TSK"],
+            },
+            index=pd.Index(["c1", "c2", "c3", "c4"], dtype=object),
+        )
+        var = pd.DataFrame(index=pd.Index(["JUN", "FOS", "TNF", "MMP9", "Trp63", "Atp1b3"], dtype=object))
+        ad.AnnData(X=x, obs=obs, var=var).write_h5ad(data_path)
     out_dir = tmp_path / "sig"
     subprocess.run(
         [

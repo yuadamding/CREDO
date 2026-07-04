@@ -1263,7 +1263,7 @@ def classify_mechanistic_v2(row: pd.Series) -> str:
     if diffusion >= 0.75 and (tsk >= 0.0 or pemt >= 0.0):
         return "plasticity/state-shift"
     if growth >= 0.5 and (tsk >= 0.5 or pemt >= 0.5):
-        return "transformation-prone"
+        return "high-state-rank expansion"
     if growth >= 0.5 and tnf >= 0.5 and tsk < 0.5 and pemt < 0.5:
         return "expansion-only"
     if growth >= 0.5:

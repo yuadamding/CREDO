@@ -117,15 +117,15 @@ def test_hnscc_count_mass_mode_ignores_mass_column() -> None:
 
 def test_full_obs_mass_scope_drops_perturbations_outside_split_catalog() -> None:
     # A perturbation whose cells live only in the train split must not leak into the mass
-    # table (built from all obs under mass_scope="full_obs") for a test-split study --
-    # PerturbSeqDynamicsData.validate() would otherwise reject it as outside the catalog.
+    # table (built from all obs under mass_scope="full_obs") for a test-split study,
+    # even if its out-of-catalog mass value is invalid.
     rows: list[dict] = []
     latent: list[list[float]] = []
     i = 0
-    for pid, is_control, spl in [
-        ("ctrl", True, "test"),
-        ("GeneA_sg1", False, "test"),
-        ("GeneB_sg1", False, "train"),
+    for pid, is_control, spl, mass_value in [
+        ("ctrl", True, "test", 10.0),
+        ("GeneA_sg1", False, "test", 10.0),
+        ("GeneB_sg1", False, "train", 0.0),
     ]:
         for time_label in ["P4", "P60"]:
             for _ in range(2):
@@ -136,7 +136,7 @@ def test_full_obs_mass_scope_drops_perturbations_outside_split_catalog() -> None
                         "time_label": time_label,
                         "sample_id": "D1",
                         "is_control": is_control,
-                        "mass_value": 10.0,
+                        "mass_value": mass_value,
                         "_split": spl,
                     }
                 )

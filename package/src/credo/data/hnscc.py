@@ -125,6 +125,25 @@ def _materialize_chunk(chunk) -> sp.csr_matrix | np.ndarray:
     return np.asarray(chunk, dtype=np.float32)
 
 
+def _slice_expression_source(source, rows, cols=slice(None)):
+    try:
+        return source[rows, cols]
+    except AttributeError as exc:
+        if "_validate_indices" not in str(exc) or not hasattr(source, "to_memory"):
+            raise
+        return source.to_memory()[rows, cols]
+
+
+def _maybe_memory_expression_source(source):
+    if (
+        hasattr(source, "to_memory")
+        and source.__class__.__name__.startswith("backed_")
+        and not hasattr(source, "_validate_indices")
+    ):
+        return source.to_memory()
+    return source
+
+
 def _chunked_row_sums(
     source,
     *,
@@ -136,10 +155,11 @@ def _chunked_row_sums(
     if isinstance(source, np.ndarray):
         return source.sum(axis=1, dtype=np.float32)
 
+    source = _maybe_memory_expression_source(source)
     totals = np.zeros(n_rows, dtype=np.float32)
     for start in range(0, n_rows, chunk_size):
         stop = min(start + chunk_size, n_rows)
-        batch = _materialize_chunk(source[start:stop])
+        batch = _materialize_chunk(_slice_expression_source(source, slice(start, stop)))
         if sp.issparse(batch):
             totals[start:stop] = np.asarray(batch.sum(axis=1)).ravel().astype(np.float32)
         else:
@@ -206,7 +226,7 @@ def _materialize_expression_and_totals_serial(
     totals_parts: list[np.ndarray] = []
     selected_parts: list[sp.csr_matrix] = []
     for row_batch in rows:
-        batch = _materialize_chunk(source[row_batch, :])
+        batch = _materialize_chunk(_slice_expression_source(source, row_batch))
         if sp.issparse(batch):
             totals_parts.append(np.asarray(batch.sum(axis=1)).ravel().astype(np.float32))
             selected_parts.append(batch[:, selected_idx].tocsr().astype(np.float32))
@@ -236,12 +256,12 @@ def _read_expression_shard_worker(payload: tuple) -> tuple[np.ndarray, sp.csr_ma
     selected_idx = np.asarray(selected_idx_list, dtype=np.int64)
     adata = ad.read_h5ad(path, backed="r")
     try:
-        source = _expression_source_from_adata(adata, layer=layer, use_raw=use_raw)
+        source = _maybe_memory_expression_source(_expression_source_from_adata(adata, layer=layer, use_raw=use_raw))
         totals_parts: list[np.ndarray] = []
         selected_parts: list[sp.csr_matrix] = []
         for row_batch_list in row_batch_lists:
             row_batch = np.asarray(row_batch_list, dtype=np.int64)
-            batch = _materialize_chunk(source[row_batch, :])
+            batch = _materialize_chunk(_slice_expression_source(source, row_batch))
             if sp.issparse(batch):
                 totals_parts.append(np.asarray(batch.sum(axis=1)).ravel().astype(np.float32))
                 selected_parts.append(batch[:, selected_idx].tocsr().astype(np.float32))
@@ -399,6 +419,7 @@ def load_hnscc_expression(
         resolved_layer = "X"
         var = adata.var.copy()
 
+    source = _maybe_memory_expression_source(source)
     n_rows, n_cols = int(source.shape[0]), int(source.shape[1])
     resolved_rows = _row_index_array(row_indices, n_rows=n_rows)
     if resolved_rows is not None:
@@ -409,9 +430,9 @@ def load_hnscc_expression(
         # head is missed while an unselected head row can trigger a spurious failure.
         if resolved_rows is not None and len(resolved_rows) > 0:
             sample_idx = np.sort(resolved_rows[: min(256, len(resolved_rows))])
-            sample = _materialize_chunk(source[sample_idx, :])
+            sample = _materialize_chunk(_slice_expression_source(source, sample_idx))
         else:
-            sample = _materialize_chunk(source[: min(256, n_rows)])
+            sample = _materialize_chunk(_slice_expression_source(source, slice(None, min(256, n_rows))))
         _validate_count_matrix(
             sample,
             name=f"expression (layer={resolved_layer!r})",
@@ -908,10 +929,16 @@ def build_study_from_split(
 
     cell_df = sub_obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].copy()
     mass_obs = obs if mass_scope == "full_obs" else sub_obs
-    mass_source_df = mass_obs[["perturbation_id", "time_label", "sample_id"]].copy()
     mass_group_cols = ["perturbation_id", "time_label", "sample_id"]
     if mass_mode not in {"auto", "count", "group_total", "per_cell_contribution"}:
         raise ValueError("mass_mode must be 'auto', 'count', 'group_total', or 'per_cell_contribution'.")
+
+    perturbation_ids = sorted(cell_df["perturbation_id"].unique().tolist())
+    catalog_pids = set(map(str, perturbation_ids))
+    if mass_scope == "full_obs":
+        mass_obs = mass_obs.loc[mass_obs["perturbation_id"].astype(str).isin(catalog_pids)].copy()
+    mass_source_df = mass_obs[["perturbation_id", "time_label", "sample_id"]].copy()
+
     if mass_mode == "count":
         mass_df = (
             mass_source_df.groupby(mass_group_cols, observed=True)
@@ -983,16 +1010,6 @@ def build_study_from_split(
     else:
         mass_df.attrs["mass_mode_resolution_reason"] = f"explicit_{mass_mode}"
 
-    perturbation_ids = sorted(cell_df["perturbation_id"].unique().tolist())
-    # Mass may be sourced from all obs (mass_scope="full_obs"), so it can carry perturbations
-    # absent from the split-local cell catalog. PerturbSeqDynamicsData.validate() rejects mass
-    # perturbations outside the catalog, so restrict mass_df to the catalog here. Mass values
-    # themselves stay global (the full_obs abundance intent is preserved).
-    if "perturbation_id" in mass_df.columns:
-        _mass_attrs = dict(mass_df.attrs)
-        _catalog_pids = set(map(str, perturbation_ids))
-        mass_df = mass_df.loc[mass_df["perturbation_id"].astype(str).isin(_catalog_pids)].reset_index(drop=True)
-        mass_df.attrs.update(_mass_attrs)
     control_ids = sorted(sub_obs.loc[sub_obs["is_control"].astype(bool), "perturbation_id"].unique().tolist())
     if not control_ids:
         raise ValueError("No control perturbations found after filtering.")
