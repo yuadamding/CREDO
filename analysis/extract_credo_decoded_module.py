@@ -230,8 +230,12 @@ def _run_one_fold(args: argparse.Namespace, run_dir: Path, device: str, fold_i: 
 
 def _aggregate(per_fold: pd.DataFrame, min_concordance: float, min_folds: int) -> pd.DataFrame:
     grouped = per_fold.groupby(["gene", "perturbation_id", "target_gene"], dropna=False)
+    # Count independent runs by run_dir, not fold_id: fold_id is the CV fold index
+    # (fold_0..fold_3) and collides across seeds, so a 3-seed x 4-fold panel has only
+    # 4 distinct fold_id values but 12 distinct run_dir values.
+    fold_key = "run_dir" if "run_dir" in per_fold.columns else "fold_id"
     out = grouped.agg(
-        n_folds=("fold_id", "nunique"),
+        n_folds=(fold_key, "nunique"),
         mean_delta_decoded_expr=("delta_decoded_expr_fact_vs_ref", "mean"),
         median_delta_decoded_expr=("delta_decoded_expr_fact_vs_ref", "median"),
         std_delta_decoded_expr=("delta_decoded_expr_fact_vs_ref", "std"),
