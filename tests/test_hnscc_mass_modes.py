@@ -113,3 +113,51 @@ def test_hnscc_count_mass_mode_ignores_mass_column() -> None:
     assert study.mass_table.get("ctrl", "P4", "D1") == 2.0
     assert study.mass_table.df.attrs["mass_mode"] == "subset_only:count"
     assert study.mass_table.df.attrs["requested_mass_mode"] == "count"
+
+
+def test_full_obs_mass_scope_drops_perturbations_outside_split_catalog() -> None:
+    # A perturbation whose cells live only in the train split must not leak into the mass
+    # table (built from all obs under mass_scope="full_obs") for a test-split study --
+    # PerturbSeqDynamicsData.validate() would otherwise reject it as outside the catalog.
+    rows: list[dict] = []
+    latent: list[list[float]] = []
+    i = 0
+    for pid, is_control, spl in [
+        ("ctrl", True, "test"),
+        ("GeneA_sg1", False, "test"),
+        ("GeneB_sg1", False, "train"),
+    ]:
+        for time_label in ["P4", "P60"]:
+            for _ in range(2):
+                rows.append(
+                    {
+                        "cell_id": f"{pid}_{time_label}_{i}",
+                        "perturbation_id": pid,
+                        "time_label": time_label,
+                        "sample_id": "D1",
+                        "is_control": is_control,
+                        "mass_value": 10.0,
+                        "_split": spl,
+                    }
+                )
+                latent.append([float(i), 0.0])
+                i += 1
+    obs = pd.DataFrame(rows)
+    latent_arr = np.asarray(latent, dtype=np.float32)
+
+    study = build_study_from_split(
+        obs,
+        latent_arr,
+        split=obs["_split"],
+        split_name="test",
+        mass_value_col="mass_value",
+        mass_scope="full_obs",
+        mass_mode="group_total",
+    )
+
+    catalog = set(study.catalog.perturbation_ids)
+    assert catalog == {"ctrl", "GeneA_sg1"}
+    mass_pids = set(study.mass_table.df["perturbation_id"].astype(str))
+    assert "GeneB_sg1" not in mass_pids
+    # global-abundance intent preserved for in-catalog perturbations
+    assert study.mass_table.df.attrs["mass_mode"].startswith("full_obs:")

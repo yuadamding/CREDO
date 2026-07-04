@@ -489,3 +489,23 @@ def test_endpoint_initializer_matches_legacy_uniform_sampling() -> None:
     assert torch.equal(z0, expected_z)
     assert torch.equal(logw0, expected_logw)
     assert torch.equal(log_m0, expected_log_m)
+
+
+def test_get_count_matrix_sets_total_for_sample_missing_requested_pid() -> None:
+    # A sample present at the time point but missing every requested perturbation must still
+    # report its (positive) grand total, not 0 (regression: total was only assigned inside
+    # the per-perturbation loop, leaving missing-sample totals at 0).
+    counts = ReplicateCountTable(
+        pd.DataFrame(
+            [
+                {"sample_id": "D1", "time_label": "0", "library_batch": "L1",
+                 "perturbation_id": "A", "count": 5, "n_total_sample": 8},
+                {"sample_id": "D2", "time_label": "0", "library_batch": "L1",
+                 "perturbation_id": "B", "count": 7, "n_total_sample": 7},
+            ]
+        )
+    )
+    matrix, sample_ids, totals = counts.get_count_matrix("0", ["A"])
+    assert sample_ids == ["D1", "D2"]
+    assert matrix.tolist() == [[5.0], [0.0]]
+    assert totals.tolist() == [8.0, 7.0]

@@ -404,8 +404,14 @@ def load_hnscc_expression(
     if resolved_rows is not None:
         obs = obs.iloc[resolved_rows].copy()
     if validate_counts:
-        sample_rows = min(256, n_rows)
-        sample = _materialize_chunk(source[:sample_rows])
+        # Validate the rows that are actually selected (row_indices), not the first 256 of
+        # the full matrix -- otherwise a strict-count violation in a selected row outside the
+        # head is missed while an unselected head row can trigger a spurious failure.
+        if resolved_rows is not None and len(resolved_rows) > 0:
+            sample_idx = np.sort(resolved_rows[: min(256, len(resolved_rows))])
+            sample = _materialize_chunk(source[sample_idx, :])
+        else:
+            sample = _materialize_chunk(source[: min(256, n_rows)])
         _validate_count_matrix(
             sample,
             name=f"expression (layer={resolved_layer!r})",
@@ -978,6 +984,15 @@ def build_study_from_split(
         mass_df.attrs["mass_mode_resolution_reason"] = f"explicit_{mass_mode}"
 
     perturbation_ids = sorted(cell_df["perturbation_id"].unique().tolist())
+    # Mass may be sourced from all obs (mass_scope="full_obs"), so it can carry perturbations
+    # absent from the split-local cell catalog. PerturbSeqDynamicsData.validate() rejects mass
+    # perturbations outside the catalog, so restrict mass_df to the catalog here. Mass values
+    # themselves stay global (the full_obs abundance intent is preserved).
+    if "perturbation_id" in mass_df.columns:
+        _mass_attrs = dict(mass_df.attrs)
+        _catalog_pids = set(map(str, perturbation_ids))
+        mass_df = mass_df.loc[mass_df["perturbation_id"].astype(str).isin(_catalog_pids)].reset_index(drop=True)
+        mass_df.attrs.update(_mass_attrs)
     control_ids = sorted(sub_obs.loc[sub_obs["is_control"].astype(bool), "perturbation_id"].unique().tolist())
     if not control_ids:
         raise ValueError("No control perturbations found after filtering.")

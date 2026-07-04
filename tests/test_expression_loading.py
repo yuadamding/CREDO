@@ -64,3 +64,35 @@ def test_empty_gene_mask_is_treated_as_missing_and_refuses_full_scan(tmp_path: P
             top_genes=0,
             allow_full_gene_scan=False,
         )
+
+
+def test_strict_counts_validate_selected_rows_not_head(tmp_path: Path) -> None:
+    # First 256 rows are integer counts; rows 256+ are non-integer. Selecting the
+    # non-integer rows must fail under strict_counts even though the matrix head is clean
+    # (regression: validation previously always sampled source[:256], ignoring row_indices).
+    rng = np.random.default_rng(0)
+    head = rng.poisson(2.0, size=(256, 6)).astype(np.float32)
+    tail = np.full((44, 6), 1.5, dtype=np.float32)
+    matrix = sp.csr_matrix(np.vstack([head, tail]))
+    path = tmp_path / "mixed_counts.h5ad"
+    _write_h5ad(path, matrix)
+
+    with pytest.raises(ValueError, match="near-integer"):
+        load_hnscc_expression(
+            str(path),
+            row_indices=np.arange(256, 300),
+            validate_counts=True,
+            strict_counts=True,
+            allow_full_gene_scan=True,
+            n_workers=0,
+        )
+
+    # Selecting well-formed integer rows loads without error.
+    load_hnscc_expression(
+        str(path),
+        row_indices=np.arange(0, 44),
+        validate_counts=True,
+        strict_counts=True,
+        allow_full_gene_scan=True,
+        n_workers=0,
+    )

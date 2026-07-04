@@ -355,11 +355,19 @@ class ReplicateCountTable:
         counts = np.zeros((len(sample_ids), len(perturbation_ids)))
         n_totals = np.zeros(len(sample_ids))
         for i, sid in enumerate(sample_ids):
+            sample_rows = sub[sub["sample_id"].eq(str(sid))]
+            # n_total_sample is the per-sample grand total (constant across the sample's rows);
+            # set it once per sample so a sample present at this time point but missing all
+            # requested perturbations still gets a valid positive total instead of 0.
+            if len(sample_rows) > 0:
+                n_totals[i] = float(sample_rows["n_total_sample"].iloc[0])
             for j, pid in enumerate(perturbation_ids):
-                row = sub[sub["sample_id"].eq(str(sid)) & sub["perturbation_id"].eq(str(pid))]
+                row = sample_rows[sample_rows["perturbation_id"].eq(str(pid))]
                 if len(row) > 0:
                     counts[i, j] = float(row["count"].iloc[0])
-                    n_totals[i] = float(row["n_total_sample"].iloc[0])
+        # NOTE: n_total_sample is the grand total, so the DirichletMultinomial invariant
+        # n_total == counts.sum(axis=1) holds only for full-panel calls (all perturbations
+        # requested); this helper is intended for full-panel use.
         return counts, sample_ids, n_totals
 
 
