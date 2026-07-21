@@ -127,6 +127,8 @@ class RunConfig(_StrictModel):
                 raise ValueError("Effect-axis runs require model.context='none'.")
         if self.model.context == "none" and self.training.epochs.context > 0:
             raise ValueError("Context epochs must be zero when model.context is 'none'.")
+        if self.training.epochs.context > 0 and self.training.epochs.mass == 0:
+            raise ValueError("Context training requires a positive mass phase first.")
         if self.loss.count > 0 and self.data.counts is None:
             raise ValueError("Positive count loss requires data.counts.")
         if reaction_epochs == 0 and (self.loss.mass > 0 or self.loss.count > 0):
@@ -169,36 +171,42 @@ def _sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
     return digest.hexdigest()
 
 
-def _dataset_manifest_path(config: DataConfig) -> Path | None:
-    if config.dataset is not None:
-        return config.dataset
-    candidate = config.support.parent / "dataset.json"
-    return candidate if candidate.exists() else None
+def _dataset_manifest_path(config: DataConfig) -> Path:
+    path = config.dataset if config.dataset is not None else config.support.parent / "dataset.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"Canonical dataset manifest not found: {path}")
+    return path
 
 
-def _load_dataset_manifest(config: DataConfig, axis: Axis) -> tuple[dict[str, Any], Path | None]:
+def _load_dataset_manifest(config: DataConfig, axis: Axis) -> tuple[dict[str, Any], Path]:
     path = _dataset_manifest_path(config)
-    if path is None:
-        return {}, None
     with path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
     if not isinstance(manifest, dict):
         raise ValueError("dataset.json must contain a JSON object.")
     allowed = {"schema_version", "axis", "latent_key", "mass_semantics", "description", "source"}
+    required = {"schema_version", "axis", "latent_key", "mass_semantics", "source"}
     unknown = set(manifest) - allowed
     if unknown:
         raise ValueError(f"dataset.json contains unknown keys: {sorted(unknown)}")
+    missing = required - set(manifest)
+    if missing:
+        raise ValueError(f"dataset.json is missing required keys: {sorted(missing)}")
     if int(manifest.get("schema_version", -1)) != 1:
         raise ValueError("dataset.json schema_version must be 1.")
-    manifest_axis = manifest.get("axis")
-    if manifest_axis is not None:
-        declared = Axis(**manifest_axis)
-        if declared != axis:
-            raise ValueError("Config axis disagrees with dataset.json.")
-    if manifest.get("latent_key", config.latent_key) != config.latent_key:
+    if not isinstance(manifest["axis"], dict):
+        raise ValueError("dataset.json axis must be a JSON object.")
+    declared = Axis(**manifest["axis"])
+    if declared != axis:
+        raise ValueError("Config axis disagrees with dataset.json.")
+    if not isinstance(manifest["latent_key"], str) or not manifest["latent_key"]:
+        raise ValueError("dataset.json latent_key must be a nonempty string.")
+    if manifest["latent_key"] != config.latent_key:
         raise ValueError("Config latent_key disagrees with dataset.json.")
-    if not isinstance(manifest.get("source", {}), dict):
+    if not isinstance(manifest["source"], dict):
         raise ValueError("dataset.json source provenance must be a JSON object.")
+    if "description" in manifest and not isinstance(manifest["description"], str):
+        raise ValueError("dataset.json description must be a string.")
     return manifest, path
 
 
@@ -211,8 +219,12 @@ def _read_support(path: Path, latent_key: str) -> tuple[pd.DataFrame, np.ndarray
     if latent_key not in adata.obsm:
         raise ValueError(f"support.h5ad is missing obsm[{latent_key!r}].")
     obs = adata.obs.copy().reset_index(drop=True)
-    obs["measure_id"] = obs["measure_id"].astype(str)
-    obs["time_label"] = obs["time_label"].astype(str)
+    for column in required:
+        if obs[column].isna().any():
+            raise ValueError(f"support.h5ad {column} contains missing values.")
+        obs[column] = obs[column].astype(str)
+        if obs[column].str.len().eq(0).any():
+            raise ValueError(f"support.h5ad {column} contains empty values.")
     latent = np.asarray(adata.obsm[latent_key], dtype=np.float32)
     if latent.ndim != 2 or len(latent) != len(obs) or not np.isfinite(latent).all():
         raise ValueError("The configured latent representation must be finite and two-dimensional.")
@@ -332,21 +344,6 @@ def _build_count_blocks(
         return ()
     from .objective import CountBlock
 
-    required = {"context_group_id", "time_label", "measure_id", "exposure", "count"}
-    missing = required - set(frame.columns)
-    if missing:
-        raise ValueError(f"counts.parquet is missing columns: {sorted(missing)}")
-    frame = frame.copy()
-    for column in ("context_group_id", "time_label", "measure_id"):
-        if frame[column].isna().any():
-            raise ValueError(f"counts.parquet {column} contains missing values.")
-        frame[column] = frame[column].astype(str)
-        if frame[column].str.len().eq(0).any():
-            raise ValueError(f"counts.parquet {column} contains empty values.")
-    frame["exposure"] = pd.to_numeric(frame["exposure"], errors="raise")
-    frame["count"] = pd.to_numeric(frame["count"], errors="raise")
-    if frame.duplicated(["context_group_id", "time_label", "measure_id"]).any():
-        raise ValueError("counts.parquet contains duplicate block entries.")
     index = {measure_id: idx for idx, measure_id in enumerate(measure_ids)}
     unknown = set(frame["measure_id"]) - set(index)
     if unknown:
@@ -382,13 +379,35 @@ def _build_count_blocks(
     return tuple(blocks)
 
 
+def _normalize_count_table(frame: pd.DataFrame | None) -> pd.DataFrame | None:
+    """Return the exact validated count representation written to disk."""
+    if frame is None:
+        return None
+    required = {"context_group_id", "time_label", "measure_id", "exposure", "count"}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"counts.parquet is missing columns: {sorted(missing)}")
+    frame = frame.copy()
+    for column in ("context_group_id", "time_label", "measure_id"):
+        if frame[column].isna().any():
+            raise ValueError(f"counts.parquet {column} contains missing values.")
+        frame[column] = frame[column].astype(str)
+        if frame[column].str.len().eq(0).any():
+            raise ValueError(f"counts.parquet {column} contains empty values.")
+    frame["exposure"] = pd.to_numeric(frame["exposure"], errors="raise")
+    frame["count"] = pd.to_numeric(frame["count"], errors="raise")
+    if frame.duplicated(["context_group_id", "time_label", "measure_id"]).any():
+        raise ValueError("counts.parquet contains duplicate block entries.")
+    return frame
+
+
 def _read_count_blocks(
     path: Path | None,
     measure_meta: pd.DataFrame,
     measure_ids: tuple[str, ...],
 ) -> tuple[Any, ...]:
     frame = None if path is None else pd.read_parquet(path)
-    return _build_count_blocks(frame, measure_meta, measure_ids)
+    return _build_count_blocks(_normalize_count_table(frame), measure_meta, measure_ids)
 
 
 def load_data(config: RunConfig | str | Path) -> TrajectoryData:
@@ -400,8 +419,8 @@ def load_data(config: RunConfig | str | Path) -> TrajectoryData:
     obs, latent = _read_support(run_config.data.support, run_config.data.latent_key)
     masses, mass_semantics = _read_masses(run_config.data.masses)
     _validate_denominators(masses, measure_meta, mass_semantics)
-    declared_semantics = dataset_manifest.get("mass_semantics")
-    if declared_semantics is not None and MassSemantics(declared_semantics) is not mass_semantics:
+    declared_semantics = MassSemantics(dataset_manifest["mass_semantics"])
+    if declared_semantics is not mass_semantics:
         raise ValueError("masses.parquet mass semantics disagree with dataset.json.")
     measures = _build_measures(obs, latent, masses, axis)
     measure_ids = tuple(measure_meta["measure_id"].tolist())
@@ -413,8 +432,7 @@ def load_data(config: RunConfig | str | Path) -> TrajectoryData:
     }
     if run_config.data.counts is not None:
         input_paths["counts"] = run_config.data.counts
-    if dataset_path is not None:
-        input_paths["dataset"] = dataset_path
+    input_paths["dataset"] = dataset_path
     metadata = {
         "input_paths": {name: str(path) for name, path in input_paths.items()},
         "input_hashes": {name: _sha256(path) for name, path in input_paths.items()},
@@ -446,17 +464,28 @@ def write_canonical_dataset(
 ) -> dict[str, Path]:
     """Write the one canonical adapter output contract."""
     output = Path(output_dir)
+    if not isinstance(latent_key, str) or not latent_key:
+        raise ValueError("Canonical latent_key must be a nonempty string.")
+    if not isinstance(description, str):
+        raise ValueError("Canonical description must be a string.")
     measure_meta = validate_measure_meta(measure_meta)
     support = support.copy()
     support.obs.index = pd.Index(support.obs.index.astype(str).to_numpy(dtype=object), dtype=object)
-    for column in support.obs.columns:
-        if pd.api.types.is_string_dtype(support.obs[column].dtype):
-            support.obs[column] = support.obs[column].astype(str).to_numpy(dtype=object)
     if latent_key not in support.obsm:
         raise ValueError(f"Support AnnData is missing obsm[{latent_key!r}].")
     required_support = {"measure_id", "time_label"}
     if missing := required_support - set(support.obs.columns):
         raise ValueError(f"Support AnnData obs is missing columns: {sorted(missing)}")
+    for column in required_support:
+        if support.obs[column].isna().any():
+            raise ValueError(f"Support AnnData {column} contains missing values.")
+        values = support.obs[column].astype(str)
+        if values.str.len().eq(0).any():
+            raise ValueError(f"Support AnnData {column} contains empty values.")
+        support.obs[column] = values.to_numpy(dtype=object)
+    for column in support.obs.columns:
+        if pd.api.types.is_string_dtype(support.obs[column].dtype):
+            support.obs[column] = support.obs[column].astype(str).to_numpy(dtype=object)
     masses = masses.copy()
     masses["mass_semantics"] = MassSemantics(mass_semantics).value
     masses, written_semantics = _validate_mass_table(masses)
@@ -469,6 +498,7 @@ def write_canonical_dataset(
     latent = np.asarray(support.obsm[latent_key], dtype=np.float32)
     if latent.ndim != 2 or len(latent) != len(obs) or not np.isfinite(latent).all():
         raise ValueError("The canonical latent representation must be finite and two-dimensional.")
+    support.obsm[latent_key] = latent
     observed_pairs = set(zip(obs["measure_id"], obs["time_label"], strict=False))
     mass_pairs = set(zip(masses["measure_id"], masses["time_label"], strict=False))
     if observed_pairs != mass_pairs:
@@ -487,6 +517,8 @@ def write_canonical_dataset(
         atom_weight = pd.to_numeric(obs["atom_weight"], errors="raise").to_numpy()
         if not np.isfinite(atom_weight).all() or np.any(atom_weight <= 0):
             raise ValueError("Support atom weights must be positive and finite.")
+        support.obs["atom_weight"] = atom_weight
+    counts = _normalize_count_table(counts)
     count_blocks = _build_count_blocks(counts, measure_meta, measure_ids)
     if axis.kind == "effect" and count_blocks:
         raise ValueError("Count likelihood is unavailable on a nonphysical effect axis.")
@@ -508,13 +540,22 @@ def write_canonical_dataset(
         "source": source or {},
     }
     manifest_text = json.dumps(manifest, indent=2) + "\n"
-    output.mkdir(parents=True, exist_ok=True)
     paths = {
         "support": output / "support.h5ad",
         "measure_meta": output / "measure_meta.parquet",
         "masses": output / "masses.parquet",
         "dataset": output / "dataset.json",
     }
+    if counts is not None:
+        paths["counts"] = output / "counts.parquet"
+    if output.exists():
+        expected = {path.name for path in paths.values()}
+        unknown = sorted(path.name for path in output.iterdir() if path.name not in expected)
+        if unknown:
+            raise FileExistsError(
+                f"Canonical dataset directory contains files outside its contract: {unknown}"
+            )
+    output.mkdir(parents=True, exist_ok=True)
     try:
         option_context = pd.option_context("future.infer_string", False)
     except (KeyError, ValueError):
@@ -524,7 +565,6 @@ def write_canonical_dataset(
     measure_meta.to_parquet(paths["measure_meta"], index=False)
     masses.to_parquet(paths["masses"], index=False)
     if counts is not None:
-        paths["counts"] = output / "counts.parquet"
         counts.to_parquet(paths["counts"], index=False)
     paths["dataset"].write_text(manifest_text, encoding="utf-8")
     return paths

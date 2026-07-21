@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from .contracts import TrajectoryData
+from .contracts import MEASURE_META_COLUMNS, TrajectoryData
 from .io import RunConfig, resolved_config, validate_run_data
 from .model import CREDOModel
 from .objective import (
@@ -663,9 +663,6 @@ class Trainer:
                 dependencies[name] = importlib.metadata.version(distribution)
             except importlib.metadata.PackageNotFoundError:
                 dependencies[name] = None
-        measure_hash = hashlib.sha256(
-            self.data.measure_meta.to_csv(index=False).encode("utf-8")
-        ).hexdigest()
         return {
             "schema_version": 1,
             "resolved_config": resolved_config(self.config),
@@ -684,7 +681,7 @@ class Trainer:
             "mass_semantics": self.data.mass_semantics.value,
             "mass_denominators": list(self.data.metadata.get("mass_denominators", [])),
             "claim_policy": self.data.claim_policy,
-            "measure_meta_hash": measure_hash,
+            "measure_meta_hash": _measure_meta_hash(self.data),
             "validation_split": {
                 "source": self.validation_source,
                 "strategy": self.validation_strategy,
@@ -718,6 +715,7 @@ class Trainer:
         torch.save(
             {
                 "schema_version": 1,
+                "run_contract": _checkpoint_contract(self.data, self.config),
                 "architecture": self.model.architecture(),
                 "model_state": self.model.state_dict(),
                 "log_count_concentration": self.log_count_concentration.detach().cpu(),
@@ -769,6 +767,8 @@ class Trainer:
         model = CREDOModel(**architecture).to(selected_device)
         if not _model_matches(model, data, config):
             raise ValueError("Checkpoint architecture disagrees with the run data or config.")
+        if payload.get("run_contract") != _checkpoint_contract(data, config):
+            raise ValueError("Checkpoint run contract disagrees with the data or config.")
         model.load_state_dict(payload["model_state"])
         grid = axis_grid(
             data.axis,
@@ -913,15 +913,45 @@ def _validation_split(
 
 
 def _model_matches(model: CREDOModel, data: TrajectoryData, config: RunConfig) -> bool:
-    return (
-        model.embedding_ids == data.embedding_ids
-        and model.control_embedding_ids == frozenset(data.control_embedding_ids)
-        and model.latent_dim == data.latent_dim
-        and model.embedding_dim == config.model.embedding_dim
-        and model.n_programs == config.model.n_programs
-        and model.hidden_dim == config.model.hidden_dim
-        and model.context_mode == config.model.context
-    )
+    expected = {
+        "embedding_ids": list(data.embedding_ids),
+        "control_embedding_ids": sorted(data.control_embedding_ids),
+        "latent_dim": data.latent_dim,
+        "embedding_dim": config.model.embedding_dim,
+        "n_programs": config.model.n_programs,
+        "hidden_dim": config.model.hidden_dim,
+        "context_mode": config.model.context,
+        "sigma_min": 1e-3,
+        "growth_max": 3.0,
+        "payoff_rank": min(4, config.model.n_programs),
+    }
+    return model.architecture() == expected
+
+
+def _measure_meta_hash(data: TrajectoryData) -> str:
+    canonical = data.measure_meta.loc[:, MEASURE_META_COLUMNS]
+    payload = canonical.to_csv(index=False, lineterminator="\n").encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _checkpoint_contract(data: TrajectoryData, config: RunConfig) -> dict[str, Any]:
+    input_hashes = data.metadata.get("input_hashes", {})
+    return {
+        "axis": {
+            "kind": data.axis.kind,
+            "source": data.axis.source,
+            "labels": list(data.axis.labels),
+            "values": list(data.axis.values),
+        },
+        "mass_semantics": data.mass_semantics.value,
+        "measure_meta_hash": _measure_meta_hash(data),
+        "input_hashes": {
+            str(name): str(value) for name, value in sorted(dict(input_hashes).items())
+        },
+        "model": config.model.model_dump(mode="json"),
+        "training": config.training.model_dump(mode="json"),
+        "loss": config.loss.model_dump(mode="json"),
+    }
 
 
 def _git_state() -> tuple[str | None, bool | None]:

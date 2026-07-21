@@ -121,6 +121,19 @@ def test_mass_rows_require_explicit_denominators(tiny_config, tmp_path) -> None:
         load_data(broken_config)
 
 
+def test_dataset_manifest_is_required_and_self_describing(tiny_config, tmp_path) -> None:
+    missing = tmp_path / "missing.json"
+    data_config = tiny_config.data.model_copy(update={"dataset": missing})
+    with pytest.raises(FileNotFoundError, match="Canonical dataset manifest not found"):
+        load_data(tiny_config.model_copy(update={"data": data_config}))
+
+    incomplete = tmp_path / "dataset.json"
+    incomplete.write_text('{"schema_version": 1}\n', encoding="utf-8")
+    data_config = tiny_config.data.model_copy(update={"dataset": incomplete})
+    with pytest.raises(ValueError, match="missing required keys"):
+        load_data(tiny_config.model_copy(update={"data": data_config}))
+
+
 def test_effect_axis_config_blocks_reaction_training(tiny_config) -> None:
     raw = tiny_config.model_dump()
     raw["data"]["counts"] = None
@@ -134,6 +147,13 @@ def test_effect_axis_config_blocks_reaction_training(tiny_config) -> None:
     raw["training"]["epochs"] = {"state": 1, "mass": 1, "context": 0}
     raw["loss"] = {"mass": 1.0, "count": 0.0}
     with pytest.raises(ValueError, match="Growth and mass fitting"):
+        RunConfig.model_validate(raw)
+
+
+def test_context_phase_requires_a_trained_mass_phase(tiny_config) -> None:
+    raw = tiny_config.model_dump()
+    raw["training"]["epochs"] = {"state": 1, "mass": 0, "context": 1}
+    with pytest.raises(ValueError, match="positive mass phase"):
         RunConfig.model_validate(raw)
 
 

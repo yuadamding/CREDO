@@ -191,9 +191,18 @@ def _persist_if_saved(run: Trainer) -> None:
         "factual_ess",
         "reference_ess",
     ]
-    pd.DataFrame(run.counterfactual_rows, columns=columns).to_parquet(
-        output / "counterfactuals.parquet", index=False
-    )
+    path = output / "counterfactuals.parquet"
+    current = pd.DataFrame(run.counterfactual_rows, columns=columns)
+    if path.exists():
+        existing = pd.read_parquet(path)
+        if existing.columns.tolist() != columns:
+            raise ValueError("Existing counterfactuals.parquet has an incompatible schema.")
+        if not existing.empty:
+            current = pd.concat((existing, current), ignore_index=True)
+    key = ["measure_id", "time_label", "context_policy"]
+    current = current.drop_duplicates(key, keep="last").reset_index(drop=True)
+    run.counterfactual_rows = current.to_dict(orient="records")
+    current.to_parquet(path, index=False)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["counterfactual_status"] = "evaluated"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

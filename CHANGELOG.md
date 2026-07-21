@@ -17,6 +17,12 @@
   and counterfactual table.
 - Enforced explicit mass denominators, diagnostic-only captured-count claims,
   and complete-context holdouts for compositional count validation.
+- Bound checkpoint reloads to canonical metadata, input hashes, axis and mass
+  semantics, and the non-operational run configuration; counterfactual rows
+  now remain intact across separate reload-and-evaluate processes.
+- Required self-describing dataset manifests, made adapters persist their
+  validated support and count representations, rejected stale output files,
+  and required mass training before ecological context.
 - Removed experimental attention, search, expression-preprocessing, weak-form,
   cohort-loading, and legacy compatibility paths from the installed package.
 
