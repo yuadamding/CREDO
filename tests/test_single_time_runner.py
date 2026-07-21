@@ -10,11 +10,23 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 import pytest
+import torch
+
+from runners.run_credo_single_time import _weight_diagnostics
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 pytestmark = pytest.mark.runner
+
+
+def test_weight_diagnostic_ess_fraction_is_bounded() -> None:
+    for n_particles in range(1, 65):
+        diagnostics = _weight_diagnostics(
+            torch.zeros(n_particles, dtype=torch.float32),
+            prefix="uniform",
+        )
+        assert 0.0 <= diagnostics["uniform_ess_frac"] <= 1.0
 
 
 def _env() -> dict[str, str]:

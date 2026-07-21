@@ -14,6 +14,7 @@ ACCESSION = "GSE314342"
 TIME_LABELS = ("Rest", "Stim8hr", "Stim48hr")
 DEFAULT_PHYSICAL_TIMES = {"Rest": 0.0, "Stim8hr": 8.0, "Stim48hr": 48.0}
 NTC_EMBEDDING_ID = "__NTC__"
+CREDO_SUPPORT_SCHEMA_VERSION = 1
 
 OBS_ALIASES: dict[str, tuple[str, ...]] = {
     "guide_id": ("guide_id", "guide", "sgRNA", "sgrna", "guide_name"),
@@ -89,6 +90,40 @@ class LateTimeResolution:
         if result.processed_label != "Stim48hr":
             raise ValueError("The processed late condition must be recorded as 'Stim48hr'.")
         return result
+
+
+def build_support_metadata(
+    *,
+    latent_key: str,
+    latent_dim: int,
+    support_atoms_cap: int,
+    late_time: LateTimeResolution,
+    subset: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Return the self-describing AnnData ``uns`` contract for this cohort."""
+    metadata: dict[str, object] = {
+        "accession": ACCESSION,
+        "credo_support_schema_version": CREDO_SUPPORT_SCHEMA_VERSION,
+        "latent_key": str(latent_key),
+        "latent_dim": int(latent_dim),
+        "finite_measure_key": ["sample_id", "guide_id"],
+        "source_label": "Rest",
+        "target_labels": ["Stim8hr", "Stim48hr"],
+        "time_labels": list(TIME_LABELS),
+        "physical_times_hours": {
+            "Rest": 0.0,
+            "Stim8hr": 8.0,
+            "Stim48hr": float(late_time.physical_time_hours),
+        },
+        "mass_mode": "group_total",
+        "mass_scope": "within-donor-time eligible-guide frequency",
+        "support_atoms_cap": int(support_atoms_cap),
+        "selection_uses_downstream_de": False,
+        "late_time_status": late_time.status,
+    }
+    if subset is not None:
+        metadata["subset"] = dict(subset)
+    return metadata
 
 
 def _resolve_column(frame: pd.DataFrame, canonical: str, *, required: bool = True) -> str | None:

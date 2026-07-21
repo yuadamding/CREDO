@@ -904,6 +904,136 @@ class PerturbSeqDynamicsData:
         weights = total_mass * atom_weights / atom_weights.sum()
         return FiniteMeasure(support=support, weights=weights, total_mass=total_mass)
 
+    def _trajectory_measures(
+        self,
+        *,
+        by_sample: bool,
+        labels: Sequence[str],
+        perturbation_ids: set[str],
+        require_all_times: bool,
+    ) -> tuple[Dict[str, Dict[MeasureKey, FiniteMeasure]], list[MeasureKey]]:
+        """Build trajectory measures with one grouped pass over cell rows."""
+        frame = self.cell_state.df
+        group_columns = (
+            ["time_label", "sample_id", "perturbation_id"]
+            if by_sample
+            else ["time_label", "perturbation_id"]
+        )
+        label_set = set(labels)
+        grouped_rows: list[tuple[str, MeasureKey, np.ndarray]] = []
+        keys_by_label: Dict[str, set[MeasureKey]] = {label: set() for label in labels}
+        observed_samples: Dict[tuple[str, str], set[str]] = {}
+
+        grouped = frame.groupby(group_columns, observed=True, sort=False)
+        for raw_group, positions in grouped.indices.items():
+            if by_sample:
+                time_label, sample_id, perturbation_id = raw_group
+                sample_id = str(sample_id)
+                perturbation_id = str(perturbation_id)
+                key: MeasureKey = (sample_id, perturbation_id)
+            else:
+                time_label, perturbation_id = raw_group
+                perturbation_id = str(perturbation_id)
+                key = perturbation_id
+            time_label = str(time_label)
+            if time_label not in label_set or perturbation_id not in perturbation_ids:
+                continue
+            row_positions = np.asarray(positions, dtype=np.int64)
+            grouped_rows.append((time_label, key, row_positions))
+            keys_by_label[time_label].add(key)
+            sample_values = (
+                [sample_id]
+                if by_sample
+                else frame.iloc[row_positions]["sample_id"].astype(str).unique()
+            )
+            observed_samples.setdefault((time_label, perturbation_id), set()).update(sample_values)
+
+        if require_all_times:
+            selected_keys = set.intersection(*(keys_by_label[label] for label in labels))
+        else:
+            selected_keys = set.union(*(keys_by_label[label] for label in labels))
+        if not selected_keys:
+            qualifier = "at every requested time" if require_all_times else "at the requested times"
+            raise ValueError(f"No perturbation/sample keys have support {qualifier}")
+
+        mass_by_sample: Dict[tuple[str, str, str], float] = {}
+        pooled_mass: Dict[tuple[str, str], float] = {}
+        for row in self.mass_table.df.itertuples(index=False):
+            perturbation_id = str(row.perturbation_id)
+            time_label = str(row.time_label)
+            sample_id = str(row.sample_id)
+            mass = float(row.mass)
+            if is_pooled_sample_id(sample_id):
+                pooled_mass[(time_label, perturbation_id)] = mass
+            else:
+                mass_by_sample[(time_label, sample_id, perturbation_id)] = mass
+
+        atom_weights_all: np.ndarray | None = None
+        if "atom_weight" in frame.columns:
+            atom_weights_all = pd.to_numeric(
+                frame["atom_weight"], errors="coerce"
+            ).to_numpy(dtype=float)
+
+        measures: Dict[str, Dict[MeasureKey, FiniteMeasure]] = {
+            label: {} for label in labels
+        }
+        for time_label, key, positions in grouped_rows:
+            if key not in selected_keys:
+                continue
+            perturbation_id = str(key[1]) if isinstance(key, tuple) else str(key)
+            support = self.cell_state.latent[positions].copy()
+            atom_weights = (
+                np.ones(len(positions), dtype=float)
+                if atom_weights_all is None
+                else atom_weights_all[positions]
+            )
+            if not np.isfinite(atom_weights).all() or np.any(atom_weights <= 0):
+                raise ValueError("atom_weight values must be positive and finite.")
+
+            if isinstance(key, tuple):
+                sample_id = str(key[0])
+                total_mass = mass_by_sample.get((time_label, sample_id, perturbation_id))
+                if total_mass is None:
+                    samples = observed_samples[(time_label, perturbation_id)]
+                    total_mass = pooled_mass.get((time_label, perturbation_id))
+                    if total_mass is None or len(samples) > 1:
+                        raise KeyError(
+                            "Missing sample-specific mass row for "
+                            f"({perturbation_id}, {time_label}, {sample_id})"
+                        )
+                weights = total_mass * atom_weights / atom_weights.sum()
+            else:
+                explicit_pooled = pooled_mass.get((time_label, perturbation_id))
+                if explicit_pooled is not None:
+                    total_mass = explicit_pooled
+                    weights = total_mass * atom_weights / atom_weights.sum()
+                else:
+                    sample_ids = frame.iloc[positions]["sample_id"].astype(str).to_numpy()
+                    weights = np.zeros(len(positions), dtype=float)
+                    total_mass = 0.0
+                    for sample_id in sorted(set(sample_ids)):
+                        sample_mask = sample_ids == sample_id
+                        sample_mass = mass_by_sample.get(
+                            (time_label, sample_id, perturbation_id)
+                        )
+                        if sample_mass is None:
+                            raise KeyError(
+                                "Missing sample-specific mass row for pooled measure "
+                                f"({perturbation_id}, {time_label}, {sample_id})"
+                            )
+                        sample_atom_weights = atom_weights[sample_mask]
+                        weights[sample_mask] = (
+                            sample_mass * sample_atom_weights / sample_atom_weights.sum()
+                        )
+                        total_mass += sample_mass
+
+            measures[time_label][key] = FiniteMeasure(
+                support=support,
+                weights=weights,
+                total_mass=float(total_mass),
+            )
+        return measures, sorted(selected_keys, key=str)
+
     def _trajectory_measure_metadata(
         self,
         keys: Sequence[MeasureKey],
@@ -1011,46 +1141,13 @@ class PerturbSeqDynamicsData:
         for label in labels:
             self.time_axis.tau(label)
 
-        requested_pids = list(perturbations or self.catalog.perturbation_ids)
-        df = self.cell_state.df
-        requested_pid_set = set(requested_pids)
-
-        def has_cells(pid: str, label: str, sample_id: Optional[str] = None) -> bool:
-            mask = (df["perturbation_id"] == pid) & (df["time_label"] == label)
-            if sample_id is not None:
-                mask = mask & (df["sample_id"].astype(str) == str(sample_id))
-            return bool(mask.any())
-
-        keys: List[MeasureKey] = []
-        if by_sample:
-            pairs = (
-                df.loc[df["perturbation_id"].isin(requested_pid_set), ["sample_id", "perturbation_id"]]
-                .drop_duplicates()
-                .sort_values(["sample_id", "perturbation_id"])
-            )
-            for row in pairs.itertuples(index=False):
-                sample_id = str(row.sample_id)
-                pid = str(row.perturbation_id)
-                if require_all_times and not all(has_cells(pid, label, sample_id) for label in labels):
-                    continue
-                keys.append((sample_id, pid))
-        else:
-            for pid in requested_pids:
-                if require_all_times and not all(has_cells(pid, label) for label in labels):
-                    continue
-                keys.append(str(pid))
-
-        if not keys:
-            raise ValueError("No perturbation/sample keys have support at the requested time labels")
-
-        measures: Dict[str, Dict[MeasureKey, FiniteMeasure]] = {label: {} for label in labels}
-        for label in labels:
-            for key in keys:
-                if isinstance(key, tuple):
-                    sample_id, pid = key
-                    measures[label][key] = self.build_measure(pid, label, sample_id=sample_id)
-                else:
-                    measures[label][key] = self.build_measure(str(key), label)
+        requested_pids = {str(pid) for pid in (perturbations or self.catalog.perturbation_ids)}
+        measures, keys = self._trajectory_measures(
+            by_sample=by_sample,
+            labels=labels,
+            perturbation_ids=requested_pids,
+            require_all_times=True,
+        )
 
         trajectory_metadata = {
             "latent_dim": self.latent_dim,
@@ -1080,39 +1177,12 @@ class PerturbSeqDynamicsData:
         for label in labels:
             self.time_axis.tau(label)
 
-        requested_pids = list(perturbations or self.catalog.perturbation_ids)
-        requested_pid_set = set(requested_pids)
-        df = self.cell_state.df
-
-        def has_cells(pid: str, label: str, sample_id: Optional[str] = None) -> bool:
-            mask = (df["perturbation_id"] == pid) & (df["time_label"] == label)
-            if sample_id is not None:
-                mask = mask & (df["sample_id"].astype(str) == str(sample_id))
-            return bool(mask.any())
-
-        measures: Dict[str, Dict[MeasureKey, FiniteMeasure]] = {label: {} for label in labels}
-        if by_sample:
-            pairs = (
-                df.loc[df["perturbation_id"].isin(requested_pid_set), ["sample_id", "perturbation_id"]]
-                .drop_duplicates()
-                .sort_values(["sample_id", "perturbation_id"])
-            )
-            for row in pairs.itertuples(index=False):
-                sample_id = str(row.sample_id)
-                pid = str(row.perturbation_id)
-                key: MeasureKey = (sample_id, pid)
-                for label in labels:
-                    if has_cells(pid, label, sample_id):
-                        measures[label][key] = self.build_measure(pid, label, sample_id=sample_id)
-        else:
-            for pid in requested_pids:
-                for label in labels:
-                    if has_cells(str(pid), label):
-                        measures[label][str(pid)] = self.build_measure(str(pid), label)
-
-        all_keys = sorted(
-            {key for time_measures in measures.values() for key in time_measures},
-            key=str,
+        requested_pids = {str(pid) for pid in (perturbations or self.catalog.perturbation_ids)}
+        measures, all_keys = self._trajectory_measures(
+            by_sample=by_sample,
+            labels=labels,
+            perturbation_ids=requested_pids,
+            require_all_times=False,
         )
         trajectory_metadata = {
             "latent_dim": self.latent_dim,

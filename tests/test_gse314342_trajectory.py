@@ -18,6 +18,7 @@ from credo.data.core import (
 from credo.data.gse314342 import (
     LateTimeResolution,
     build_mass_and_count_tables,
+    build_support_metadata,
     canonicalize_obs,
 )
 from credo.data.trajectory_view import TrajectoryView
@@ -42,9 +43,70 @@ from runners.run_credo_trajectory import (
     parse_args as parse_trajectory_args,
     split_validation_study,
 )
+from scripts.make_gse314342_pilot import _select_guides
 
 
 pytestmark = pytest.mark.integration
+
+
+def test_support_metadata_matches_trajectory_contract() -> None:
+    late_time = LateTimeResolution(
+        physical_time_hours=48.0,
+        status="resolved",
+        processed_label="Stim48hr",
+        raw_label="24 hr stim",
+        rationale="processed release",
+        source="test",
+    )
+
+    metadata = build_support_metadata(
+        latent_key="X_credo",
+        latent_dim=32,
+        support_atoms_cap=64,
+        late_time=late_time,
+    )
+
+    assert metadata["finite_measure_key"] == ["sample_id", "guide_id"]
+    assert metadata["physical_times_hours"] == {
+        "Rest": 0.0,
+        "Stim8hr": 8.0,
+        "Stim48hr": 48.0,
+    }
+    assert metadata["mass_mode"] == "group_total"
+
+
+def test_pilot_selection_is_deterministic_and_requires_complete_keys() -> None:
+    manifest = pd.DataFrame(
+        {
+            "sample_id": ["D3"] * 5,
+            "guide_id": ["ntc1", "ntc2", "g1", "g2", "incomplete"],
+            "embedding_id": ["__NTC__", "__NTC__", "A", "B", "C"],
+            "is_control": [True, True, False, False, False],
+            "has_Rest": [True] * 5,
+            "has_Stim8hr": [True, True, True, True, False],
+            "has_Stim48hr": [True] * 5,
+        }
+    )
+
+    first, controls, genes = _select_guides(
+        manifest,
+        donor="D3",
+        target_genes=1,
+        controls=1,
+        seed=7,
+    )
+    second, _, _ = _select_guides(
+        manifest,
+        donor="D3",
+        target_genes=1,
+        controls=1,
+        seed=7,
+    )
+
+    assert first["guide_id"].tolist() == second["guide_id"].tolist()
+    assert "incomplete" not in set(first["guide_id"])
+    assert len(controls) == 1
+    assert len(genes) == 1
 
 
 def _mapped_study() -> PerturbSeqDynamicsData:
@@ -145,6 +207,10 @@ def test_optional_atom_weights_define_conditional_measure_weights() -> None:
     )
     measure = study.build_measure("g1", "Rest", "D1")
     assert np.allclose(measure.weights, [2.0, 6.0])
+    sparse_measure = study.to_sparse_trajectory_problem(by_sample=True).get(
+        "Rest", ("D1", "g1")
+    )
+    assert np.allclose(sparse_measure.weights, measure.weights)
 
 
 def test_grouped_ecology_conditions_payoff_on_grouped_mediators() -> None:
@@ -195,7 +261,9 @@ def test_cohort_config_is_executable_and_cli_flags_win(tmp_path) -> None:
     assert args.epochs == 3
     assert args.source_label == "Rest"
     assert args.context_protocol == "none"
+    assert args.mass_scope == "full_obs"
     cfg = build_config(args, latent_dim=2)
+    assert cfg.data.mass_scope == "full_obs"
     assert cfg.model.context_kind == "none"
     assert cfg.model.ecological_growth is False
 

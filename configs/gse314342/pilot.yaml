@@ -1,5 +1,5 @@
 {
-  "description": "Two-sweep numerical smoke test; supply a pre-subset D3 pilot support file.",
+  "description": "Two-sweep numerical smoke test for gse314342_credo_pilot_d3.h5ad.",
   "args": [
     "--epochs", "2",
     "--n-particles", "32",

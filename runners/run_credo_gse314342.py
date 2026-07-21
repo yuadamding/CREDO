@@ -18,6 +18,7 @@ COHORT_DEFAULTS = [
     "--physical-times", "Rest:0,Stim8hr:8,Stim48hr:48",
     "--perturbation-col", "guide_id",
     "--mass-mode", "group_total",
+    "--mass-scope", "full_obs",
     "--latent-source", "obsm",
     "--latent-key", "X_credo",
     "--context-protocol", "none",

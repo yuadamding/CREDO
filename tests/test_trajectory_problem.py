@@ -68,6 +68,33 @@ def test_trajectory_problem_three_times() -> None:
     assert trajectory.get("6h", "LPS__mono").n_atoms == 4
 
 
+def test_trajectory_conversion_does_not_rescan_via_build_measure(monkeypatch) -> None:
+    data = _three_time_data()
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("trajectory conversion must use the grouped bulk path")
+
+    monkeypatch.setattr(data, "build_measure", fail_if_called)
+    trajectory = data.to_sparse_trajectory_problem(by_sample=True)
+
+    assert len(trajectory.measures["90m"]) == 2
+
+
+def test_trajectory_conversion_ignores_atom_weights_outside_requested_subset() -> None:
+    data = _three_time_data()
+    data.cell_state.df["atom_weight"] = 1.0
+    data.cell_state.df.loc[
+        data.cell_state.df["perturbation_id"].eq("ctrl"), "atom_weight"
+    ] = np.nan
+
+    trajectory = data.to_sparse_trajectory_problem(
+        by_sample=True,
+        perturbations=["LPS__mono"],
+    )
+
+    assert trajectory.keys == [("D1", "LPS__mono")]
+
+
 def test_catalog_and_cell_state_keys_are_string_canonicalized() -> None:
     catalog = PerturbationCatalog([1, "ctrl"], ["ctrl"])
     assert catalog.perturbation_ids == ["1", "ctrl"]

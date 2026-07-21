@@ -114,6 +114,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--control-col", default="is_control")
     parser.add_argument("--mass-col", default="mass_value")
     parser.add_argument(
+        "--mass-scope",
+        choices=["full_obs", "subset_only"],
+        default="subset_only",
+    )
+    parser.add_argument(
         "--mass-mode",
         choices=["auto", "count", "per_cell_contribution", "group_total"],
         default="auto",
@@ -761,6 +766,7 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.git_sha = _git_sha()
     cfg.data.mass_value_col = args.mass_col
     cfg.data.mass_mode = getattr(args, "resolved_mass_mode", args.mass_mode)
+    cfg.data.mass_scope = args.mass_scope
     cfg.latent.source = "vae" if args.latent_source == "vae" else "pca"
     cfg.latent.key = "X_vae" if args.latent_source == "vae" else args.latent_key
     cfg.latent.dim = latent_dim

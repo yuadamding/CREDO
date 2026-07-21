@@ -134,8 +134,12 @@ def validate_anndata_schema(
         report["shape"] = [int(data.n_obs), int(data.n_vars)]
         report["n_cells"] = int(data.n_obs)
         report["n_genes"] = int(data.n_vars)
-        if data.n_obs == 0 or data.n_vars == 0:
-            errors.append("AnnData must have non-zero observations and variables.")
+        if data.n_obs == 0:
+            errors.append("AnnData must have non-zero observations.")
+        if data.n_vars == 0 and not latent_key:
+            errors.append(
+                "AnnData with zero variables requires a latent embedding key."
+            )
         report["obs_index_unique"] = bool(data.obs_names.is_unique)
         if not data.obs_names.is_unique:
             errors.append("AnnData observation index must be unique.")

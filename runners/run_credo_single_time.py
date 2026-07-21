@@ -181,8 +181,9 @@ def _weight_diagnostics(logw: torch.Tensor, *, prefix: str) -> dict[str, float]:
     weights = torch.softmax(logw, dim=0)
     n_particles = max(1, int(weights.numel()))
     ess = 1.0 / weights.square().sum().clamp_min(1e-30)
+    ess_fraction = (ess / n_particles).clamp(min=0.0, max=1.0)
     return {
-        f"{prefix}_ess_frac": float((ess / n_particles).item()),
+        f"{prefix}_ess_frac": float(ess_fraction.item()),
         f"{prefix}_max_weight_frac": float(weights.max().item()),
         f"{prefix}_logw_range": float((logw.max() - logw.min()).item()),
     }

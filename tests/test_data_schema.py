@@ -66,6 +66,32 @@ def test_validate_anndata_schema_accepts_minimal_credo_input(tmp_path) -> None:
     assert report["latent_values_checked_mode"] == "full"
 
 
+def test_validate_anndata_schema_accepts_latent_only_trajectory_input(tmp_path) -> None:
+    path = tmp_path / "latent_only.h5ad"
+    obs = pd.DataFrame(
+        {
+            "perturbation_id": ["ctrl", "gene_a"],
+            "time_label": ["t0", "t1"],
+            "sample_id": ["D1", "D1"],
+            "physical_time": [0.0, 1.0],
+        },
+        index=["cell_0", "cell_1"],
+    )
+    data = ad.AnnData(X=np.zeros((2, 0), dtype=np.float32), obs=obs)
+    data.obsm["X_credo"] = np.ones((2, 2), dtype=np.float32)
+    data.write_h5ad(path)
+
+    report = validate_anndata_schema(
+        path,
+        schema="trajectory",
+        latent_key="X_credo",
+        strict=True,
+    )
+
+    assert report["ok"] is True
+    assert report["shape"] == [2, 0]
+
+
 def test_validate_anndata_schema_reports_missing_contract_fields(tmp_path) -> None:
     path = tmp_path / "tiny_missing.h5ad"
     _write_adata(path, include_latent=False, include_time=False)

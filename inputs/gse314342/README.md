@@ -20,7 +20,8 @@ The generated CREDO input is
 Its [input README](../../../inputs/GSE314342/README.md) records QC, support,
 mass, latent-model, and provenance details. The file contains only compact
 32-dimensional supports; it does not duplicate the downloaded expression
-matrix.
+matrix. The latent-only file has zero expression variables and records its
+trajectory contract under `uns["credo_support_schema_version"]`.
 
 The raw GEO lane title says `24 hr stim`, while the processed release calls the
 late condition `Stim48hr`. The recorded decision is
@@ -41,11 +42,25 @@ pseudobulk release, fits a donor-condition-balanced expression VAE, encodes the
 cell supports out of core, and writes the final file under the workspace
 `inputs/GSE314342` directory. It also writes full unsampled guide counts and
 smoothed within-donor masses, donor-time count blocks, a measure manifest, and
-build provenance. `--resume` reuses completed scan, VAE, and shard artifacts.
+build provenance. `--resume` reuses the completed scan, VAE, and any retained
+valid shards; final builds remove shards unless `--keep-shards` is supplied.
 
 QC excludes low-quality, unassigned, and multi-guide cells using the release's
 authoritative guide-assignment field. It does not select cells or guides using
 downstream differential expression.
+
+Generate and run the deterministic D3 numerical pilot before a full fit:
+
+```bash
+cd /home/yding1995/opscc_sc/CREDO
+python scripts/make_gse314342_pilot.py --overwrite
+
+python ../scripts/run_credo_gse314342.py --preset pilot
+```
+
+The pilot contains 122 complete D3 donor-guide keys and 15,417 support atoms.
+It is a smoke test only; selection uses stable hashes of annotations, not
+expression outcomes, and preserves rather than renormalizes full-cohort masses.
 
 Run the non-physical Rest baseline-priming companion analysis by selecting Rest
 atoms from the combined support with unit mass:
