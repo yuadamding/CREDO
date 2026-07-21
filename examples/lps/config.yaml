@@ -1,0 +1,38 @@
+data:
+  support: ../../../inputs/LPS/canonical/support.h5ad
+  latent_key: X_credo
+  measure_meta: ../../../inputs/LPS/canonical/measure_meta.parquet
+  masses: ../../../inputs/LPS/canonical/masses.parquet
+  dataset: ../../../inputs/LPS/canonical/dataset.json
+
+axis:
+  kind: physical
+  source: 90m
+  labels: [90m, 6h, 10h]
+  values: [1.5, 6.0, 10.0]
+
+model:
+  embedding_dim: 8
+  n_programs: 8
+  hidden_dim: 128
+  context: catalog_bank
+
+training:
+  epochs:
+    state: 40
+    mass: 20
+    context: 20
+  particles: 64
+  eval_particles: 256
+  steps_per_interval: 8
+  measures_per_batch: 128
+  learning_rate: 0.001
+  validation_fraction: 0.2
+  patience: 10
+  seed: 0
+
+loss:
+  mass: 1.0
+  count: 0.0
+
+output: ../../runs/lps/seed0

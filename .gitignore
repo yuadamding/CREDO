@@ -3,6 +3,7 @@ runs/
 /results/
 /models/
 comparison_reports/
+examples/synthetic/data/
 *.h5ad
 *.pt
 *.pth
@@ -11,6 +12,8 @@ comparison_reports/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
 *.egg-info/
 dist/
 build/

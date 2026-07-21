@@ -1,9 +1,0 @@
-{
-  "description": "Donor-grouped context continuation; pass the intrinsic checkpoint explicitly.",
-  "args": [
-    "--epochs", "20",
-    "--stage", "context",
-    "--context-protocol", "grouped_self_consistent",
-    "--ecology-off"
-  ]
-}

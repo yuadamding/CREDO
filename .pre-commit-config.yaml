@@ -1,12 +1,24 @@
 repos:
   - repo: local
     hooks:
-      - id: source-hygiene
-        name: source hygiene
-        entry: python tests/check_source_hygiene.py
+      - id: ruff
+        name: ruff
+        entry: python -m ruff check src examples analysis tests
         language: system
         pass_filenames: false
-        files: ^(package|runners|tests|\.github)/.*\.(py|ya?ml)$|^.*\.ya?ml$
+        types: [python]
+      - id: ruff-format
+        name: ruff format
+        entry: python -m ruff format --check src examples analysis tests
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: tests
+        name: compact test suite
+        entry: python -m pytest -q
+        language: system
+        pass_filenames: false
+        types: [python]
       - id: git-diff-check
         name: git diff whitespace check
         entry: git diff --check

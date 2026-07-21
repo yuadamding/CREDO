@@ -1,8 +1,0 @@
-{
-  "description": "Two-sweep numerical smoke test for gse314342_credo_pilot_d3.h5ad.",
-  "args": [
-    "--epochs", "2",
-    "--n-particles", "32",
-    "--eval-particles", "128"
-  ]
-}

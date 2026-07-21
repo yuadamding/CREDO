@@ -1,0 +1,38 @@
+data:
+  support: ../../../inputs/hnscc/canonical/support.h5ad
+  latent_key: X_credo
+  measure_meta: ../../../inputs/hnscc/canonical/measure_meta.parquet
+  masses: ../../../inputs/hnscc/canonical/masses.parquet
+  dataset: ../../../inputs/hnscc/canonical/dataset.json
+
+axis:
+  kind: physical
+  source: P4
+  labels: [P4, P60]
+  values: [4.0, 60.0]
+
+model:
+  embedding_dim: 8
+  n_programs: 8
+  hidden_dim: 128
+  context: catalog_bank
+
+training:
+  epochs:
+    state: 40
+    mass: 20
+    context: 20
+  particles: 64
+  eval_particles: 256
+  steps_per_interval: 8
+  measures_per_batch: 256
+  learning_rate: 0.001
+  validation_fraction: 0.2
+  patience: 10
+  seed: 0
+
+loss:
+  mass: 1.0
+  count: 0.0
+
+output: ../../runs/hnscc_p4_p60/seed0

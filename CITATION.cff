@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use CREDO, please cite this software and the cohort publication relevant to your analysis."
+type: software
+title: "CREDO: compact soft-reference finite-measure dynamics for longitudinal Perturb-seq"
+version: 3.0.0a1
+date-released: 2026-07-21
+license: MIT
+authors:
+  - family-names: Ding
+    given-names: Yu Adam
+repository-code: "https://github.com/yuadamding/CREDO"
+url: "https://github.com/yuadamding/CREDO"

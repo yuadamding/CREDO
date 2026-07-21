@@ -1,0 +1,39 @@
+data:
+  support: data/support.h5ad
+  latent_key: X_credo
+  measure_meta: data/measure_meta.parquet
+  masses: data/masses.parquet
+  counts: data/counts.parquet
+  dataset: data/dataset.json
+
+axis:
+  kind: physical
+  source: Rest
+  labels: [Rest, Stim8hr, Stim48hr]
+  values: [0.0, 8.0, 48.0]
+
+model:
+  embedding_dim: 4
+  n_programs: 4
+  hidden_dim: 32
+  context: catalog_bank
+
+training:
+  epochs:
+    state: 2
+    mass: 1
+    context: 1
+  particles: 16
+  eval_particles: 24
+  steps_per_interval: 1
+  measures_per_batch: 4
+  learning_rate: 0.001
+  validation_fraction: 0.5
+  patience: 3
+  seed: 0
+
+loss:
+  mass: 1.0
+  count: 0.01
+
+output: ../../runs/synthetic

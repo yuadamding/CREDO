@@ -3,72 +3,39 @@ name: CI
 on:
   pull_request:
   push:
-    branches:
-      - main
-      - "codex/**"
+    branches: [main, "codex/**"]
 
 jobs:
-  fast-tests:
+  test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install package
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e package pytest
-
-      - name: Compile Python sources
+          python -m pip install -e ".[dev]"
+      - name: Static checks
         run: |
-          python -m compileall -q package runners tests
-          python -m py_compile \
-            package/src/credo/models/transformer_blocks.py \
-            package/src/credo/models/transformer_context.py \
-            package/src/credo/models/full_model.py \
-            tests/test_transformer_context_invariants.py
-
-      - name: Check hidden Unicode controls
-        run: |
+          python -m compileall -q src examples analysis tests
+          ruff check src examples analysis tests
+          ruff format --check src examples analysis tests
           git diff --check
-          python tests/check_source_hygiene.py
-
-      - name: Run focused tests
+      - name: Test
+        run: python -m pytest -q
+      - name: Coverage
+        if: matrix.python-version == '3.11'
+        run: python -m pytest -q --cov=credo --cov-report=term --cov-fail-under=75
+      - name: Build distributions
+        if: matrix.python-version == '3.13'
         run: |
-          python -m pytest -q \
-            tests/test_source_hygiene.py \
-            tests/test_pytest_markers.py \
-            tests/test_data_schema.py \
-            tests/test_eval_gates.py \
-            tests/test_training_manifest.py \
-            tests/test_endpoint_geometry_mass_loss.py \
-            tests/test_semantic_invariants.py \
-            tests/test_weighted_sde_tau_grid.py \
-            tests/test_transformer_context_invariants.py
-
-      - name: Run fast test suite
-        run: |
-          python -m pytest -q -m "not slow and not gpu"
-
-  search-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: "pip"
-
-      - name: Install package with the optional search stack
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e "package[search]" pytest
-
-      - name: Run search-layer tests (incl. Optuna-backed paths)
-        run: |
-          python -m pytest -q tests/test_search_layer.py
+          python -m build
+          test -n "$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
