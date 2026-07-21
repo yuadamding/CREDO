@@ -2,25 +2,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 
 import pandas as pd
 import torch
 
-from ..data.core import MeasureKey, SparseTrajectoryProblem, TrajectoryProblem
-from ..data.trajectory_view import embedding_id_for_measure_key
+from ..data.core import MeasureKey
+from ..data.trajectory_view import TrajectoryLike, embedding_id_for_measure_key
 from ..training.trajectory_batch import initialise_particles_from_trajectory
 from .full_model import FullDynamicsModel
-from .simulator import _control_embedding_context, rollout_with_clamped_context
+from .simulator import _control_embedding_context, _stable_seed_offset, rollout_with_clamped_context
 from .weighted_sde import ParticleRollout, WeightedParticleSimulator
-
-
-TrajectoryLike = TrajectoryProblem | SparseTrajectoryProblem
-
-
-def _stable_seed_offset(text: str, modulus: int = 1_000_000) -> int:
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return int(digest[:12], 16) % modulus
 
 
 def _weighted_mean(z: torch.Tensor, logw: torch.Tensor) -> torch.Tensor:
@@ -110,7 +101,9 @@ class TrajectoryCounterfactualEngine:
         if control_rollout_mode not in {"reference_consistent", "zero_centered"}:
             raise ValueError("control_rollout_mode must be 'reference_consistent' or 'zero_centered'.")
 
-        embedding_id = embedding_id or embedding_id_for_measure_key(measure_key)
+        if embedding_id is None:
+            mapping = trajectory.metadata.get("measure_to_embedding", {})
+            embedding_id = str(mapping.get(measure_key, embedding_id_for_measure_key(measure_key)))
         if embedding_id not in self.model.perturbation_ids:
             raise KeyError(f"Model is missing embedding id {embedding_id!r}.")
         if source_label not in trajectory.measures or measure_key not in trajectory.measures[source_label]:
@@ -151,7 +144,8 @@ class TrajectoryCounterfactualEngine:
             tau_start=tau_start,
             tau_end=tau_end,
             tau_grid=tau_grid,
-            perturbation_ids=[embedding_id],
+            perturbation_ids=[str(measure_key)],
+            embedding_ids=[embedding_id],
             noise_steps=noise_steps,
         )
         with _control_embedding_context(self.model, embedding_id, mode=control_rollout_mode):
@@ -163,7 +157,8 @@ class TrajectoryCounterfactualEngine:
                 tau_start=tau_start,
                 tau_end=tau_end,
                 tau_grid=tau_grid,
-                perturbation_ids=[embedding_id],
+                perturbation_ids=[str(measure_key)],
+                embedding_ids=[embedding_id],
                 noise_steps=noise_steps,
             )
 
@@ -177,7 +172,8 @@ class TrajectoryCounterfactualEngine:
                 z0=z0,
                 logw0=logw0,
                 log_m0=log_m0,
-                perturbation_ids=[embedding_id],
+                perturbation_ids=[str(measure_key)],
+                embedding_ids=[embedding_id],
                 context_steps=reference.context_steps,
                 tau_start=tau_start,
                 tau_end=tau_end,
@@ -190,7 +186,8 @@ class TrajectoryCounterfactualEngine:
                     z0=z0.clone(),
                     logw0=logw0.clone(),
                     log_m0=log_m0.clone(),
-                    perturbation_ids=[embedding_id],
+                    perturbation_ids=[str(measure_key)],
+                    embedding_ids=[embedding_id],
                     context_steps=reference.context_steps,
                     tau_start=tau_start,
                     tau_end=tau_end,
@@ -222,8 +219,8 @@ class TrajectoryCounterfactualEngine:
             metrics_by_time=metrics,
         )
 
+    @staticmethod
     def _metrics_by_time(
-        self,
         *,
         measure_key: MeasureKey,
         embedding_id: str,
@@ -235,6 +232,10 @@ class TrajectoryCounterfactualEngine:
         factual_clamped: ParticleRollout | None,
     ) -> pd.DataFrame:
         rows = []
+        if isinstance(measure_key, tuple):
+            sample_id, guide_id = measure_key
+        else:
+            sample_id, guide_id = "", str(measure_key)
         for label in target_labels:
             idx = checkpoint_indices[label]
             log_mass_f = factual.log_m0[0] + torch.logsumexp(factual.logw_steps[idx, 0], dim=0)
@@ -258,7 +259,12 @@ class TrajectoryCounterfactualEngine:
             rows.append(
                 {
                     "measure_key": str(measure_key),
+                    "sample_id": str(sample_id),
+                    "guide_id": str(guide_id),
+                    "perturbation_id": str(guide_id),
                     "embedding_id": embedding_id,
+                    "target_gene": embedding_id,
+                    "context_group_id": str(sample_id) if sample_id else "__global__",
                     "source_label": source_label,
                     "target_label": label,
                     "tau": float(factual.tau_steps[idx].detach().cpu()),

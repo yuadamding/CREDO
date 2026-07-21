@@ -35,6 +35,7 @@ from .single_time import (
     build_single_time_problem_from_anndata,
 )
 from .trajectory_view import TrajectoryLike, TrajectoryView, embedding_id_for_measure_key
+from .gse314342 import LateTimeResolution
 from .hnscc import (
     DEFAULT_RANDOM_STRATIFY_COLS,
     DEFAULT_STATE_KEY,
@@ -77,6 +78,7 @@ __all__ = [
     "ExpressionLatentResult",
     "HNSCCSplitResult",
     "LatentTransform",
+    "LateTimeResolution",
     "MassTable",
     "MeasureKey",
     "POOLED_SAMPLE_ID",

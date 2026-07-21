@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 from typing import Dict, Sequence
 
 import torch
@@ -100,11 +101,53 @@ class TrajectoryView:
 
     @property
     def embedding_ids(self) -> dict[MeasureKey, str]:
-        return {key: embedding_id_for_measure_key(key) for key in self.source_keys}
+        return {key: self.embedding_id(key) for key in self.source_keys}
 
     @property
     def embedding_id_list(self) -> list[str]:
-        return [embedding_id_for_measure_key(key) for key in self.source_keys]
+        return [self.embedding_id(key) for key in self.source_keys]
+
+    def _mapped_value(self, mapping_name: str, key: MeasureKey, fallback: str) -> str:
+        mapping = self.trajectory.metadata.get(mapping_name, {})
+        if not isinstance(mapping, dict):
+            raise TypeError(f"trajectory.metadata[{mapping_name!r}] must be a mapping.")
+        return str(mapping.get(key, fallback))
+
+    def embedding_id(self, key: MeasureKey) -> str:
+        """Return the model embedding id for an observed finite-measure key."""
+        return self._mapped_value(
+            "measure_to_embedding",
+            key,
+            embedding_id_for_measure_key(key),
+        )
+
+    def guide_id(self, key: MeasureKey) -> str:
+        return self._mapped_value(
+            "measure_to_guide",
+            key,
+            embedding_id_for_measure_key(key),
+        )
+
+    def target_gene(self, key: MeasureKey) -> str:
+        return self._mapped_value("measure_to_target_gene", key, self.embedding_id(key))
+
+    def context_group(self, key: MeasureKey) -> str:
+        fallback = str(key[0]) if isinstance(key, tuple) else "__global__"
+        return self._mapped_value("measure_to_context_group", key, fallback)
+
+    @property
+    def control_measure_keys(self) -> list[MeasureKey]:
+        configured = self.trajectory.metadata.get("control_measure_keys")
+        if configured is not None:
+            configured_set = set(configured)
+            return [key for key in self.source_keys if key in configured_set]
+        controls = set(self.trajectory.catalog.control_ids)
+        return [
+            key
+            for key in self.source_keys
+            if self.embedding_id(key) in controls
+            or embedding_id_for_measure_key(key) in controls
+        ]
 
     @property
     def target_keys_by_time(self) -> dict[str, set[MeasureKey]]:
@@ -128,25 +171,54 @@ class TrajectoryView:
         *,
         device: str | torch.device = "cpu",
         dtype: torch.dtype = torch.float32,
+        max_atoms: int | None = None,
+        seed: int = 0,
+        labels: Sequence[str] | None = None,
     ) -> tuple[dict[str, dict[MeasureKey, torch.Tensor]], dict[str, dict[MeasureKey, torch.Tensor]]]:
-        """Return target support/log-weight tensors for every target label."""
-        cache_key = f"{torch.device(device)}:{dtype}"
-        if cache_key in self.target_support_cache:
+        """Return target support/log-weight tensors for selected target labels."""
+        if max_atoms is not None and max_atoms < 1:
+            raise ValueError("max_atoms must be >= 1 when provided.")
+        selected_labels = list(self.target_labels if labels is None else labels)
+        unknown_labels = sorted(set(selected_labels) - set(self.target_labels))
+        if unknown_labels:
+            raise KeyError(f"Unknown target labels: {unknown_labels}")
+        cache_key = (
+            f"{torch.device(device)}:{dtype}:{max_atoms}:{int(seed)}:"
+            f"{','.join(selected_labels)}"
+        )
+        cache_result = max_atoms is None
+        if cache_result and cache_key in self.target_support_cache:
             return self.target_support_cache[cache_key], self.target_logw_cache[cache_key]
 
         target_support: dict[str, dict[MeasureKey, torch.Tensor]] = {}
         target_logw: dict[str, dict[MeasureKey, torch.Tensor]] = {}
-        for label in self.target_labels:
+        for label in selected_labels:
             target_support[label] = {}
             target_logw[label] = {}
             for key in self.active_keys(label):
                 mu = self.trajectory.get(label, key)
                 support, weights = mu.to_torch(device=str(device), dtype=dtype)
+                if max_atoms is not None and support.shape[0] > max_atoms:
+                    digest = hashlib.sha256(
+                        f"{seed}|{label}|{key!r}".encode("utf-8")
+                    ).digest()
+                    local_seed = int.from_bytes(digest[:8], "little") % (2**63 - 1)
+                    generator = torch.Generator(device="cpu")
+                    generator.manual_seed(local_seed)
+                    selected = torch.randperm(support.shape[0], generator=generator)[:max_atoms]
+                    selected = selected.to(device=support.device)
+                    support = support.index_select(0, selected)
+                    weights = weights.index_select(0, selected)
+                    # Endpoint geometry uses conditional weights, while the mass
+                    # term uses their sum. Preserve the original finite mass after
+                    # support subsampling.
+                    weights = weights / weights.sum().clamp_min(1e-30) * float(mu.total_mass)
                 target_support[label][key] = support
                 target_logw[label][key] = torch.log(weights + 1e-30)
 
-        self.target_support_cache[cache_key] = target_support
-        self.target_logw_cache[cache_key] = target_logw
+        if cache_result:
+            self.target_support_cache[cache_key] = target_support
+            self.target_logw_cache[cache_key] = target_logw
         return target_support, target_logw
 
 

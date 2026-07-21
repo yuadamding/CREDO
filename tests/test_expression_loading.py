@@ -9,6 +9,7 @@ import pytest
 import scipy.sparse as sp
 
 from credo.data.hnscc import load_hnscc_expression
+from credo.models.expression_vae import fit_expression_vae
 
 
 pytestmark = pytest.mark.unit
@@ -96,3 +97,28 @@ def test_strict_counts_validate_selected_rows_not_head(tmp_path: Path) -> None:
         allow_full_gene_scan=True,
         n_workers=0,
     )
+
+
+def test_vae_checkpoint_selection_waits_for_kl_warmup() -> None:
+    matrix = np.zeros((32, 4), dtype=np.float32)
+    _, history, summary = fit_expression_vae(
+        matrix,
+        latent_dim=2,
+        hidden_dim=4,
+        depth=1,
+        dropout=0.0,
+        epochs=4,
+        batch_size=8,
+        learning_rate=0.0,
+        kl_weight=1.0,
+        kl_warmup_epochs=3,
+        val_frac=0.25,
+        early_stop_patience=1,
+        seed=7,
+        device="cpu",
+        use_amp=False,
+    )
+
+    assert history.loc[history["epoch"].lt(3), "selection_eligible"].eq(False).all()
+    assert history.loc[history["epoch"].ge(3), "selection_eligible"].eq(True).all()
+    assert summary.best_epoch >= 3

@@ -1,0 +1,8 @@
+{
+  "description": "Two-sweep numerical smoke test; supply a pre-subset D3 pilot support file.",
+  "args": [
+    "--epochs", "2",
+    "--n-particles", "32",
+    "--eval-particles", "128"
+  ]
+}

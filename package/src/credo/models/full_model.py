@@ -11,7 +11,7 @@ import torch
 import torch.nn as nn
 
 from .embeddings import PerturbationEmbedding, TimeEmbedding
-from .context import ContextAggregator, ContextState
+from .context import ContextAggregator, ContextState, ZeroContextAggregator
 from .coefficients import CoefficientNetworks, Coefficients
 from .causal_context import CausalEcologicalAttentionContext
 from .transformer_context import MassAwareTransformerContextAggregator
@@ -62,7 +62,7 @@ class FullDynamicsModel(nn.Module):
         program_assignment_scale: float = 1.0,
         control_mode: str = "soft_ref",
         control_ref_penalty: float = 5e-4,
-        context_kind: Literal["mlp", "transformer", "causal_attention"] = "mlp",
+        context_kind: Literal["none", "mlp", "transformer", "causal_attention"] = "mlp",
         transformer_token_dim: int = 64,
         transformer_heads: int = 4,
         transformer_within_layers: int = 1,
@@ -85,6 +85,11 @@ class FullDynamicsModel(nn.Module):
         self.control_ids = set(control_ids)
         self.control_mode = control_mode
         self.context_kind = context_kind
+        if context_kind == "none" and ecological_growth:
+            raise ValueError(
+                "context_kind='none' is incompatible with ecological_growth=True; "
+                "the ecological payoff requires a population context."
+            )
         if context_kind == "causal_attention" and not causal_sparse_edges:
             raise ValueError(
                 "causal_attention requires causal_sparse_edges=True. "
@@ -123,7 +128,18 @@ class FullDynamicsModel(nn.Module):
             shared_guide_embedding=shared_guide_embedding,
         )
 
-        if context_kind == "mlp":
+        if context_kind == "none":
+            self.context_agg = ZeroContextAggregator(
+                latent_dim=latent_dim,
+                n_programs=self.n_programs,
+                mediator_dim=mediator_dim,
+                hidden_dim=hidden_dim,
+                fixed_program_centroids=program_centroids,
+                program_assignment_scale=program_assignment_scale,
+                activation_checkpointing=activation_checkpointing,
+            )
+            self.meanfield_context_agg = None
+        elif context_kind == "mlp":
             self.context_agg = ContextAggregator(
                 latent_dim=latent_dim,
                 n_programs=self.n_programs,
@@ -279,8 +295,10 @@ class FullDynamicsModel(nn.Module):
         if not torch.is_tensor(context):
             raise TypeError("context_override must be a ContextState, dict, or torch.Tensor.")
         context = context.to(device=z.device, dtype=z.dtype)
-        if context.ndim != 1:
-            raise ValueError("Tensor context_override must have shape [context_dim].")
+        if context.ndim not in {1, 2}:
+            raise ValueError("Tensor context_override must have shape [context_dim] or [G, context_dim].")
+        if context.ndim == 2 and context.shape[0] != z.shape[0]:
+            raise ValueError("Group-specific context_override must have one row per measure key.")
         expected = self.n_programs + self.mediator_dim
         if q is None or s is None:
             if context.shape[-1] != expected:
@@ -288,8 +306,8 @@ class FullDynamicsModel(nn.Module):
                     "Tensor context_override without explicit q/s requires identity context "
                     f"width {expected}, got {context.shape[-1]}."
                 )
-            q = context[: self.n_programs]
-            s = context[self.n_programs :]
+            q = context[..., : self.n_programs]
+            s = context[..., self.n_programs :]
         q = q.to(device=z.device, dtype=z.dtype) if torch.is_tensor(q) else torch.as_tensor(q, device=z.device, dtype=z.dtype)
         s = s.to(device=z.device, dtype=z.dtype) if torch.is_tensor(s) else torch.as_tensor(s, device=z.device, dtype=z.dtype)
         if base_context is not None:
@@ -327,6 +345,7 @@ class FullDynamicsModel(nn.Module):
         embedding_ids: Optional[List[str]] = None,
         intervention: Optional[CausalAttentionIntervention] = None,
         context_override: Any = None,
+        context_group_index: Optional[torch.Tensor] = None,
     ) -> Tuple[Coefficients, ContextState]:
         """One step of the dynamics: compute context and coefficients."""
         pids = perturbation_ids or self.perturbation_ids
@@ -346,18 +365,38 @@ class FullDynamicsModel(nn.Module):
                 log_m0=log_m0,
                 tau=tau,
             )
-        elif self.context_kind == "causal_attention":
+        elif self.context_kind in {"causal_attention", "transformer"}:
+            if context_group_index is not None:
+                raise NotImplementedError(
+                    f"Grouped {self.context_kind} context is not implemented."
+                )
+            if self.context_kind == "transformer":
+                ctx_state = self.context_agg(
+                    z,
+                    logw,
+                    a,
+                    log_m0,
+                    tau=tau,
+                )
+            else:
+                ctx_state = self.context_agg(
+                    z,
+                    logw,
+                    a,
+                    log_m0,
+                    tau=tau,
+                    residual=delta,
+                    intervention=intervention,
+                )
+        else:
             ctx_state = self.context_agg(
                 z,
                 logw,
                 a,
                 log_m0,
                 tau=tau,
-                residual=delta,
-                intervention=intervention,
+                context_group_index=context_group_index,
             )
-        else:
-            ctx_state = self.context_agg(z, logw, a, log_m0, tau=tau)
         ctx = ctx_state.context    # [C]
         base_context = getattr(ctx_state, "base_context", None)
         if base_context is None:
@@ -366,15 +405,24 @@ class FullDynamicsModel(nn.Module):
         if self.context_kind == "causal_attention" and not self.causal_growth_only and growth_context is not None:
             base_context = growth_context
         if context_override is None and self.transformer_growth_only and self.meanfield_context_agg is not None:
-            base_state = self.meanfield_context_agg(z, logw, a, log_m0, tau=tau)
+            base_state = self.meanfield_context_agg(
+                z,
+                logw,
+                a,
+                log_m0,
+                tau=tau,
+                context_group_index=context_group_index,
+            )
             base_context = base_state.context
             if growth_context is None:
                 growth_context = ctx
         ctx_state.base_context = base_context
         ctx_state.growth_context = growth_context if growth_context is not None else base_context
 
-        # Get program scores for ecology (if enabled)
-        eta_z, _ = self.context_agg.encode_particles(z)   # [G, N, K]
+        # Program scores are otherwise unused and expensive at particle scale.
+        eta_z = None
+        if self.coeff_nets.ecological_growth:
+            eta_z, _ = self.context_agg.encode_particles(z)   # [G, N, K]
         q = ctx_state.q                             # [K]
         s = ctx_state.s                             # [L]
 

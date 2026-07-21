@@ -377,6 +377,8 @@ def build_single_time_problem_from_anndata(
     adata_or_path: Any,
     *,
     latent_key: str = "X_pca",
+    snapshot_col: str | None = None,
+    snapshot_value: object | None = None,
     perturbation_col: str = "perturbation_id",
     guide_col: str | None = "guide_id",
     target_gene_col: str | None = "target_gene",
@@ -397,6 +399,8 @@ def build_single_time_problem_from_anndata(
     """Build a :class:`SingleTimeProblem` from an AnnData object or path."""
     import anndata as ad
 
+    if (snapshot_col is None) != (snapshot_value is None):
+        raise ValueError("snapshot_col and snapshot_value must be provided together.")
     if mass_mode not in {"cell_count", "unit_mass", "obs_column", "unavailable"}:
         raise ValueError("Invalid single-time mass_mode.")
     if mass_mode == "obs_column" and not mass_value_col:
@@ -422,20 +426,29 @@ def build_single_time_problem_from_anndata(
         adata = adata_or_path
     if latent_key not in adata.obsm:
         raise KeyError(f"AnnData missing obsm[{latent_key!r}].")
-    latent = np.asarray(adata.obsm[latent_key])
-    if latent.ndim != 2 or latent.shape[0] != adata.n_obs:
+    obs_source = adata.obs
+    row_mask: np.ndarray | slice = slice(None)
+    if snapshot_col is not None:
+        if snapshot_col not in obs_source:
+            raise KeyError(f"AnnData obs missing snapshot column {snapshot_col!r}.")
+        row_mask = obs_source[snapshot_col].astype(str).eq(str(snapshot_value)).to_numpy()
+        if not bool(row_mask.any()):
+            raise ValueError(f"No AnnData rows match {snapshot_col}={snapshot_value!r}.")
+        obs_source = obs_source.loc[row_mask]
+    latent = np.asarray(adata.obsm[latent_key][row_mask])
+    if latent.ndim != 2 or latent.shape[0] != len(obs_source):
         raise ValueError(f"AnnData obsm[{latent_key!r}] must have shape [n_obs, latent_dim].")
     if not np.isfinite(latent).all():
         raise ValueError(f"AnnData obsm[{latent_key!r}] contains non-finite values.")
 
     obs = _normalise_single_time_obs(
-        adata.obs,
+        obs_source,
         perturbation_col=perturbation_col,
         control_col=control_col,
-        sample_col=sample_col if sample_col in adata.obs else None,
-        batch_col=batch_col if batch_col in adata.obs else None,
-        guide_col=guide_col if guide_col is not None and guide_col in adata.obs else None,
-        target_gene_col=target_gene_col if target_gene_col is not None and target_gene_col in adata.obs else None,
+        sample_col=sample_col if sample_col in obs_source else None,
+        batch_col=batch_col if batch_col in obs_source else None,
+        guide_col=guide_col if guide_col is not None and guide_col in obs_source else None,
+        target_gene_col=target_gene_col if target_gene_col is not None and target_gene_col in obs_source else None,
     )
     if "sample_id" not in obs and "batch_id" not in obs:
         raise ValueError("Single-time AnnData requires obs['sample_id'] or obs['batch_id'].")
@@ -557,6 +570,12 @@ def build_single_time_problem_from_anndata(
     catalog = PerturbationCatalog(catalog_ids, sorted(control_embedding_ids))
     problem_metadata = dict(metadata or {})
     problem_metadata["view_key_level"] = view_key_level
+    if snapshot_col is not None:
+        problem_metadata["snapshot_filter"] = {
+            "column": str(snapshot_col),
+            "value": str(snapshot_value),
+            "n_cells": int(len(obs)),
+        }
     if mass_claim_grade != "auto":
         problem_metadata["mass_claim_grade"] = mass_claim_grade
     return SingleTimeProblem(

@@ -190,9 +190,13 @@ class ContextAggregator(nn.Module):
         a: torch.Tensor,     # [G, r]  perturbation embeddings (unused here, for API compat.)
         log_m0: torch.Tensor,  # [G]  log initial mass per perturbation
         tau: torch.Tensor | float | None = None,  # accepted for transformer-compatible API
+        context_group_index: Optional[torch.Tensor] = None,
     ) -> ContextState:
         stats, _, _ = self.summarize_groups(z, logw, log_m0)
-        return self.context_from_group_statistics(stats)
+        return self.context_from_group_statistics(
+            stats,
+            context_group_index=context_group_index,
+        )
 
     def encode_particles(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Encode particles into latent programs and mediator features."""
@@ -221,8 +225,42 @@ class ContextAggregator(nn.Module):
 
         return GroupStatistics(log_n_g=log_n_g, eta_g=eta_g, phi_g=phi_g), eta, phi
 
-    def context_from_group_statistics(self, stats: GroupStatistics) -> ContextState:
-        """Build the global context from per-group summaries."""
+    def context_from_group_statistics(
+        self,
+        stats: GroupStatistics,
+        context_group_index: Optional[torch.Tensor] = None,
+    ) -> ContextState:
+        """Build global or independently grouped contexts from key summaries."""
+        if context_group_index is not None:
+            group_index = context_group_index.to(
+                device=stats.log_n_g.device,
+                dtype=torch.long,
+            )
+            if group_index.ndim != 1 or group_index.shape[0] != stats.log_n_g.shape[0]:
+                raise ValueError("context_group_index must have shape [G].")
+            _, inverse = torch.unique(group_index, sorted=True, return_inverse=True)
+            n_groups = int(inverse.max().item()) + 1
+            log_total_by_group = torch.stack(
+                [torch.logsumexp(stats.log_n_g[inverse == idx], dim=0) for idx in range(n_groups)]
+            )
+            log_freq_g = stats.log_n_g - log_total_by_group[inverse]
+            freq_g = log_freq_g.exp()
+            q_by_group = stats.eta_g.new_zeros((n_groups, self.n_programs))
+            s_by_group = stats.phi_g.new_zeros((n_groups, self.mediator_dim))
+            q_by_group.index_add_(0, inverse, freq_g.unsqueeze(-1) * stats.eta_g)
+            s_by_group.index_add_(0, inverse, freq_g.unsqueeze(-1) * stats.phi_g)
+            qs_by_group = torch.cat([q_by_group, s_by_group], dim=-1)
+            context_by_group = qs_by_group if self.use_identity_context else self.psi(qs_by_group)
+            return ContextState(
+                q=q_by_group[inverse],
+                s=s_by_group[inverse],
+                context=context_by_group[inverse],
+                mass_g=torch.exp(torch.clamp(stats.log_n_g, min=-30.0, max=30.0)),
+                freq_g=freq_g,
+                log_mass_g=stats.log_n_g,
+                log_total_mass=log_total_by_group,
+            )
+
         log_n_total = torch.logsumexp(stats.log_n_g, dim=0)
         log_freq_g = stats.log_n_g - log_n_total
         freq_g = log_freq_g.exp()      # [G]
@@ -245,4 +283,76 @@ class ContextAggregator(nn.Module):
             freq_g=freq_g,
             log_mass_g=stats.log_n_g,
             log_total_mass=log_n_total,
+        )
+
+
+class ZeroContextAggregator(nn.Module):
+    """Context backend for intrinsic dynamics with no population conditioning."""
+
+    def __init__(
+        self,
+        latent_dim: int,
+        n_programs: int,
+        mediator_dim: int,
+        *,
+        hidden_dim: int = 64,
+        fixed_program_centroids: Optional[torch.Tensor] = None,
+        program_assignment_scale: float = 1.0,
+        activation_checkpointing: bool = False,
+    ) -> None:
+        super().__init__()
+        self.encoder = ProgramEncoder(
+            latent_dim,
+            n_programs,
+            mediator_dim,
+            hidden_dim,
+            fixed_centroids=fixed_program_centroids,
+            assignment_scale=program_assignment_scale,
+            activation_checkpointing=activation_checkpointing,
+        )
+        self.n_programs = self.encoder.n_programs
+        self.mediator_dim = int(mediator_dim)
+        self.context_dim = self.n_programs + self.mediator_dim
+
+    def encode_particles(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.encoder.eta(z), self.encoder.phi(z)
+
+    def forward(
+        self,
+        z: torch.Tensor,
+        logw: torch.Tensor,
+        a: torch.Tensor,
+        log_m0: torch.Tensor,
+        tau: torch.Tensor | float | None = None,
+        context_group_index: Optional[torch.Tensor] = None,
+    ) -> ContextState:
+        del a, tau
+        group_count = z.shape[0]
+        log_mass_g = log_m0 + torch.logsumexp(logw, dim=-1)
+        if context_group_index is None:
+            log_total = torch.logsumexp(log_mass_g, dim=0)
+            freq_g = torch.exp(log_mass_g - log_total)
+        else:
+            raw = context_group_index.to(device=z.device, dtype=torch.long)
+            if raw.ndim != 1 or raw.shape[0] != group_count:
+                raise ValueError("context_group_index must have shape [G].")
+            _, inverse = torch.unique(raw, sorted=True, return_inverse=True)
+            totals = torch.stack(
+                [torch.logsumexp(log_mass_g[inverse == idx], dim=0) for idx in range(int(inverse.max()) + 1)]
+            )
+            freq_g = torch.exp(log_mass_g - totals[inverse])
+            log_total = totals
+        q = z.new_zeros((group_count, self.n_programs))
+        s = z.new_zeros((group_count, self.mediator_dim))
+        context = z.new_zeros((group_count, self.context_dim))
+        return ContextState(
+            q=q,
+            s=s,
+            context=context,
+            mass_g=torch.exp(torch.clamp(log_mass_g, min=-30.0, max=30.0)),
+            freq_g=freq_g,
+            log_mass_g=log_mass_g,
+            log_total_mass=log_total,
+            base_context=context,
+            growth_context=context,
         )

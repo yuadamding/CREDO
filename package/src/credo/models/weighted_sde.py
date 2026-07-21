@@ -147,6 +147,7 @@ class WeightedParticleSimulator(nn.Module):
         return_noise_used: bool = False,
         intervention: Optional[object] = None,
         context_override: Any = None,
+        context_group_index: Optional[torch.Tensor] = None,
         terminal_only: bool = False,
     ) -> ParticleRollout:
         """Run the full Euler-Maruyama rollout.
@@ -249,7 +250,19 @@ class WeightedParticleSimulator(nn.Module):
                 step_kwargs["embedding_ids"] = embedding_ids
             if intervention is not None:
                 step_kwargs["intervention"] = intervention
-            selected_context_override = self._context_override_at_step(context_override, k)
+            if context_group_index is not None:
+                step_kwargs["context_group_index"] = context_group_index
+            if callable(context_override):
+                selected_context_override = context_override(
+                    step_index=k,
+                    z=z,
+                    logw=logw,
+                    log_m0=log_m0,
+                    tau=tau_k,
+                    model=model,
+                )
+            else:
+                selected_context_override = self._context_override_at_step(context_override, k)
             if selected_context_override is not None:
                 step_kwargs["context_override"] = selected_context_override
             coeffs, ctx = model.step(**step_kwargs)

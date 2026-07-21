@@ -854,6 +854,11 @@ class PerturbSeqDynamicsData:
         n = cells.n_cells
         if n <= 0:
             raise ValueError(f"No cells for ({perturbation_id}, {time_label}, {sample_id})")
+        atom_weights = np.ones(n, dtype=float)
+        if "atom_weight" in cells.df.columns:
+            atom_weights = pd.to_numeric(cells.df["atom_weight"], errors="coerce").to_numpy(dtype=float)
+            if not np.isfinite(atom_weights).all() or np.any(atom_weights <= 0):
+                raise ValueError("atom_weight values must be positive and finite.")
 
         if is_pooled_sample_id(sample_id):
             mass_rows = self.mass_table.df[
@@ -866,7 +871,7 @@ class PerturbSeqDynamicsData:
             support = cells.latent.copy()
             if has_explicit_pooled:
                 total_mass = self.mass_table.get_pooled(perturbation_id, time_label)
-                weights = np.full(n, total_mass / n)
+                weights = total_mass * atom_weights / atom_weights.sum()
                 return FiniteMeasure(support=support, weights=weights, total_mass=total_mass)
 
             # If pooled geometry is built from sample-specific mass rows, keep
@@ -878,7 +883,7 @@ class PerturbSeqDynamicsData:
             for sid in sorted(set(sample_ids)):
                 mask = sample_ids == sid
                 mass_s = self.mass_table.get(perturbation_id, time_label, sid)
-                weights[mask] = mass_s / float(mask.sum())
+                weights[mask] = mass_s * atom_weights[mask] / atom_weights[mask].sum()
                 total_mass += mass_s
             return FiniteMeasure(support=support, weights=weights, total_mass=total_mass)
         else:
@@ -896,8 +901,65 @@ class PerturbSeqDynamicsData:
                     ) from exc
 
         support = cells.latent.copy()
-        weights = np.full(n, total_mass / n)
+        weights = total_mass * atom_weights / atom_weights.sum()
         return FiniteMeasure(support=support, weights=weights, total_mass=total_mass)
+
+    def _trajectory_measure_metadata(
+        self,
+        keys: Sequence[MeasureKey],
+    ) -> Dict[str, Any]:
+        """Propagate cohort annotations from cell rows to finite-measure keys."""
+        column_to_mapping = {
+            "embedding_id": "measure_to_embedding",
+            "guide_id": "measure_to_guide",
+            "target_gene": "measure_to_target_gene",
+            "context_group_id": "measure_to_context_group",
+            "view_id": "measure_to_view_id",
+        }
+        available = {
+            column: mapping_name
+            for column, mapping_name in column_to_mapping.items()
+            if column in self.cell_state.df.columns
+        }
+        metadata: Dict[str, Any] = {mapping_name: {} for mapping_name in available.values()}
+        control_keys: list[MeasureKey] = []
+        frame = self.cell_state.df
+        by_sample = all(isinstance(key, tuple) for key in keys)
+        if not by_sample and any(isinstance(key, tuple) for key in keys):
+            raise TypeError("Trajectory measure keys must be uniformly pooled or sample-aware.")
+        key_set = set(keys)
+        group_columns = ["sample_id", "perturbation_id"] if by_sample else "perturbation_id"
+        seen: set[MeasureKey] = set()
+        for raw_key, rows in frame.groupby(group_columns, observed=True, sort=False):
+            if by_sample:
+                sample_id, perturbation_id = raw_key
+                key: MeasureKey = (str(sample_id), str(perturbation_id))
+            else:
+                perturbation_id = str(raw_key)
+                key = perturbation_id
+            if key not in key_set:
+                continue
+            seen.add(key)
+            for column, mapping_name in available.items():
+                values = rows[column].dropna().astype(str).unique().tolist()
+                if len(values) != 1:
+                    raise ValueError(
+                        f"Expected one {column!r} value for trajectory key {key!r}, got {values[:5]!r}."
+                    )
+                metadata[mapping_name][key] = values[0]
+            is_control = self.catalog.is_control(perturbation_id)
+            if "is_control" in rows.columns:
+                values = rows["is_control"].astype(bool).unique().tolist()
+                if len(values) != 1:
+                    raise ValueError(f"Inconsistent is_control values for trajectory key {key!r}.")
+                is_control = bool(values[0])
+            if is_control:
+                control_keys.append(key)
+        missing = key_set - seen
+        if missing:
+            raise ValueError(f"No cell metadata rows for trajectory keys: {sorted(missing, key=str)[:5]!r}.")
+        metadata["control_measure_keys"] = control_keys
+        return metadata
 
     def to_endpoint_problem(
         self,
@@ -990,16 +1052,18 @@ class PerturbSeqDynamicsData:
                 else:
                     measures[label][key] = self.build_measure(str(key), label)
 
+        trajectory_metadata = {
+            "latent_dim": self.latent_dim,
+            "by_sample": by_sample,
+            "require_all_times": require_all_times,
+        }
+        trajectory_metadata.update(self._trajectory_measure_metadata(keys))
         return TrajectoryProblem(
             measures=measures,
             catalog=self.catalog,
             time_axis=self.time_axis,
             time_labels=labels,
-            metadata={
-                "latent_dim": self.latent_dim,
-                "by_sample": by_sample,
-                "require_all_times": require_all_times,
-            },
+            metadata=trajectory_metadata,
         )
 
     def to_sparse_trajectory_problem(
@@ -1046,16 +1110,22 @@ class PerturbSeqDynamicsData:
                     if has_cells(str(pid), label):
                         measures[label][str(pid)] = self.build_measure(str(pid), label)
 
+        all_keys = sorted(
+            {key for time_measures in measures.values() for key in time_measures},
+            key=str,
+        )
+        trajectory_metadata = {
+            "latent_dim": self.latent_dim,
+            "by_sample": by_sample,
+            "require_all_times": False,
+        }
+        trajectory_metadata.update(self._trajectory_measure_metadata(all_keys))
         return SparseTrajectoryProblem(
             measures=measures,
             catalog=self.catalog,
             time_axis=self.time_axis,
             time_labels=labels,
-            metadata={
-                "latent_dim": self.latent_dim,
-                "by_sample": by_sample,
-                "require_all_times": False,
-            },
+            metadata=trajectory_metadata,
         )
 
     def summary(self) -> pd.DataFrame:

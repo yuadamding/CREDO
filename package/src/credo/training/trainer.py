@@ -143,6 +143,13 @@ class WarmupCosineScheduler(torch.optim.lr_scheduler._LRScheduler):
 # Training history
 # ---------------------------------------------------------------------------
 
+def _history_dataframe(history: object, aliases: dict[str, str]) -> pd.DataFrame:
+    fields = getattr(history, "__dataclass_fields__")
+    return pd.DataFrame(
+        {aliases.get(name, name): getattr(history, name) for name in fields}
+    )
+
+
 @dataclass
 class TrainingHistory:
     epochs: List[int] = field(default_factory=list)
@@ -187,48 +194,7 @@ class TrainingHistory:
     ess_gate_status: List[str] = field(default_factory=list)
 
     def to_dataframe(self) -> pd.DataFrame:
-        return pd.DataFrame({
-            "epoch": self.epochs,
-            "stage": self.stages,
-            "n_active_perturbations": self.n_active_perturbations,
-            "perturbation_batch_size": self.perturbation_batch_size,
-            "loss_total": self.loss_total,
-            "loss_end": self.loss_end,
-            "loss_weak": self.loss_weak,
-            "loss_count": self.loss_count,
-            "loss_reg": self.loss_reg,
-            "loss_causal": self.loss_causal,
-            "loss_extra": self.loss_extra,
-            "context_norm": self.context_norm,
-            "q_entropy": self.q_entropy,
-            "freq_entropy": self.freq_entropy,
-            "within_attention_entropy": self.within_attention_entropy,
-            "group_attention_entropy": self.group_attention_entropy,
-            "within_effective_keys": self.within_effective_keys,
-            "group_effective_keys": self.group_effective_keys,
-            "mass_log_range": self.mass_log_range,
-            "state_to_mediator_effective_keys": self.state_to_mediator_effective_keys,
-            "local_to_global_mediator_effective_keys": self.local_to_global_mediator_effective_keys,
-            "mediator_to_group_effective_keys": self.mediator_to_group_effective_keys,
-            "edge_sparsity": self.edge_sparsity,
-            "effective_edge_mean": self.effective_edge_mean,
-            "baseline_edge_mean": self.baseline_edge_mean,
-            "residual_edge_sparsity_loss": self.residual_edge_sparsity_loss,
-            "edge_entropy": self.edge_entropy,
-            "control_edge_norm": self.control_edge_norm,
-            "mediator_orthogonality": self.mediator_orthogonality,
-            "residual_edge_abs_mean": self.residual_edge_abs_mean,
-            "residual_edge_signed_mean": self.residual_edge_signed_mean,
-            "mediator_usage_entropy": self.mediator_usage_entropy,
-            "mediator_usage_min": self.mediator_usage_min,
-            "mediator_usage_max": self.mediator_usage_max,
-            "terminal_ess_frac_mean": self.terminal_ess_frac_mean,
-            "terminal_ess_frac_min": self.terminal_ess_frac_min,
-            "min_ess_frac_mean": self.min_ess_frac_mean,
-            "max_weight_frac_mean": self.max_weight_frac_mean,
-            "logw_range_max": self.logw_range_max,
-            "ess_gate_status": self.ess_gate_status,
-        })
+        return _history_dataframe(self, {"epochs": "epoch", "stages": "stage"})
 
 
 _DIAGNOSTIC_KEYS = (

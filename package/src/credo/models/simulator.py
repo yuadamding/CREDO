@@ -4,6 +4,7 @@ Also exports helper to initialise particles from an EndpointProblem.
 """
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 import hashlib
 from typing import Dict, List, Literal, Optional, Tuple
@@ -11,7 +12,8 @@ from typing import Dict, List, Literal, Optional, Tuple
 import numpy as np
 import torch
 
-from ..data.core import EndpointProblem, FiniteMeasure, TrajectoryProblem
+from ..data.core import EndpointProblem, FiniteMeasure, MeasureKey
+from ..data.trajectory_view import TrajectoryLike
 from .full_model import FullDynamicsModel
 from .interventions import CausalAttentionIntervention
 from .weighted_sde import WeightedParticleSimulator, ParticleRollout
@@ -41,8 +43,8 @@ def embedding_ids_from_endpoint(endpoint: EndpointProblem, perturbation_ids: Lis
 
 
 def initialise_particles_from_measures(
-    measures: Dict[str, FiniteMeasure],
-    perturbation_ids: List[str],
+    measures: Mapping[MeasureKey, FiniteMeasure],
+    perturbation_ids: Sequence[MeasureKey],
     n_particles: int,
     device: str = "cpu",
     dtype: torch.dtype = torch.float32,
@@ -56,15 +58,23 @@ def initialise_particles_from_measures(
     logw0: [G, N]  relative log-weights, normalised to total 1
     log_m0: [G]
     """
+    if n_particles < 1:
+        raise ValueError("n_particles must be >= 1")
+    keys = list(perturbation_ids)
+    if not keys:
+        raise ValueError("perturbation_ids must not be empty")
+    missing = [key for key in keys if key not in measures]
+    if missing:
+        raise KeyError(f"Missing finite measures for keys: {missing[:5]!r}")
     generator = _make_generator(seed, torch.device(device))
 
-    G = len(perturbation_ids)
-    d = next(iter(measures.values())).latent_dim
+    G = len(keys)
+    d = measures[keys[0]].latent_dim
     z0 = torch.zeros(G, n_particles, d, dtype=dtype, device=device)
     logw0 = torch.zeros(G, n_particles, dtype=dtype, device=device)
     log_m0 = torch.zeros(G, dtype=dtype, device=device)
 
-    for g, pid in enumerate(perturbation_ids):
+    for g, pid in enumerate(keys):
         mu: FiniteMeasure = measures[pid]
         support = torch.tensor(mu.support, dtype=dtype, device=device)  # [n_atoms, d]
         probs = torch.tensor(mu.normalized_weights, dtype=dtype, device=device)
@@ -130,20 +140,17 @@ def initialise_particles(
 
 
 def initialise_particles_from_trajectory(
-    trajectory: TrajectoryProblem,
+    trajectory: TrajectoryLike,
     source_label: str,
-    perturbation_ids: List[str],
+    perturbation_ids: Sequence[MeasureKey],
     n_particles: int,
     device: str = "cpu",
     dtype: torch.dtype = torch.float32,
     seed: Optional[int] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Sample particles from a pooled TrajectoryProblem checkpoint."""
-    measures = trajectory.measures[source_label]
-    if not all(isinstance(key, str) for key in measures):
-        raise ValueError("initialise_particles_from_trajectory expects pooled perturbation-id keys")
+    """Sample particles from pooled or sample-aware trajectory measures."""
     return initialise_particles_from_measures(
-        {str(key): value for key, value in measures.items()},
+        trajectory.measures[source_label],
         perturbation_ids,
         n_particles,
         device=device,
@@ -297,8 +304,8 @@ def rollout_with_clamped_context(
             if growth_context_steps is not None and growth_context.ndim == 1
             else context
         )
-        q = global_ecology_context[:n_programs]
-        s = global_ecology_context[n_programs:]
+        q = global_ecology_context[..., :n_programs]
+        s = global_ecology_context[..., n_programs:]
         a = model.embedding(embed_pids)
         b = model.embedding.growth_intercepts(embed_pids)
         eta_z, _ = model.context_agg.encode_particles(z)

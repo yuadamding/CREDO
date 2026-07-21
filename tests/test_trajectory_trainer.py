@@ -185,6 +185,76 @@ def test_trajectory_trainer_one_epoch_full_start(tmp_path) -> None:
     assert bool(d2_mono_6h["active"].iloc[0]) is False
 
 
+def test_trajectory_trainer_rejects_duplicate_contract_mismatches(tmp_path) -> None:
+    trajectory = _toy_study().to_sparse_trajectory_problem(
+        by_sample=True,
+        time_labels=["90m", "6h", "10h"],
+    )
+    cfg = _tiny_config(tmp_path)
+
+    with pytest.raises(ValueError, match="source_label.*RunConfig"):
+        TrajectoryTrainer(
+            model=_model(),
+            config=cfg,
+            trajectory=trajectory,
+            source_label="6h",
+            target_labels=["10h"],
+            output_dir=str(tmp_path),
+        )
+
+    with pytest.raises(ValueError, match="output_dir.*RunConfig"):
+        TrajectoryTrainer(
+            model=_model(),
+            config=cfg,
+            trajectory=trajectory,
+            output_dir=tmp_path / "different",
+        )
+
+    cfg.model.context_kind = "none"
+    cfg.model.ecological_growth = False
+    cfg.trajectory_training.context_protocol = "none"
+    with pytest.raises(ValueError, match="model context_kind"):
+        TrajectoryTrainer(
+            model=_model(),
+            config=cfg,
+            trajectory=trajectory,
+            source_label="90m",
+            target_labels=["6h", "10h"],
+            output_dir=str(tmp_path),
+        )
+
+
+def test_evaluation_only_checkpoint_is_excluded_from_training_loss(tmp_path) -> None:
+    trajectory = _toy_study().to_sparse_trajectory_problem(
+        by_sample=True,
+        time_labels=["90m", "6h", "10h"],
+    )
+    cfg = _tiny_config(tmp_path)
+    cfg.trajectory_training.evaluation_only_labels = ["6h"]
+    trainer = TrajectoryTrainer(
+        model=_model(),
+        config=cfg,
+        trajectory=trajectory,
+        source_label="90m",
+        target_labels=["6h", "10h"],
+        output_dir=str(tmp_path),
+        ema_decay=0.0,
+    )
+
+    trainer.train()
+
+    assert set(trainer.optimization_checkpoint_indices) == {"10h"}
+    assert set(trainer.evaluation_checkpoint_indices) == {"6h"}
+    predictions = pd.read_csv(tmp_path / "predicted_metrics_by_key_time.csv")
+    heldout = predictions[predictions["time_label"].eq("6h")]
+    assert set(heldout["endpoint_role"]) == {"evaluation_only"}
+    assert not heldout["used_for_training_loss"].astype(bool).any()
+    assert heldout["endpoint_loss"].notna().all()
+    assert (tmp_path / "evaluation_only_metrics_by_key_time.csv").exists()
+    validation = pd.read_csv(tmp_path / "validation_history.csv")
+    assert validation["evaluation_only_6h_loss"].notna().all()
+
+
 def test_trajectory_trainer_rejects_validation_tau_mismatch(tmp_path) -> None:
     study = _toy_study()
     trajectory = study.to_sparse_trajectory_problem(
@@ -253,7 +323,7 @@ def test_trajectory_trainer_records_validation_source(tmp_path) -> None:
     cfg = _tiny_config(tmp_path)
 
     # No validation trajectory -> self-eval on the training view, with a warning
-    # that held-out validation (the configured default) is unavailable.
+    # that held-out validation is unavailable.
     trainer = TrajectoryTrainer(
         model=_model(),
         config=cfg,

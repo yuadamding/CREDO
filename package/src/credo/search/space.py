@@ -146,7 +146,7 @@ class CREDOTrialSpec:
     depth: int = 3
 
     # --- context backend / variant (ABLATION_ONLY) ---
-    context_kind: Literal["mlp", "transformer", "causal_attention"] = "mlp"
+    context_kind: Literal["none", "mlp", "transformer", "causal_attention"] = "mlp"
     causal_token_dim: int = 64
     causal_heads: int = 4
     causal_n_mediators: int = 12

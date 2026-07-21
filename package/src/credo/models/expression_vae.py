@@ -440,8 +440,11 @@ def fit_expression_vae(
     best_epoch = 0
     best_state = None
     patience_counter = 0
+    early_stopped = False
+    max_epochs = max(int(epochs), 1)
+    selection_start_epoch = min(max_epochs, max(int(kl_warmup_epochs), 1))
 
-    for epoch in range(1, max(int(epochs), 1) + 1):
+    for epoch in range(1, max_epochs + 1):
         # --- KL warmup: linear ramp from 0 to kl_weight ---
         if kl_warmup_epochs > 0 and epoch <= kl_warmup_epochs:
             effective_kl_weight = kl_weight * (epoch / kl_warmup_epochs)
@@ -500,6 +503,8 @@ def fit_expression_vae(
 
         # --- Validation ---
         val_loss_avg = float("nan")
+        should_stop = False
+        train_metrics["selection_eligible"] = epoch >= selection_start_epoch
         if n_val > 0:
             model.eval()
             val_loss = torch.zeros((), device=device, dtype=torch.float32)
@@ -531,28 +536,33 @@ def fit_expression_vae(
             train_metrics["val_recon"] = float((val_recon / max(val_seen, 1)).cpu())
             train_metrics["val_kl"] = float((val_kl / max(val_seen, 1)).cpu())
 
-            # --- Early stopping ---
-            if val_loss_avg < best_val_loss:
-                best_val_loss = val_loss_avg
-                best_epoch = epoch
-                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-                patience_counter = 0
-            else:
-                patience_counter += 1
-                if patience_counter >= early_stop_patience:
-                    break
+            # Compare checkpoints only once the KL objective has reached its
+            # final weight. Comparing losses during warmup favors early,
+            # under-regularized checkpoints because the objective itself is
+            # still increasing.
+            if epoch >= selection_start_epoch:
+                if val_loss_avg < best_val_loss:
+                    best_val_loss = val_loss_avg
+                    best_epoch = epoch
+                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    patience_counter = 0
+                else:
+                    patience_counter += 1
+                    should_stop = patience_counter >= early_stop_patience
         else:
             # No validation — track training loss for best model
             tl = train_metrics["loss_total"]
-            if tl < best_val_loss:
+            if epoch >= selection_start_epoch and tl < best_val_loss:
                 best_val_loss = tl
                 best_epoch = epoch
                 best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
 
         history_rows.append(train_metrics)
+        if should_stop:
+            early_stopped = True
+            break
 
     # Restore best model
-    early_stopped = patience_counter >= early_stop_patience
     if best_state is not None:
         model.load_state_dict({k: v.to(device) for k, v in best_state.items()})
 
@@ -564,7 +574,7 @@ def fit_expression_vae(
         n_train_cells=int(n_train),
         n_val_cells=int(n_val),
         epochs_trained=int(len(history)),
-        max_epochs=int(epochs),
+        max_epochs=max_epochs,
         batch_size=int(batch_size),
         device=str(device),
         final_train_loss=float(last_train["loss_total"]),

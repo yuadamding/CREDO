@@ -117,6 +117,39 @@ def test_single_time_does_not_relax_longitudinal_time_axis() -> None:
         TimeAxis(["snapshot"], [0.0])
 
 
+def test_single_time_builder_filters_a_snapshot_from_multitime_anndata() -> None:
+    rest = _single_time_adata()
+    rest.obs["time_label"] = "Rest"
+    stimulated = _single_time_adata()
+    stimulated.obs_names = [f"stim_{name}" for name in stimulated.obs_names]
+    stimulated.obs["cell_id"] = [f"stim_{value}" for value in stimulated.obs["cell_id"]]
+    stimulated.obs["time_label"] = "Stim48hr"
+    stimulated.obsm["X_pca"] = stimulated.obsm["X_pca"] + 100.0
+    data = ad.concat([rest, stimulated])
+
+    problem = build_single_time_problem_from_anndata(
+        data,
+        snapshot_col="time_label",
+        snapshot_value="Rest",
+        reference_scope="sample",
+    )
+
+    assert problem.metadata["snapshot_filter"] == {
+        "column": "time_label",
+        "value": "Rest",
+        "n_cells": 8,
+    }
+    assert all(float(view.target.support.max()) < 10.0 for view in problem.views)
+
+
+def test_single_time_snapshot_filter_requires_column_and_value() -> None:
+    with pytest.raises(ValueError, match="provided together"):
+        build_single_time_problem_from_anndata(
+            _single_time_adata(),
+            snapshot_col="time_label",
+        )
+
+
 def test_single_time_schema_profile_accepts_snapshot_with_sample_id(tmp_path) -> None:
     path = tmp_path / "single_time.h5ad"
     _single_time_adata().write_h5ad(path)

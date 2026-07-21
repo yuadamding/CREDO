@@ -74,24 +74,37 @@ class EcologicalPayoff(nn.Module):
         """
         K = self.n_programs
 
-        # Baseline Pq contribution from P0
-        Pq_base = self.P0 @ q                             # [K]
-        phi = torch.einsum("gnk, k -> gn", eta_z, Pq_base)  # [G, N]
+        if q.ndim == 1:
+            Pq_base = self.P0 @ q
+            phi = torch.einsum("gnk,k->gn", eta_z, Pq_base)
+        elif q.ndim == 2 and q.shape[0] == eta_z.shape[0]:
+            Pq_base = torch.einsum("kj,gj->gk", self.P0, q)
+            phi = torch.einsum("gnk,gk->gn", eta_z, Pq_base)
+        else:
+            raise ValueError("q must have shape [K] or [G, K].")
 
         if self.P_pert is not None and self.actual_ranks > 0:
             r = self.actual_ranks
             a_trunc = a_g[:, :r]                          # [G, r]
 
-            # P_m to use (optionally mediator-conditioned)
-            P_m = self.P_pert                              # [r, K, K]
-            if self.mediator_net is not None and s is not None:
-                delta = self.mediator_net(s).reshape(r, K, K)
-                P_m = P_m + delta
-
             # Per-perturbation Pq from P_pert: [G, K]
             # P_m[m] @ q  -> [r, K];  sum over m with a_g weights -> [G, K]
-            Pm_q = torch.einsum("rkj, j -> rk", P_m, q)      # [r, K]
-            Pq_pert = torch.einsum("gr, rk -> gk", a_trunc, Pm_q)  # [G, K]
+            if q.ndim == 1:
+                P_m = self.P_pert
+                if self.mediator_net is not None and s is not None:
+                    if s.ndim != 1:
+                        raise ValueError("Global q requires global s with shape [L].")
+                    P_m = P_m + self.mediator_net(s).reshape(r, K, K)
+                Pm_q = torch.einsum("rkj,j->rk", P_m, q)
+                Pq_pert = torch.einsum("gr,rk->gk", a_trunc, Pm_q)
+            else:
+                P_m = self.P_pert.unsqueeze(0).expand(q.shape[0], -1, -1, -1)
+                if self.mediator_net is not None and s is not None:
+                    if s.ndim != 2 or s.shape[0] != q.shape[0]:
+                        raise ValueError("Grouped q requires grouped s with shape [G, L].")
+                    P_m = P_m + self.mediator_net(s).reshape(q.shape[0], r, K, K)
+                Pm_q = torch.einsum("grkj,gj->grk", P_m, q)
+                Pq_pert = torch.einsum("gr,grk->gk", a_trunc, Pm_q)
 
             # Add perturbation contribution: [G, N]
             phi = phi + torch.einsum("gnk, gk -> gn", eta_z, Pq_pert)

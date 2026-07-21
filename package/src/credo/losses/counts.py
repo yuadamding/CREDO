@@ -14,10 +14,105 @@ where r_bar_g = E_{p_g}[r_g] = sum_i w_norm_i r_i.
 """
 from __future__ import annotations
 
-from typing import Dict, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, Iterable, Optional, Tuple
 
 import torch
 import torch.nn as nn
+
+
+@dataclass(frozen=True)
+class CountBlock:
+    """One donor/context-group compositional count observation."""
+
+    context_group_id: str
+    time_label: str
+    key_indices: torch.Tensor
+    exposure: torch.Tensor
+    counts: torch.Tensor
+    n_total: torch.Tensor
+
+    def __post_init__(self) -> None:
+        key_indices = torch.as_tensor(self.key_indices, dtype=torch.long).reshape(-1)
+        exposure = torch.as_tensor(self.exposure, dtype=torch.float32).reshape(-1)
+        counts = torch.as_tensor(self.counts, dtype=torch.float32).reshape(-1)
+        n_total = torch.as_tensor(self.n_total, dtype=torch.float32).reshape(())
+        if not (len(key_indices) == len(exposure) == len(counts)):
+            raise ValueError("CountBlock key_indices, exposure, and counts must have equal length.")
+        if len(key_indices) < 1:
+            raise ValueError("CountBlock must contain at least one key.")
+        if len(torch.unique(key_indices)) != len(key_indices) or torch.any(key_indices < 0):
+            raise ValueError("CountBlock key_indices must be unique and nonnegative.")
+        if not torch.isfinite(exposure).all() or torch.any(exposure <= 0):
+            raise ValueError("CountBlock exposure must be positive and finite.")
+        _validate_count_matrix(counts.unsqueeze(0), require_integer=True)
+        if not torch.isclose(counts.sum(), n_total, rtol=1e-5, atol=1e-5):
+            raise ValueError("CountBlock n_total must equal counts.sum().")
+        object.__setattr__(self, "key_indices", key_indices)
+        object.__setattr__(self, "exposure", exposure)
+        object.__setattr__(self, "counts", counts)
+        object.__setattr__(self, "n_total", n_total)
+
+
+class FitnessBank:
+    """Detached genome-wide integrated-fitness estimates for batched count loss."""
+
+    def __init__(
+        self,
+        time_labels: Iterable[str],
+        n_keys: int,
+        *,
+        device: str | torch.device = "cpu",
+        dtype: torch.dtype = torch.float32,
+        momentum: float = 0.9,
+    ) -> None:
+        labels = [str(label) for label in time_labels]
+        if not labels or len(set(labels)) != len(labels):
+            raise ValueError("FitnessBank time_labels must be nonempty and unique.")
+        if n_keys < 1:
+            raise ValueError("FitnessBank n_keys must be >= 1.")
+        if not 0.0 <= momentum < 1.0:
+            raise ValueError("FitnessBank momentum must be in [0, 1).")
+        self.time_labels = labels
+        self.label_to_index = {label: idx for idx, label in enumerate(labels)}
+        self.values = torch.zeros(len(labels), n_keys, device=device, dtype=dtype)
+        self.seen = torch.zeros(len(labels), n_keys, device=device, dtype=torch.bool)
+        self.momentum = float(momentum)
+
+    @torch.no_grad()
+    def update(
+        self,
+        zeta_curve: torch.Tensor,
+        checkpoint_indices: Dict[str, int],
+        active_key_indices: torch.Tensor,
+    ) -> None:
+        active = active_key_indices.to(device=self.values.device, dtype=torch.long)
+        for label, bank_idx in self.label_to_index.items():
+            if label not in checkpoint_indices:
+                raise KeyError(f"Missing checkpoint for FitnessBank label {label!r}.")
+            current = zeta_curve[checkpoint_indices[label]].detach().to(self.values)
+            if current.shape != active.shape:
+                raise ValueError("Active zeta length does not match active_key_indices.")
+            old = self.values[bank_idx].index_select(0, active)
+            was_seen = self.seen[bank_idx].index_select(0, active)
+            blended = torch.where(
+                was_seen,
+                self.momentum * old + (1.0 - self.momentum) * current,
+                current,
+            )
+            self.values[bank_idx].index_copy_(0, active, blended)
+            self.seen[bank_idx].index_fill_(0, active, True)
+
+    def compose(
+        self,
+        time_label: str,
+        active_key_indices: torch.Tensor,
+        active_zeta: torch.Tensor,
+    ) -> torch.Tensor:
+        bank_idx = self.label_to_index[str(time_label)]
+        active = active_key_indices.to(device=self.values.device, dtype=torch.long)
+        base = self.values[bank_idx].detach().clone().to(device=active_zeta.device, dtype=active_zeta.dtype)
+        return base.index_copy(0, active.to(active_zeta.device), active_zeta)
 
 
 def _as_float_tensor(x: torch.Tensor, *, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
@@ -276,4 +371,95 @@ class MultiTimeCountLikelihood(nn.Module):
             n_totals=n_totals,
             checkpoint_indices=checkpoint_indices,
         )
+        return total
+
+
+class GroupedMultiTimeCountLikelihood(nn.Module):
+    """Donor/context-group count likelihood with full compositional denominators."""
+
+    def __init__(
+        self,
+        use_dirichlet_multinomial: bool = True,
+        time_weights: Optional[Dict[str, float]] = None,
+    ) -> None:
+        super().__init__()
+        self.use_dm = bool(use_dirichlet_multinomial)
+        self.time_weights = time_weights or {}
+        if self.use_dm:
+            self.dm_lik = DirichletMultinomialLikelihood()
+
+    def forward_with_logs(
+        self,
+        *,
+        growth_steps: torch.Tensor,
+        logw_steps: torch.Tensor,
+        tau_steps: torch.Tensor,
+        blocks: Iterable[CountBlock],
+        checkpoint_indices: Dict[str, int],
+        active_key_indices: Optional[torch.Tensor] = None,
+        fitness_bank: Optional[FitnessBank] = None,
+    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        zeta_curve = integrated_fitness_curve(growth_steps, logw_steps, tau_steps)
+        if active_key_indices is None:
+            active_key_indices = torch.arange(
+                zeta_curve.shape[1], device=zeta_curve.device, dtype=torch.long
+            )
+        else:
+            active_key_indices = active_key_indices.to(zeta_curve.device, torch.long)
+        active_lookup = {
+            int(global_idx): local_idx
+            for local_idx, global_idx in enumerate(active_key_indices.tolist())
+        }
+        total = zeta_curve.new_zeros(())
+        logs: Dict[str, torch.Tensor] = {}
+        n_blocks = 0
+        for block in blocks:
+            if block.time_label not in checkpoint_indices:
+                raise KeyError(f"Missing checkpoint index for count block {block.time_label!r}.")
+            checkpoint = checkpoint_indices[block.time_label]
+            active_zeta = zeta_curve[checkpoint]
+            if fitness_bank is None:
+                missing = [idx for idx in block.key_indices.tolist() if int(idx) not in active_lookup]
+                if missing:
+                    raise ValueError(
+                        "Grouped count blocks reference inactive keys but no FitnessBank was supplied."
+                    )
+                local = torch.tensor(
+                    [active_lookup[int(idx)] for idx in block.key_indices.tolist()],
+                    device=zeta_curve.device,
+                    dtype=torch.long,
+                )
+                zeta_block = active_zeta.index_select(0, local)
+            else:
+                full_zeta = fitness_bank.compose(
+                    block.time_label,
+                    active_key_indices,
+                    active_zeta,
+                )
+                zeta_block = full_zeta.index_select(
+                    0,
+                    block.key_indices.to(device=zeta_curve.device, dtype=torch.long),
+                )
+            exposure = block.exposure.to(device=zeta_curve.device, dtype=zeta_curve.dtype)
+            counts = block.counts.to(device=zeta_curve.device, dtype=zeta_curve.dtype).unsqueeze(0)
+            n_total = block.n_total.to(device=zeta_curve.device, dtype=zeta_curve.dtype).reshape(1)
+            pi = torch.softmax(torch.log(exposure) + zeta_block, dim=-1).unsqueeze(0)
+            if self.use_dm:
+                block_loss = self.dm_lik(counts, pi, n_total)
+            else:
+                block_loss = -(counts * torch.log(pi.clamp_min(1e-30))).sum()
+            weight = float(self.time_weights.get(block.time_label, 1.0))
+            total = total + weight * block_loss
+            prefix = f"counts/{block.time_label}/{block.context_group_id}"
+            logs[prefix] = block_loss.detach()
+            logs[f"{prefix}/n_total"] = n_total.sum().detach()
+            logs[f"{prefix}/n_keys"] = torch.tensor(len(block.key_indices), device=zeta_curve.device)
+            n_blocks += 1
+        if n_blocks == 0:
+            raise ValueError("GroupedMultiTimeCountLikelihood received no CountBlock objects.")
+        logs["counts/n_blocks"] = torch.tensor(n_blocks, device=zeta_curve.device)
+        return total, logs
+
+    def forward(self, **kwargs) -> torch.Tensor:
+        total, _ = self.forward_with_logs(**kwargs)
         return total

@@ -35,6 +35,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--latent-key", default="X_pca")
     parser.add_argument("--strict-data-schema", action="store_true")
+    parser.add_argument("--snapshot-col", default=None)
+    parser.add_argument("--snapshot-value", default=None)
     parser.add_argument("--perturbation-col", default="perturbation_id")
     parser.add_argument("--guide-col", default="guide_id")
     parser.add_argument("--target-gene-col", default="target_gene")
@@ -137,6 +139,8 @@ def _single_time_schema_column_map(args: argparse.Namespace) -> dict[str, str | 
 
 def _single_time_extra_schema_columns(args: argparse.Namespace) -> list[str]:
     columns = [args.control_col]
+    if args.snapshot_col:
+        columns.append(args.snapshot_col)
     if args.view_key_level in {"guide", "sample_guide"} and args.guide_col:
         columns.append(args.guide_col)
     elif args.perturbation_col:
@@ -684,6 +688,8 @@ def _write_single_time_effect_outputs(
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if (args.snapshot_col is None) != (args.snapshot_value is None):
+        raise ValueError("--snapshot-col and --snapshot-value must be provided together.")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     context_tau = _parse_context_tau(args.context_tau)
@@ -719,6 +725,8 @@ def main(argv: list[str] | None = None) -> int:
     problem = build_single_time_problem_from_anndata(
         args.data_path,
         latent_key=args.latent_key,
+        snapshot_col=args.snapshot_col,
+        snapshot_value=args.snapshot_value,
         perturbation_col=args.perturbation_col,
         guide_col=args.guide_col or None,
         target_gene_col=args.target_gene_col or None,
@@ -816,6 +824,7 @@ def main(argv: list[str] | None = None) -> int:
                 "control_ids": list(problem.catalog.control_ids),
                 "view_key_level": args.view_key_level,
                 "embedding_level": args.embedding_level,
+                "snapshot_filter": problem.metadata.get("snapshot_filter"),
                 "effect_vector_components": list(effect_vector_components),
                 "effect_axis_is_physical_time": False,
             },

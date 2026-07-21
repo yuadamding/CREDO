@@ -34,6 +34,8 @@ from credo.data.core import (
     POOLED_SAMPLE_ID,
 )
 from credo.models.full_model import FullDynamicsModel
+from credo.data.trajectory_view import TrajectoryView
+from credo.losses.counts import CountBlock
 from credo.models.expression_vae import (
     VAEArtifactBundle,
     encode_expression_vae,
@@ -102,6 +104,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--time-col", default="time_label")
     parser.add_argument("--physical-time-col", default="physical_time")
     parser.add_argument("--perturbation-col", default="perturbation_id")
+    parser.add_argument("--view-id-col", default="view_id")
+    parser.add_argument("--embedding-col", default="embedding_id")
+    parser.add_argument("--guide-col", default="guide_id")
+    parser.add_argument("--target-gene-col", default="target_gene")
+    parser.add_argument("--context-group-col", default="context_group_id")
+    parser.add_argument("--count-table", default="")
     parser.add_argument("--sample-col", default="sample_id")
     parser.add_argument("--control-col", default="is_control")
     parser.add_argument("--mass-col", default="mass_value")
@@ -120,12 +128,20 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--cell-id-col", default="cell_id")
     parser.add_argument("--source-label", default="90m")
     parser.add_argument("--target-labels", default="6h,10h")
+    parser.add_argument(
+        "--evaluation-only-labels",
+        default="",
+        help="Target labels evaluated after rollout but excluded from every training loss.",
+    )
     parser.add_argument("--physical-times", default="")
     parser.add_argument("--key-mode", choices=["pooled", "sample_aware"], default="sample_aware")
     parser.add_argument("--sparse-missing", choices=["mask", "error"], default="mask")
     parser.add_argument("--validation-sample-ids", default="")
     parser.add_argument("--cv-folds", type=int, default=0)
     parser.add_argument("--cv-fold-index", type=int, default=0)
+    parser.add_argument("--validation-guide-ids", default="")
+    parser.add_argument("--guide-cv-folds", type=int, default=0)
+    parser.add_argument("--guide-cv-fold-index", type=int, default=0)
     parser.add_argument("--latent-source", choices=["pca", "obsm", "vae"], default="pca")
     parser.add_argument("--latent-key", default="X_pca")
     parser.add_argument("--vae-layer", default="counts")
@@ -159,6 +175,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--n-particles", type=int, default=128)
     parser.add_argument("--eval-particles", type=int, default=384)
     parser.add_argument("--steps-per-interval", type=int, default=12)
+    parser.add_argument("--max-active-measure-keys", type=int, default=0)
+    parser.add_argument("--genes-per-batch", type=int, default=32)
+    parser.add_argument("--controls-per-batch", type=int, default=16)
+    parser.add_argument("--max-train-target-atoms", type=int, default=0)
+    parser.add_argument("--max-eval-target-atoms", type=int, default=0)
+    parser.add_argument("--eval-every", type=int, default=1)
+    parser.add_argument("--context-bank-refresh", type=int, default=5)
+    parser.add_argument("--steps-per-epoch", type=int, default=None)
     parser.add_argument("--endpoint-time-weights", default="")
     parser.add_argument("--normalize-time-weights", action="store_true", default=True)
     parser.add_argument("--no-normalize-time-weights", dest="normalize_time_weights", action="store_false")
@@ -167,7 +191,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--mediator-dim", type=int, default=8)
     parser.add_argument("--hidden-dim", type=int, default=128)
     parser.add_argument("--depth", type=int, default=3)
-    parser.add_argument("--context-kind", choices=["mlp", "transformer", "causal_attention"], default="mlp")
+    parser.add_argument("--context-kind", choices=["none", "mlp", "transformer", "causal_attention"], default="mlp")
+    parser.add_argument(
+        "--context-protocol",
+        choices=["none", "global_self_consistent", "grouped_self_consistent", "grouped_clamped"],
+        default="global_self_consistent",
+    )
+    parser.add_argument(
+        "--stage",
+        choices=["control", "geometry", "reaction", "context", "joint"],
+        default="joint",
+    )
+    parser.add_argument("--checkpoint", default="")
+    parser.add_argument("--export-counterfactuals", action="store_true")
+    parser.add_argument("--counterfactual-particles", type=int, default=0)
+    parser.add_argument("--counterfactual-max-keys", type=int, default=0)
+    parser.add_argument(
+        "--counterfactual-include-controls",
+        dest="counterfactual_include_controls",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--counterfactual-exclude-controls",
+        dest="counterfactual_include_controls",
+        action="store_false",
+    )
+    parser.set_defaults(counterfactual_include_controls=True)
     parser.add_argument("--transformer-token-dim", type=int, default=64)
     parser.add_argument("--transformer-heads", type=int, default=4)
     parser.add_argument("--transformer-within-layers", type=int, default=1)
@@ -197,6 +246,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lambda-reg-net", type=float, default=1e-4)
     parser.add_argument("--lambda-reg-diffusion", type=float, default=1e-4)
     parser.add_argument("--sinkhorn-epsilon", type=float, default=0.1)
+    parser.add_argument("--sinkhorn-tau", type=float, default=1.0)
     parser.add_argument("--sinkhorn-max-iter", type=int, default=100)
     parser.add_argument("--n-test-functions", type=int, default=12)
     parser.add_argument("--ecology-on", dest="ecological_growth", action="store_true")
@@ -456,7 +506,42 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
     else:
         obs["cell_id"] = obs.index.astype(str)
 
-    cell_df = obs[["cell_id", "perturbation_id", "time_label", "sample_id"]].reset_index(drop=True)
+    control_mask = _as_bool(obs[args.control_col])
+    obs["is_control"] = control_mask.to_numpy(dtype=bool)
+    annotation_columns = {
+        "view_id": args.view_id_col,
+        "embedding_id": args.embedding_col,
+        "guide_id": args.guide_col,
+        "target_gene": args.target_gene_col,
+        "context_group_id": args.context_group_col,
+    }
+    fallbacks = {
+        "view_id": obs["sample_id"].astype(str) + "::" + obs["perturbation_id"].astype(str),
+        "embedding_id": obs["perturbation_id"].astype(str),
+        "guide_id": obs["perturbation_id"].astype(str),
+        "target_gene": obs["perturbation_id"].astype(str),
+        "context_group_id": obs["sample_id"].astype(str),
+    }
+    for canonical, requested in annotation_columns.items():
+        obs[canonical] = (
+            obs[requested].astype(str)
+            if requested and requested in obs.columns
+            else fallbacks[canonical]
+        )
+    cell_df = obs[
+        [
+            "cell_id",
+            "perturbation_id",
+            "time_label",
+            "sample_id",
+            "view_id",
+            "embedding_id",
+            "guide_id",
+            "target_gene",
+            "context_group_id",
+            "is_control",
+        ]
+    ].reset_index(drop=True)
     mass_group_cols = ["perturbation_id", "time_label", "sample_id"]
     mass_col_present = bool(args.mass_col and args.mass_col in obs.columns)
     if args.mass_mode == "count":
@@ -532,7 +617,6 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
     mass_df.attrs["mass_mode_resolution_reason"] = mass_mode_reason
 
     pids = sorted(obs["perturbation_id"].unique().tolist())
-    control_mask = _as_bool(obs[args.control_col])
     controls = sorted(obs.loc[control_mask, "perturbation_id"].unique().tolist())
     if not controls:
         raise ValueError("At least one control perturbation is required.")
@@ -545,29 +629,31 @@ def build_study_from_anndata(args: argparse.Namespace) -> PerturbSeqDynamicsData
     )
 
 
-def _subset_study_by_samples(
+def _subset_study(
     study: PerturbSeqDynamicsData,
-    sample_ids: set[str],
+    values: set[str],
     *,
+    cell_column: str,
+    mass_column: str,
     keep: bool,
+    split_name: str,
 ) -> PerturbSeqDynamicsData:
-    cells = study.cell_state.df["sample_id"].astype(str).isin(sample_ids).to_numpy()
-    mass = study.mass_table.df["sample_id"].astype(str).isin(sample_ids).to_numpy()
+    cells = study.cell_state.df[cell_column].astype(str).isin(values).to_numpy()
+    mass = study.mass_table.df[mass_column].astype(str).isin(values).to_numpy()
     if not keep:
         cells = ~cells
         mass = ~mass
     cell_df = study.cell_state.df.loc[cells].reset_index(drop=True)
     if cell_df.empty:
-        raise ValueError("Sample split produced an empty cell-state table.")
+        raise ValueError(f"{split_name} split produced an empty cell-state table.")
     mass_df = study.mass_table.df.loc[mass].reset_index(drop=True).copy()
     if mass_df.empty:
-        raise ValueError("Sample split produced an empty mass table.")
+        raise ValueError(f"{split_name} split produced an empty mass table.")
     mass_df.attrs.update(getattr(study.mass_table.df, "attrs", {}))
-    latent = study.cell_state.latent[cells].copy()
     return PerturbSeqDynamicsData(
         time_axis=study.time_axis,
         catalog=study.catalog,
-        cell_state=CellStateTable(cell_df, latent),
+        cell_state=CellStateTable(cell_df, study.cell_state.latent[cells].copy()),
         mass_table=MassTable(mass_df),
         latent_transform=study.latent_transform,
         exposure_table=study.exposure_table,
@@ -577,15 +663,80 @@ def _subset_study_by_samples(
     )
 
 
-def split_validation_samples(
+def _subset_study_by_samples(
+    study: PerturbSeqDynamicsData,
+    sample_ids: set[str],
+    *,
+    keep: bool,
+) -> PerturbSeqDynamicsData:
+    return _subset_study(
+        study,
+        sample_ids,
+        cell_column="sample_id",
+        mass_column="sample_id",
+        keep=keep,
+        split_name="Sample",
+    )
+
+
+def _subset_study_by_guides(
+    study: PerturbSeqDynamicsData,
+    guide_ids: set[str],
+    *,
+    keep: bool,
+) -> PerturbSeqDynamicsData:
+    guide_col = "guide_id" if "guide_id" in study.cell_state.df else "perturbation_id"
+    return _subset_study(
+        study,
+        guide_ids,
+        cell_column=guide_col,
+        mass_column="perturbation_id",
+        keep=keep,
+        split_name="Guide",
+    )
+
+
+def split_validation_study(
     study: PerturbSeqDynamicsData,
     args: argparse.Namespace,
 ) -> tuple[PerturbSeqDynamicsData, PerturbSeqDynamicsData | None]:
-    explicit = set(_parse_csv(args.validation_sample_ids))
-    if explicit and args.cv_folds:
+    explicit_samples = set(_parse_csv(args.validation_sample_ids))
+    explicit_guides = set(_parse_csv(args.validation_guide_ids))
+    sample_mode = bool(explicit_samples or args.cv_folds)
+    guide_mode = bool(explicit_guides or args.guide_cv_folds)
+    if sample_mode and guide_mode:
+        raise ValueError("Use a sample split or a guide split, not both in one run.")
+    if explicit_samples and args.cv_folds:
         raise ValueError("Use either --validation-sample-ids or --cv-folds, not both.")
-    if explicit:
-        val_samples = explicit
+    if explicit_guides and args.guide_cv_folds:
+        raise ValueError("Use either --validation-guide-ids or --guide-cv-folds, not both.")
+
+    if explicit_guides:
+        val_guides = explicit_guides
+    elif args.guide_cv_folds and args.guide_cv_folds > 1:
+        if args.guide_cv_fold_index < 0 or args.guide_cv_fold_index >= args.guide_cv_folds:
+            raise ValueError("--guide-cv-fold-index must be in [0, --guide-cv-folds).")
+        frame = study.cell_state.df
+        guide_col = "guide_id" if "guide_id" in frame else "perturbation_id"
+        eligible = frame
+        if "is_control" in frame:
+            eligible = frame.loc[~frame["is_control"].astype(bool)]
+        guides = sorted(eligible[guide_col].astype(str).unique().tolist())
+        val_guides = {
+            guide
+            for idx, guide in enumerate(guides)
+            if idx % args.guide_cv_folds == args.guide_cv_fold_index
+        }
+    else:
+        val_guides = set()
+    if val_guides:
+        train = _subset_study_by_guides(study, val_guides, keep=False)
+        validation = _subset_study_by_guides(study, val_guides, keep=True)
+        args.validation_guide_ids_resolved = sorted(val_guides)
+        return train, validation
+
+    if explicit_samples:
+        val_samples = explicit_samples
     elif args.cv_folds and args.cv_folds > 1:
         if args.cv_fold_index < 0 or args.cv_fold_index >= args.cv_folds:
             raise ValueError("--cv-fold-index must be in [0, --cv-folds).")
@@ -626,7 +777,8 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.model.mediator_dim = args.mediator_dim
     cfg.model.hidden_dim = args.hidden_dim
     cfg.model.depth = args.depth
-    cfg.model.context_kind = args.context_kind
+    no_context = args.context_protocol == "none"
+    cfg.model.context_kind = "none" if no_context else args.context_kind
     cfg.model.transformer_token_dim = args.transformer_token_dim
     cfg.model.transformer_heads = args.transformer_heads
     cfg.model.transformer_within_layers = args.transformer_within_layers
@@ -643,7 +795,7 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.model.causal_growth_only = args.causal_growth_only
     cfg.model.causal_sparse_edges = args.causal_sparse_edges
     cfg.model.control_mode = args.control_mode
-    cfg.model.ecological_growth = args.ecological_growth
+    cfg.model.ecological_growth = False if no_context else args.ecological_growth
     cfg.model.use_growth_intercept = args.use_growth_intercept
     cfg.simulation.n_particles = args.n_particles
     cfg.eval.n_eval_particles = args.eval_particles
@@ -657,16 +809,30 @@ def build_config(args: argparse.Namespace, latent_dim: int) -> RunConfig:
     cfg.training.lambda_reg_net = args.lambda_reg_net
     cfg.training.lambda_reg_diffusion = args.lambda_reg_diffusion
     cfg.training.sinkhorn_epsilon = args.sinkhorn_epsilon
+    cfg.training.sinkhorn_tau = args.sinkhorn_tau
     cfg.training.sinkhorn_max_iter = args.sinkhorn_max_iter
     cfg.training.n_test_functions = args.n_test_functions
     cfg.trajectory_training.source_label = args.source_label
     cfg.trajectory_training.target_labels = _parse_csv(args.target_labels)
+    cfg.trajectory_training.evaluation_only_labels = _parse_csv(args.evaluation_only_labels)
     cfg.trajectory_training.steps_per_interval = args.steps_per_interval
     cfg.trajectory_training.endpoint_time_weights = _parse_label_float_map(args.endpoint_time_weights)
     cfg.trajectory_training.normalize_time_weights = bool(args.normalize_time_weights)
     cfg.trajectory_training.key_mode = args.key_mode
     cfg.trajectory_training.sparse_missing = args.sparse_missing
-    return RunConfig.model_validate(cfg.model_dump())
+    cfg.trajectory_training.max_active_measure_keys = args.max_active_measure_keys
+    cfg.trajectory_training.genes_per_batch = args.genes_per_batch
+    cfg.trajectory_training.controls_per_batch = args.controls_per_batch
+    cfg.trajectory_training.max_train_target_atoms = args.max_train_target_atoms
+    cfg.trajectory_training.max_eval_target_atoms = args.max_eval_target_atoms
+    cfg.trajectory_training.eval_every = args.eval_every
+    cfg.trajectory_training.context_bank_refresh = args.context_bank_refresh
+    cfg.trajectory_training.steps_per_epoch = args.steps_per_epoch
+    cfg.trajectory_training.context_protocol = args.context_protocol
+    cfg.trajectory_training.stage = args.stage
+    resolved = RunConfig.model_validate(cfg.model_dump())
+    resolved.validate_trajectory_contract()
+    return resolved
 
 
 def _sha256_text_lines(lines: list[str]) -> str:
@@ -723,6 +889,9 @@ def write_run_manifest(
             "cv_folds": getattr(args, "cv_folds", 0),
             "cv_fold_index": getattr(args, "cv_fold_index", 0),
             "validation_sample_ids_resolved": getattr(args, "validation_sample_ids_resolved", None),
+            "guide_cv_folds": getattr(args, "guide_cv_folds", 0),
+            "guide_cv_fold_index": getattr(args, "guide_cv_fold_index", 0),
+            "validation_guide_ids_resolved": getattr(args, "validation_guide_ids_resolved", None),
             "adata_n_obs": getattr(args, "adata_n_obs", None),
             "adata_n_vars": getattr(args, "adata_n_vars", None),
             "adata_obs_columns": getattr(args, "adata_obs_columns", None),
@@ -793,6 +962,8 @@ def write_final_manifest(output_dir: str | Path) -> None:
         "training_history.csv",
         "validation_history.csv",
         "predicted_metrics_by_key_time.csv",
+        "evaluation_only_metrics_by_key_time.csv",
+        "counterfactual_metrics_by_key_time.csv",
         "checkpoint_last.pt",
         "checkpoint_best.pt",
         "checkpoint_best_ema.pt",
@@ -818,10 +989,197 @@ def write_final_manifest(output_dir: str | Path) -> None:
     )
 
 
+def build_grouped_count_data(
+    path: str | Path,
+    view: TrajectoryView,
+) -> dict[str, object]:
+    """Load a long count table into donor/context-specific CountBlock objects."""
+    table_path = Path(path)
+    if table_path.suffix.lower() in {".parquet", ".pq"}:
+        table = pd.read_parquet(table_path)
+    else:
+        table = pd.read_csv(table_path)
+    aliases = {
+        "context_group_id": ["context_group_id", "sample_id", "donor_id"],
+        "guide_id": ["guide_id", "perturbation_id"],
+        "time_label": ["time_label", "condition"],
+        "count": ["count", "n_cells"],
+        "exposure": ["exposure", "rest_frequency", "source_frequency"],
+    }
+    resolved: dict[str, str] = {}
+    for canonical, candidates in aliases.items():
+        match = next((candidate for candidate in candidates if candidate in table.columns), None)
+        if match is None:
+            raise KeyError(f"Count table is missing {canonical!r}; tried {candidates!r}.")
+        resolved[canonical] = match
+
+    global_index = {key: idx for idx, key in enumerate(view.source_keys)}
+    blocks: list[CountBlock] = []
+    groups = sorted({view.context_group(key) for key in view.source_keys})
+    for time_label in view.target_labels:
+        for group_id in groups:
+            keys = [key for key in view.source_keys if view.context_group(key) == group_id]
+            sub = table[
+                table[resolved["context_group_id"]].astype(str).eq(group_id)
+                & table[resolved["time_label"]].astype(str).eq(time_label)
+            ].copy()
+            if sub.empty:
+                raise ValueError(f"No count rows for context group {group_id!r} at {time_label!r}.")
+            sub[resolved["guide_id"]] = sub[resolved["guide_id"]].astype(str)
+            if sub[resolved["guide_id"]].duplicated().any():
+                raise ValueError(f"Duplicate guide count rows for {group_id!r} at {time_label!r}.")
+            by_guide = sub.set_index(resolved["guide_id"])
+            guide_ids = [view.guide_id(key) for key in keys]
+            missing = [guide_id for guide_id in guide_ids if guide_id not in by_guide.index]
+            if missing:
+                raise ValueError(
+                    f"Count table is missing {len(missing)} source-supported guides for "
+                    f"{group_id!r} at {time_label!r}; first={missing[:5]!r}."
+                )
+            counts = torch.tensor(
+                [float(by_guide.loc[guide_id, resolved["count"]]) for guide_id in guide_ids],
+                dtype=torch.float32,
+            )
+            if counts.sum() <= 0:
+                continue
+            exposure = torch.tensor(
+                [float(by_guide.loc[guide_id, resolved["exposure"]]) for guide_id in guide_ids],
+                dtype=torch.float32,
+            )
+            blocks.append(
+                CountBlock(
+                    context_group_id=group_id,
+                    time_label=time_label,
+                    key_indices=torch.tensor([global_index[key] for key in keys]),
+                    exposure=exposure,
+                    counts=counts,
+                    n_total=counts.sum(),
+                )
+            )
+    if not blocks:
+        raise ValueError("Count table produced no nonempty donor/time blocks.")
+    return {"key_level": "measure_key", "key_order": view.source_keys, "blocks": blocks}
+
+
+def _load_continuation_model(model: FullDynamicsModel, payload: dict) -> None:
+    state_dict = payload.get("model_state_dict", payload)
+    incompatible = model.load_state_dict(state_dict, strict=False)
+    allowed_prefix = "coeff_nets.ecology."
+    unsupported = [
+        key
+        for key in [*incompatible.missing_keys, *incompatible.unexpected_keys]
+        if not key.startswith(allowed_prefix)
+    ]
+    if unsupported:
+        raise RuntimeError(
+            "Checkpoint is incompatible outside the optional ecological payoff: "
+            f"{unsupported[:10]!r}."
+        )
+
+
+def export_trajectory_counterfactuals(
+    trainer: TrajectoryTrainer,
+    *,
+    output_path: str | Path,
+    n_particles: int,
+    include_controls: bool = True,
+    max_keys: int = 0,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Export same-start trajectory effects, retaining grouped background context."""
+    from credo.models.background_trajectory_counterfactual import (
+        BackgroundTrajectoryCounterfactualEngine,
+    )
+    from credo.models.context import GroupStatistics
+    from credo.models.trajectory_counterfactual import TrajectoryCounterfactualEngine
+
+    if n_particles < 1:
+        raise ValueError("counterfactual n_particles must be >= 1.")
+    view = trainer.view
+    controls = set(view.control_measure_keys)
+    keys = [key for key in view.source_keys if include_controls or key not in controls]
+    if max_keys > 0:
+        keys = keys[:max_keys]
+    if not keys:
+        raise ValueError("No measure keys were selected for counterfactual export.")
+
+    grouped = trainer.context_bank is not None
+    if trainer.model.context_kind != "none" and not grouped:
+        raise NotImplementedError(
+            "Counterfactual export for context-conditioned trajectory models requires "
+            "the grouped full-background context bank."
+        )
+    if grouped:
+        bank = trainer.context_bank
+        assert bank is not None
+        statistics = [
+            GroupStatistics(
+                log_n_g=bank.log_n_steps[idx].detach(),
+                eta_g=bank.eta_steps[idx].detach(),
+                phi_g=bank.phi_steps[idx].detach(),
+            )
+            for idx in range(bank.log_n_steps.shape[0])
+        ]
+        engine = BackgroundTrajectoryCounterfactualEngine(
+            trainer.model,
+            trainer.simulator,
+            n_particles=n_particles,
+            device=trainer.device,
+            dtype=trainer.dtype,
+        )
+    else:
+        engine = TrajectoryCounterfactualEngine(
+            trainer.model,
+            trainer.simulator,
+            n_particles=n_particles,
+            device=trainer.device,
+            dtype=trainer.dtype,
+        )
+
+    trainer.model.eval()
+    frames: list[pd.DataFrame] = []
+    for offset, key in enumerate(keys):
+        common = {
+            "trajectory": view.trajectory,
+            "source_label": view.source_label,
+            "target_labels": view.target_labels,
+            "tau_grid": trainer.tau_grid,
+            "checkpoint_indices": trainer.target_checkpoint_indices,
+            "seed": int(seed) + offset,
+        }
+        if grouped:
+            result = engine.run(
+                **common,
+                focal_measure_key=key,
+                focal_embedding_id=view.embedding_id(key),
+                background_group_statistics_steps=statistics,
+                background_context_group_index=bank.context_group_index,
+                focal_global_index=trainer.context_key_to_global_index[key],
+            )
+        else:
+            result = engine.run(
+                **common,
+                measure_key=key,
+                embedding_id=view.embedding_id(key),
+            )
+        frame = result.metrics_by_time.copy()
+        frame["guide_id"] = view.guide_id(key)
+        frame["target_gene"] = view.target_gene(key)
+        frame["context_group_id"] = view.context_group(key)
+        frame["is_control"] = key in controls
+        frame["context_protocol"] = trainer.config.trajectory_training.context_protocol
+        frames.append(frame)
+    output = pd.concat(frames, ignore_index=True)
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    output.to_csv(destination, index=False)
+    return output
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     study = build_study_from_anndata(args)
-    study, validation_study = split_validation_samples(study, args)
+    study, validation_study = split_validation_study(study, args)
     write_input_manifests(study, args.output_dir)
     labels = [args.source_label] + _parse_csv(args.target_labels)
     by_sample = args.key_mode == "sample_aware"
@@ -832,18 +1190,49 @@ def main(argv: list[str] | None = None) -> None:
         else None
     )
     cfg = build_config(args, latent_dim=study.latent_dim)
+    full_view = TrajectoryView(
+        trajectory=trajectory,
+        source_label=args.source_label,
+        target_labels=_parse_csv(args.target_labels),
+        sparse_missing=args.sparse_missing,
+    )
+    model_embedding_ids = sorted(set(full_view.embedding_id_list))
+    control_embedding_ids = sorted(
+        {full_view.embedding_id(key) for key in full_view.control_measure_keys}
+    )
+    if not control_embedding_ids:
+        raise ValueError("No control embedding ids were resolved from control measure keys.")
+    supported_measure_keys = (
+        full_view.control_measure_keys if args.stage == "control" else None
+    )
+    training_view = (
+        TrajectoryView(
+            trajectory=trajectory,
+            source_label=args.source_label,
+            target_labels=_parse_csv(args.target_labels),
+            measure_keys=supported_measure_keys,
+            sparse_missing=args.sparse_missing,
+        )
+        if supported_measure_keys is not None
+        else full_view
+    )
+    count_data = None
+    if args.count_table:
+        if args.stage == "control":
+            raise ValueError("Grouped count calibration is not valid for the control-only stage.")
+        count_data = build_grouped_count_data(args.count_table, training_view)
     # Emit the schema-v2 run manifest now that the resolved config and the
     # supported perturbation set are known (config_sha256 hashes the resolved cfg).
     write_run_manifest(
         args,
         args.output_dir,
         config=cfg.model_dump(),
-        supported_pids=list(trajectory.perturbation_ids),
+        supported_pids=model_embedding_ids,
     )
 
     model = FullDynamicsModel(
-        perturbation_ids=trajectory.perturbation_ids,
-        control_ids=[pid for pid in study.catalog.control_ids if pid in trajectory.perturbation_ids],
+        perturbation_ids=model_embedding_ids,
+        control_ids=control_embedding_ids,
         latent_dim=study.latent_dim,
         embedding_dim=cfg.model.embedding_dim,
         n_programs=cfg.model.n_programs,
@@ -870,16 +1259,41 @@ def main(argv: list[str] | None = None) -> None:
         causal_growth_only=cfg.model.causal_growth_only,
         causal_sparse_edges=cfg.model.causal_sparse_edges,
     )
+    checkpoint = None
+    if args.checkpoint:
+        checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+        _load_continuation_model(model, checkpoint)
     trainer = TrajectoryTrainer(
         model=model,
         config=cfg,
         trajectory=trajectory,
-        source_label=args.source_label,
-        target_labels=_parse_csv(args.target_labels),
+        supported_measure_keys=supported_measure_keys,
         validation_trajectory=validation_trajectory,
-        output_dir=args.output_dir,
+        count_data=count_data,
     )
+    if checkpoint is not None:
+        trainer.load_auxiliary_state(checkpoint)
     trainer.train()
+    if args.export_counterfactuals:
+        candidates = [
+            Path(args.output_dir) / "checkpoint_best_ema.pt",
+            Path(args.output_dir) / "checkpoint_best.pt",
+            Path(args.output_dir) / "checkpoint_last.pt",
+        ]
+        selected = next((path for path in candidates if path.exists()), None)
+        if selected is None:
+            raise FileNotFoundError("No completed checkpoint is available for counterfactual export.")
+        payload = torch.load(selected, map_location="cpu", weights_only=False)
+        _load_continuation_model(model, payload)
+        trainer.load_auxiliary_state(payload)
+        export_trajectory_counterfactuals(
+            trainer,
+            output_path=Path(args.output_dir) / "counterfactual_metrics_by_key_time.csv",
+            n_particles=args.counterfactual_particles or args.eval_particles,
+            include_controls=args.counterfactual_include_controls,
+            max_keys=args.counterfactual_max_keys,
+            seed=args.seed,
+        )
     write_final_manifest(args.output_dir)
 
 

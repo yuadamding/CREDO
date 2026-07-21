@@ -137,7 +137,7 @@ class ModelConfig(BaseModel):
     n_payoff_ranks: int = 4
     control_mode: Literal["anchored", "free", "soft_ref"] = "soft_ref"
     control_ref_penalty: float = 5e-4
-    context_kind: Literal["mlp", "transformer", "causal_attention"] = "mlp"
+    context_kind: Literal["none", "mlp", "transformer", "causal_attention"] = "mlp"
     transformer_token_dim: int = 64
     transformer_heads: int = 4
     transformer_within_layers: int = 1
@@ -315,18 +315,27 @@ class TrainingConfig(BaseModel):
 class TrajectoryTrainingConfig(BaseModel):
     source_label: str = "90m"
     target_labels: list[str] = Field(default_factory=lambda: ["6h", "10h"])
-    trajectory_mode: Literal["full_start", "full_plus_teacher", "pairwise"] = "full_start"
+    evaluation_only_labels: list[str] = Field(default_factory=list)
     steps_per_interval: int = 12
     endpoint_time_weights: dict[str, float] = Field(default_factory=dict)
     normalize_time_weights: bool = True
-    teacher_forced_weight: float = 0.0
     max_active_measure_keys: int = 0
-    context_batch_mode: Literal["all_keys", "batch_only"] = "all_keys"
+    genes_per_batch: int = 32
+    controls_per_batch: int = 16
+    max_train_target_atoms: int = 0
+    max_eval_target_atoms: int = 0
+    eval_every: int = 1
+    context_bank_refresh: int = 5
+    steps_per_epoch: Optional[int] = None
+    context_protocol: Literal[
+        "none",
+        "global_self_consistent",
+        "grouped_self_consistent",
+        "grouped_clamped",
+    ] = "global_self_consistent"
+    stage: Literal["control", "geometry", "reaction", "context", "joint"] = "joint"
     sparse_missing: Literal["mask", "error"] = "mask"
     key_mode: Literal["pooled", "sample_aware"] = "sample_aware"
-    validation_source: Literal["train", "heldout", "all"] = "heldout"
-    save_rollouts: bool = False
-    save_particles_every: int = 0
 
     @model_validator(mode="after")
     def _validate_trajectory_training(self) -> "TrajectoryTrainingConfig":
@@ -334,15 +343,32 @@ class TrajectoryTrainingConfig(BaseModel):
             raise ValueError("source_label must not be empty.")
         if not self.target_labels:
             raise ValueError("target_labels must not be empty.")
+        unknown_evaluation_labels = sorted(
+            set(self.evaluation_only_labels) - set(self.target_labels)
+        )
+        if unknown_evaluation_labels:
+            raise ValueError(
+                "evaluation_only_labels must be included in target_labels: "
+                f"{unknown_evaluation_labels}."
+            )
+        if set(self.evaluation_only_labels) == set(self.target_labels):
+            raise ValueError("At least one target label must remain in the training loss.")
         if self.steps_per_interval < 1:
             raise ValueError("steps_per_interval must be >= 1.")
-        if self.teacher_forced_weight < 0:
-            raise ValueError("teacher_forced_weight must be >= 0.")
-        if self.trajectory_mode != "full_start" and self.teacher_forced_weight == 0:
-            # Keep this permissive for CLI experimentation but explicit in config.
-            pass
         if self.max_active_measure_keys < 0:
             raise ValueError("max_active_measure_keys must be >= 0.")
+        if self.genes_per_batch < 1:
+            raise ValueError("genes_per_batch must be >= 1.")
+        if self.controls_per_batch < 0:
+            raise ValueError("controls_per_batch must be >= 0.")
+        if self.max_train_target_atoms < 0 or self.max_eval_target_atoms < 0:
+            raise ValueError("target atom caps must be >= 0.")
+        if self.eval_every < 1:
+            raise ValueError("eval_every must be >= 1.")
+        if self.context_bank_refresh < 1:
+            raise ValueError("context_bank_refresh must be >= 1.")
+        if self.steps_per_epoch is not None and self.steps_per_epoch < 1:
+            raise ValueError("steps_per_epoch must be >= 1 when provided.")
         return self
 
 
@@ -400,6 +426,52 @@ class RunConfig(BaseModel):
                     "are diagnostic unless their mass provenance is explicit."
                 )
         return self
+
+    def validate_trajectory_contract(
+        self,
+        *,
+        model_context_kind: str | None = None,
+        model_ecological_growth: bool | None = None,
+    ) -> None:
+        """Validate cross-object assumptions used by trajectory training."""
+        trc = self.trajectory_training
+        context_kind = self.model.context_kind
+        protocol = trc.context_protocol
+
+        if model_context_kind is not None and model_context_kind != context_kind:
+            raise ValueError(
+                "Trajectory model context_kind does not match RunConfig.model.context_kind "
+                f"({model_context_kind!r} != {context_kind!r})."
+            )
+        if (
+            model_ecological_growth is not None
+            and bool(model_ecological_growth) != self.model.ecological_growth
+        ):
+            raise ValueError(
+                "Trajectory model ecological_growth does not match "
+                "RunConfig.model.ecological_growth."
+            )
+        if protocol == "none":
+            if context_kind != "none":
+                raise ValueError("context_protocol='none' requires context_kind='none'.")
+            if self.model.ecological_growth:
+                raise ValueError(
+                    "context_protocol='none' requires ecological_growth=False."
+                )
+            if trc.stage == "context":
+                raise ValueError("stage='context' requires a nonzero context protocol.")
+        elif context_kind == "none":
+            raise ValueError(
+                f"context_protocol={protocol!r} requires a nonzero context_kind."
+            )
+
+        if protocol.startswith("grouped") and context_kind != "mlp":
+            raise ValueError("Grouped trajectory context requires context_kind='mlp'.")
+        if protocol == "global_self_consistent" and trc.max_active_measure_keys:
+            raise ValueError(
+                "global_self_consistent context cannot be combined with batched "
+                "measure keys; use all keys or a grouped context bank."
+            )
 
     def resolve_device(self) -> str:
         import torch

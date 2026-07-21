@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 from .counts import (
+    CountBlock,
     CountLikelihood,
     DirichletMultinomialLikelihood,
+    FitnessBank,
+    GroupedMultiTimeCountLikelihood,
     MultiTimeCountLikelihood,
     count_fractions_from_zeta,
     integrated_fitness,
@@ -48,9 +51,12 @@ from .uot import (
 from .weak_form import GaussianRBFTestFunctions, WeakFormLoss
 
 __all__ = [
+    "CountBlock",
     "CountLikelihood",
     "DirichletMultinomialLikelihood",
     "EndpointGeometryMassLoss",
+    "FitnessBank",
+    "GroupedMultiTimeCountLikelihood",
     "MultiTimeCountLikelihood",
     "MultiTimeEndpointLoss",
     "RolloutRegularizer",

@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Sequence
 
 import pandas as pd
 import torch
 
 from ..data.core import MeasureKey
-from ..data.trajectory_view import TrajectoryView, embedding_id_for_measure_key
+from ..data.trajectory_view import TrajectoryView
 from ..models.weighted_sde import ParticleRollout
 
 
@@ -23,16 +24,18 @@ def rollout_metrics_by_key_time(
     checkpoint_indices: dict[str, int],
     measure_keys: list[MeasureKey],
     endpoint_logs: dict[str, torch.Tensor] | None = None,
+    time_labels: Sequence[str] | None = None,
 ) -> pd.DataFrame:
     """Build a compact per-key/time prediction table."""
     rows = []
     endpoint_logs = endpoint_logs or {}
     if rollout.log_m0 is None:
         raise ValueError("rollout_metrics_by_key_time requires rollout.log_m0.")
+    labels = view.target_labels if time_labels is None else list(time_labels)
 
     for g, key in enumerate(measure_keys):
         source_mu = view.trajectory.get(view.source_label, key)
-        for label in view.target_labels:
+        for label in labels:
             if key not in view.trajectory.measures[label]:
                 continue
             target_mu = view.trajectory.get(label, key)
@@ -54,7 +57,10 @@ def rollout_metrics_by_key_time(
                     "measure_key": str(key),
                     "sample_id": str(sample_id),
                     "perturbation_id": str(perturbation_id),
-                    "embedding_id": embedding_id_for_measure_key(key),
+                    "embedding_id": view.embedding_id(key),
+                    "guide_id": view.guide_id(key),
+                    "target_gene": view.target_gene(key),
+                    "context_group_id": view.context_group(key),
                     "time_label": label,
                     "tau": float(view.trajectory.tau(label)),
                     "normalized_tau": float(view.trajectory.tau(label)),

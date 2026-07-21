@@ -2,7 +2,14 @@
 from __future__ import annotations
 
 from .coefficients import CoefficientNetworks, Coefficients
-from .context import ContextAggregator, ContextDiagnostics, ContextState, GroupStatistics, ProgramEncoder
+from .context import (
+    ContextAggregator,
+    ContextDiagnostics,
+    ContextState,
+    GroupStatistics,
+    ProgramEncoder,
+    ZeroContextAggregator,
+)
 from .causal_attention_blocks import MassGraphMaskedCrossAttention
 from .causal_context import (
     CausalAttentionDiagnostics,
@@ -41,6 +48,10 @@ from .particles import (
 
 
 def __getattr__(name: str):
+    if name == "BackgroundTrajectoryCounterfactualEngine":
+        from .background_trajectory_counterfactual import BackgroundTrajectoryCounterfactualEngine
+
+        return BackgroundTrajectoryCounterfactualEngine
     if name in {"TrajectoryCounterfactualEngine", "TrajectoryCounterfactualResult"}:
         from .trajectory_counterfactual import TrajectoryCounterfactualEngine, TrajectoryCounterfactualResult
 
@@ -51,6 +62,7 @@ def __getattr__(name: str):
     raise AttributeError(name)
 
 __all__ = [
+    "BackgroundTrajectoryCounterfactualEngine",
     "CoefficientNetworks",
     "Coefficients",
     "CausalAttentionDiagnostics",
@@ -84,6 +96,7 @@ __all__ = [
     "TrajectoryCounterfactualResult",
     "VAEArtifactBundle",
     "WeightedParticleSimulator",
+    "ZeroContextAggregator",
     "encode_expression_vae",
     "fit_expression_vae",
     "initialise_particles",

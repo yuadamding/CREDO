@@ -54,6 +54,7 @@ credo-validate-data \
 | --- | --- | --- |
 | P4/P60 endpoint Perturb-seq | `runners/run_credo_hnscc_full.py` | Finite-measure endpoint transport, mass calibration, and same-start counterfactuals over the observed interval. |
 | Multi-time trajectory | `runners/run_credo_trajectory.py` or `runners/run_credo_lps_3time.py` | Continuous global-time rollout through observed checkpoint finite measures. |
+| GSE314342 T-cell trajectory | `runners/run_credo_gse314342.py` | Target-balanced guide/donor batches with shared target-gene embeddings and optional donor-grouped context. |
 | True one-timepoint Perturb-seq | `runners/run_credo_single_time.py` | Control-referenced static effect paths on a non-physical effect axis. |
 | Pseudotime-only snapshot | Diagnostic only | Not a first-class physical-time CREDO mode. Do not claim temporal drift or growth from pseudotime alone. |
 
@@ -242,6 +243,8 @@ Compatibility facades such as `credo.data.problems`,
   keeps sample-aware `measure_key`s separate from perturbation `embedding_id`s,
   rolls out one continuous global-time trajectory, and evaluates downstream
   checkpoint finite-measure losses.
+- Trajectory key minibatching is valid with zero context or a grouped context
+  bank. Global self-consistent context requires an all-key rollout.
 - Single-time training consumes `SingleTimeProblem`, keeps finite-measure
   `view_id`s separate from perturbation embeddings, labels outputs as
   non-physical effect-axis diagnostics, and caches sampled fixed-context
