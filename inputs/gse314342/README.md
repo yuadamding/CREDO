@@ -21,24 +21,28 @@ Key local artifacts include:
 - `gse314342_credo_pilot_d3.h5ad` and matching `pilot_d3_*` tables: a compact
   D3 numerical smoke cohort;
 - build, scan, encoder, selection, and checksum provenance.
+- `canonical_gold/`, `canonical_gold_early/`, `canonical_gold_late/`,
+  `canonical_silver/`, and `canonical_null/`: quality-tiered model inputs whose
+  stimulated support/mass pairs enforce geometry eligibility while counts stay
+  complete over each selected panel.
 
 The cohort has four donors and the ordered checkpoints `Rest`, `Stim8hr`, and
 `Stim48hr`. GEO lane titles and processed metadata disagree on the final label;
 [`late_time_resolution.json`](late_time_resolution.json) records the reviewed
 decision to use 48 hours.
 
-The CREDO adapter writes the canonical five-file data contract without
-duplicating cohort logic in the model package:
+The base adapter writes the five-file source contract. The workspace tier
+builder adds release-QC selection, latent provenance, and growth-bound audits:
 
 ```bash
-python examples/gse314342/prepare.py --pilot
+python examples/gse314342/prepare.py
+python ../scripts/prepare_gse314342_credo.py
 credo validate examples/gse314342/config.yaml
 ```
 
-Remove `--pilot` to rebuild `canonical/` from the full support. The full adapter
-excludes 5,412 downstream-only donor-guide IDs because canonical measures must
-exist at `Rest`; it does not renormalize the retained whole-library masses.
-Donor-guide `measure_id` values
+The base adapter excludes 5,412 downstream-only donor-guide IDs because
+canonical measures must exist at `Rest`; it does not renormalize retained
+whole-library masses. Donor-guide `measure_id` values
 remain separate from shared target-gene `embedding_id` values. All
 non-targeting guides share the exact control reference. Mass is
 `relative_within_group`, so effects describe relative donor-specific guide

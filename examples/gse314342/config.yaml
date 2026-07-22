@@ -1,10 +1,10 @@
 data:
-  support: ../../../inputs/GSE314342/canonical_pilot/support.h5ad
+  support: ../../../inputs/GSE314342/canonical_gold/support.h5ad
   latent_key: X_credo
-  measure_meta: ../../../inputs/GSE314342/canonical_pilot/measure_meta.parquet
-  masses: ../../../inputs/GSE314342/canonical_pilot/masses.parquet
-  counts: ../../../inputs/GSE314342/canonical_pilot/counts.parquet
-  dataset: ../../../inputs/GSE314342/canonical_pilot/dataset.json
+  measure_meta: ../../../inputs/GSE314342/canonical_gold/measure_meta.parquet
+  masses: ../../../inputs/GSE314342/canonical_gold/masses.parquet
+  counts: ../../../inputs/GSE314342/canonical_gold/counts.parquet
+  dataset: ../../../inputs/GSE314342/canonical_gold/dataset.json
 
 axis:
   kind: physical
@@ -16,24 +16,33 @@ model:
   embedding_dim: 8
   n_programs: 8
   hidden_dim: 128
-  context: catalog_bank
+  context: none
+  growth_max: 9.2
 
 training:
   epochs:
     state: 40
     mass: 20
-    context: 20
+    context: 0
   particles: 64
-  eval_particles: 256
-  steps_per_interval: 4
+  steps_per_interval: 20
   measures_per_batch: 256
+  batching: target_balanced
   learning_rate: 0.001
-  validation_fraction: 0.2
   patience: 10
   seed: 0
+
+evaluation:
+  particles: 256
+  measures_per_batch: 256
+
+validation:
+  strategy: auto
+  fraction: 0.2
 
 loss:
   mass: 1.0
   count: 0.1
+  sinkhorn_epsilon: 0.1
 
-output: ../../runs/gse314342/seed0
+output: ../../runs/gse314342/intrinsic_gold_seed0

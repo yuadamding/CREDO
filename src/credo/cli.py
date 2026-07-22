@@ -10,7 +10,8 @@ from pathlib import Path
 import pandas as pd
 
 from .io import load_config, load_data, validate_inputs
-from .training import Trainer
+from .registry import get_recipe
+from .runtime import TrainingEngine
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -28,6 +29,22 @@ def _parser() -> argparse.ArgumentParser:
 
     summarize = commands.add_parser("summarize", help="summarize durable run artifacts")
     summarize.add_argument("run_dir", type=Path)
+
+    importer = commands.add_parser(
+        "import-checkpoint", help="normalize a historical checkpoint for inference"
+    )
+    importer.add_argument("--format", required=True, choices=["legacy-v2-transformer"])
+    importer.add_argument("--checkpoint", required=True, type=Path)
+    importer.add_argument("--run-config", required=True, type=Path)
+    importer.add_argument("--representation", required=True, type=Path)
+    importer.add_argument("--latents", required=True, type=Path)
+    importer.add_argument("--output", required=True, type=Path)
+    importer.add_argument("--vae-metadata", type=Path)
+    importer.add_argument("--catalog", type=Path)
+    importer.add_argument("--control-id", action="append")
+    importer.add_argument("--study-source", type=Path)
+    importer.add_argument("--state", choices=["raw", "ema"], default="raw")
+    importer.add_argument("--device", default="cpu")
     return parser
 
 
@@ -44,7 +61,8 @@ def _run(args: argparse.Namespace) -> int:
     if changed:
         config = type(config).model_validate(updates)
     data = load_data(config)
-    trainer = Trainer.fit(data, None, config, device=args.device)
+    recipe = get_recipe(config.recipe)
+    trainer = TrainingEngine().fit(recipe, data, config, device=args.device)
     output = trainer.save()
     print(json.dumps({"status": "complete", "output": str(output)}, indent=2))
     return 0
@@ -71,6 +89,40 @@ def _summarize(run_dir: Path) -> int:
     return 0
 
 
+def _import_checkpoint(args: argparse.Namespace) -> int:
+    from .recipes.transformer_v2.importer import import_legacy_checkpoint
+
+    run = import_legacy_checkpoint(
+        args.checkpoint,
+        args.run_config,
+        args.representation,
+        args.latents,
+        output=args.output,
+        vae_metadata=args.vae_metadata,
+        catalog=args.catalog,
+        controls=args.control_id,
+        study_source=args.study_source,
+        model_state=args.state,
+        device=args.device,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "imported",
+                "mode": run.envelope.mode.value,
+                "recipe": f"{run.recipe_id}@{run.recipe_version}",
+                "state": run.model_state,
+                "output": str(args.output.expanduser().resolve()),
+                "source_checkpoint_sha256": run.envelope.import_provenance[
+                    "source_checkpoint_sha256"
+                ],
+            },
+            indent=2,
+        )
+    )
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "validate":
@@ -80,6 +132,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run(args)
     if args.command == "summarize":
         return _summarize(args.run_dir)
+    if args.command == "import-checkpoint":
+        return _import_checkpoint(args)
     raise AssertionError(f"Unhandled command {args.command!r}.")
 
 

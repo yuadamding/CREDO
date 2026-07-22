@@ -1,0 +1,9 @@
+{
+  "fixture": "examples.synthetic seed=7; 1/1/1 epochs; 6 train particles; 8 eval particles",
+  "pre_recipe_checkpoint_sha256": "19fa0f485a099b8994cde1512f0894d431b736e567367dfd691c8cbbeead68d8",
+  "checkpoint_sha256": "a5e733155f1ac92c312981c0873148eceb6a14e99d07e84c5384a0482cb0ce54",
+  "serialization_change": "Added recipe, representation, split, capability, and checkpoint-mode envelope metadata.",
+  "metrics_sha256": "aad1f8e42fe75a0be5c65ab2031871fe30bb8f9885017e6ca1f9346efd3f9558",
+  "model_state_sha256": "bfc42f1baec029718d465a2bc2d651bd1875f6d6d8d341d5a6eeeae4b6e2f046",
+  "metric_rows": 11
+}

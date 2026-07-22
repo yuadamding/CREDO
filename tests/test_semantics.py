@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import torch
 
-from credo.contracts import Axis, FiniteMeasure, MassSemantics, TrajectoryData
+from credo.contracts import Axis, FiniteMeasure, MassSemantics, SplitSpec, TrajectoryData
 from credo.io import RunConfig, load_data, validate_run_data
 from credo.model import CREDOModel
 from credo.objective import (
@@ -26,7 +26,7 @@ from credo.particles import (
     sample_initial_particles,
     sample_noise,
 )
-from credo.training import CatalogBank
+from credo.training import CatalogBank, _validation_split
 
 
 def _model(data: TrajectoryData, *, context: str = "none") -> CREDOModel:
@@ -55,6 +55,16 @@ def test_embedding_control_status_must_be_consistent(tiny_data) -> None:
     metadata.loc[metadata["measure_id"].eq("D1::GENE1-1"), "is_control"] = True
     with pytest.raises(ValueError, match="mixes control and non-control"):
         replace(tiny_data, measure_meta=metadata)
+
+
+def test_representation_and_split_provenance_are_strict(tiny_data) -> None:
+    representation = replace(tiny_data.representation, latent_dim=tiny_data.latent_dim + 1)
+    with pytest.raises(ValueError, match="latent_dim disagrees"):
+        replace(tiny_data, representation=representation)
+    with pytest.raises(ValueError, match="must be unique"):
+        SplitSpec(strategy="sample", train_values=("D1", "D1"))
+    with pytest.raises(ValueError, match="must be disjoint"):
+        SplitSpec(strategy="sample", train_values=("D1",), validation_values=("D1",))
 
 
 def test_control_residual_is_zero_and_controls_share_reference(tiny_data) -> None:
@@ -414,6 +424,41 @@ def test_count_validation_holds_out_complete_context_groups(tiny_data, trained_r
     assert train_groups.isdisjoint(validation_groups)
 
 
+def test_explicit_context_group_and_checkpoint_validation(tiny_config, tiny_data) -> None:
+    validation_type = type(tiny_config.validation)
+    donor_validation = validation_type.model_validate(
+        {"strategy": "context_group", "values": ["D1"], "fraction": 0}
+    )
+    donor_split = _validation_split(
+        tiny_data,
+        tiny_config.model_copy(update={"validation": donor_validation}),
+    )
+    assert donor_split.strategy == "context_group_holdout"
+    assert {
+        tiny_data.measure_meta.set_index("measure_id").loc[value, "context_group_id"]
+        for value in donor_split.validation_measure_ids
+    } == {"D1"}
+
+    checkpoint_validation = validation_type.model_validate(
+        {"strategy": "checkpoint", "values": ["Stim8hr"], "fraction": 0}
+    )
+    checkpoint_split = _validation_split(
+        tiny_data,
+        tiny_config.model_copy(update={"validation": checkpoint_validation}),
+    )
+    assert checkpoint_split.strategy == "checkpoint_holdout"
+    assert checkpoint_split.train_time_labels == ("Stim48hr",)
+    assert checkpoint_split.validation_time_labels == ("Stim8hr",)
+
+
+def test_target_balanced_batches_are_deterministic_permutations(trained_run) -> None:
+    ids = trained_run.data.measure_ids
+    first = list(trained_run._batches(ids, seed=17, batch_size=5, target_balanced=True))
+    second = list(trained_run._batches(ids, seed=17, batch_size=5, target_balanced=True))
+    assert first == second
+    assert sorted(value for batch in first for value in batch) == sorted(ids)
+
+
 def test_reference_counterfactual_uses_same_start_and_noise(trained_run, monkeypatch) -> None:
     module = importlib.import_module("credo.counterfactual")
     original_rollout = module.rollout
@@ -447,8 +492,31 @@ def test_reference_counterfactual_uses_same_start_and_noise(trained_run, monkeyp
         "context_dependence_shift",
         "factual_ess",
         "reference_ess",
+        "eval_particles",
+        "integration_steps",
+        "counterfactual_seed",
+        "checkpoint_sha256",
+        "evaluator_package_version",
+        "evaluator_git_sha",
     ]
     with pytest.raises(ValueError, match="same_noise=True"):
         module.counterfactual(trained_run, "D1::GENE1-1", same_noise=False)
-    with pytest.raises(ValueError, match="non-control"):
-        module.counterfactual(trained_run, "D1::NTC-1")
+    control = module.counterfactual(trained_run, "D1::NTC-1", n_particles=4)
+    assert control["delta_log_mass"].eq(0).all()
+    assert control["mean_shift_l2"].eq(0).all()
+    assert control["energy_distance"].eq(0).all()
+
+
+def test_intrinsic_counterfactual_samples_only_the_focal_measure(trained_run, monkeypatch) -> None:
+    module = importlib.import_module("credo.counterfactual")
+    original = module.sample_initial_particles
+    sampled_ids = []
+
+    def capture(data, measure_ids, n_particles, **kwargs):
+        sampled_ids.append(tuple(measure_ids))
+        return original(data, measure_ids, n_particles, **kwargs)
+
+    monkeypatch.setattr(module, "sample_initial_particles", capture)
+    monkeypatch.setattr(trained_run.model, "context_enabled", False)
+    module.counterfactual(trained_run, "D1::GENE1-1", n_particles=4)
+    assert sampled_ids == [("D1::GENE1-1",)]

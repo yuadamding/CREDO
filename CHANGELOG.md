@@ -1,5 +1,28 @@
 # Changelog
 
+## 3.0.0a3 - 2026-07-21
+
+- Introduced one stable study, particle, evaluation, counterfactual, training-plan,
+  and checkpoint-envelope runtime with immutable recipe identifiers.
+- Preserved compact v3 behind `credo.compact_sde_v3@3.0` with golden state,
+  metric, and serialization checks.
+- Added `credo.transformer_sde_v2@2.0`, strict raw and EMA legacy import,
+  preserved VAE loading, weak-form diagnostics, and inference-only provenance.
+- Replayed all four archived LPS donor folds into the common metric contract;
+  all 268 rows and measure ordering match with tolerance-level numerical agreement.
+- Made representation scope, validation split, recipe capability, implementation
+  hash, and checkpoint continuation limits explicit and machine-readable.
+
+## 3.0.0a2 - 2026-07-21
+
+- Exposed growth and Sinkhorn scales and bound them into checkpoint contracts.
+- Split evaluation resolution from training, added explicit donor/checkpoint
+  validation and target-balanced training batches.
+- Made intrinsic counterfactuals focal-only, admitted control nulls, and added
+  particle, seed, checkpoint, package, and Git provenance to persisted rows.
+- Advanced the checkpoint schema for the new validation and evaluation
+  contract while preserving migration of earlier counterfactual tables.
+
 ## 3.0.0a1 - 2026-07-21
 
 - Replaced endpoint, trajectory, and single-time problem classes with one

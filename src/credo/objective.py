@@ -152,9 +152,17 @@ def checkpoint_geometry_mass_loss(
     mass_weight: float,
     include_mass: bool,
     validation_source: str,
+    sinkhorn_epsilon: float = 0.1,
+    time_labels: Iterable[str] | None = None,
 ) -> CheckpointObjective:
     """Apply one checkpoint objective to any number of observed times."""
     indices = checkpoint_indices(data.axis, rollout.axis_grid)
+    selected_times = (
+        set(data.axis.labels[1:]) if time_labels is None else {str(value) for value in time_labels}
+    )
+    unknown_times = selected_times - set(data.axis.labels[1:])
+    if unknown_times:
+        raise ValueError(f"Unknown objective checkpoint labels: {sorted(unknown_times)}")
     device = rollout.z_steps.device
     dtype = rollout.z_steps.dtype
     geometry_sum = torch.zeros((), device=device, dtype=dtype)
@@ -163,6 +171,8 @@ def checkpoint_geometry_mass_loss(
     observation_count = 0
     terminal_diagnostics = weight_diagnostics(rollout.logw_steps)
     for label in data.axis.labels[1:]:
+        if label not in selected_times:
+            continue
         step = indices[label]
         for local_index, measure_id in enumerate(rollout.measure_ids):
             target = data.measures[label].get(measure_id)
@@ -179,6 +189,7 @@ def checkpoint_geometry_mass_loss(
                 predicted_log_weight,
                 target_support,
                 target_log_weight,
+                epsilon=sinkhorn_epsilon,
             )
             mass_error, predicted_mass, observed_mass = checkpoint_log_mass_error(
                 predicted_log_weight, target_log_weight
@@ -284,6 +295,7 @@ def count_block_loss(
     *,
     log_concentration: torch.Tensor,
     fitness_bank: FitnessBankProtocol | None = None,
+    time_labels: Iterable[str] | None = None,
 ) -> torch.Tensor:
     """Evaluate the only count API over complete grouped blocks."""
     blocks: Iterable[CountBlock] = data.count_blocks
@@ -291,7 +303,13 @@ def count_block_loss(
         return rollout.z_steps.new_zeros(())
     data.axis.require_physical("Count likelihood")
     active_groups = set(rollout.context_group_ids)
-    blocks = tuple(block for block in blocks if block.context_group_id in active_groups)
+    selected_times = None if time_labels is None else {str(value) for value in time_labels}
+    blocks = tuple(
+        block
+        for block in blocks
+        if block.context_group_id in active_groups
+        and (selected_times is None or block.time_label in selected_times)
+    )
     if not blocks:
         return rollout.z_steps.new_zeros(())
     curve = integrated_fitness_curve(rollout)
@@ -333,14 +351,17 @@ def catalog_count_block_loss(
     log_concentration: torch.Tensor,
     fitness_bank: FitnessBankProtocol,
     context_group_ids: Iterable[str] | None = None,
+    time_labels: Iterable[str] | None = None,
 ) -> tuple[torch.Tensor, int]:
     """Score complete count blocks from a refreshed detached catalog bank."""
     data.axis.require_physical("Count likelihood")
     selected_groups = None if context_group_ids is None else set(context_group_ids)
+    selected_times = None if time_labels is None else {str(value) for value in time_labels}
     blocks = tuple(
         block
         for block in data.count_blocks
         if selected_groups is None or block.context_group_id in selected_groups
+        if selected_times is None or block.time_label in selected_times
     )
     if not blocks:
         return log_concentration.new_zeros(()), 0
@@ -402,6 +423,8 @@ def total_objective(
     log_concentration: torch.Tensor,
     fitness_bank: FitnessBankProtocol | None = None,
     validation_source: str = "train_self_eval",
+    sinkhorn_epsilon: float = 0.1,
+    time_labels: Iterable[str] | None = None,
 ) -> ObjectiveResult:
     checkpoint = checkpoint_geometry_mass_loss(
         rollout,
@@ -409,6 +432,8 @@ def total_objective(
         mass_weight=mass_weight,
         include_mass=include_mass,
         validation_source=validation_source,
+        sinkhorn_epsilon=sinkhorn_epsilon,
+        time_labels=time_labels,
     )
     counts = (
         count_block_loss(
@@ -416,6 +441,7 @@ def total_objective(
             data,
             log_concentration=log_concentration,
             fitness_bank=fitness_bank,
+            time_labels=time_labels,
         )
         if include_mass and count_weight > 0
         else rollout.z_steps.new_zeros(())

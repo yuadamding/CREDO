@@ -76,6 +76,7 @@ class ModelConfig(_StrictModel):
     n_programs: int = Field(default=8, ge=1)
     hidden_dim: int = Field(default=128, ge=8)
     context: Literal["none", "catalog_bank"] = "catalog_bank"
+    growth_max: float = Field(default=3.0, gt=0)
 
 
 class EpochConfig(_StrictModel):
@@ -93,25 +94,52 @@ class EpochConfig(_StrictModel):
 class TrainingConfig(_StrictModel):
     epochs: EpochConfig = EpochConfig()
     particles: int = Field(default=64, ge=2)
-    eval_particles: int = Field(default=256, ge=2)
     steps_per_interval: int = Field(default=4, ge=1)
     measures_per_batch: int = Field(default=256, ge=1)
+    batching: Literal["random", "target_balanced"] = "random"
     learning_rate: float = Field(default=1e-3, gt=0)
-    validation_fraction: float = Field(default=0.2, ge=0, lt=1)
     patience: int = Field(default=10, ge=1)
     seed: int = Field(default=0, ge=0)
+
+
+class EvaluationConfig(_StrictModel):
+    particles: int = Field(default=256, ge=2)
+    measures_per_batch: int = Field(default=256, ge=1)
+
+
+class ValidationConfig(_StrictModel):
+    strategy: Literal["auto", "context_group", "checkpoint", "train_self_eval"] = "auto"
+    values: tuple[str, ...] = ()
+    fraction: float = Field(default=0.2, ge=0, lt=1)
+
+    @model_validator(mode="after")
+    def _validate_specification(self) -> ValidationConfig:
+        explicit = self.strategy in {"context_group", "checkpoint"}
+        if explicit and not self.values:
+            raise ValueError(f"validation.strategy={self.strategy!r} requires values.")
+        if not explicit and self.values:
+            raise ValueError(f"validation.strategy={self.strategy!r} does not accept values.")
+        if self.strategy == "train_self_eval" and self.fraction != 0:
+            raise ValueError("train_self_eval requires validation.fraction=0.")
+        if len(set(self.values)) != len(self.values):
+            raise ValueError("validation.values must be unique.")
+        return self
 
 
 class LossConfig(_StrictModel):
     mass: float = Field(default=1.0, ge=0)
     count: float = Field(default=0.1, ge=0)
+    sinkhorn_epsilon: float = Field(default=0.1, gt=0)
 
 
 class RunConfig(_StrictModel):
+    recipe: Literal["credo.compact_sde_v3@3.0"] = "credo.compact_sde_v3@3.0"
     data: DataConfig
     axis: AxisConfig
     model: ModelConfig = ModelConfig()
     training: TrainingConfig = TrainingConfig()
+    evaluation: EvaluationConfig = EvaluationConfig()
+    validation: ValidationConfig = ValidationConfig()
     loss: LossConfig = LossConfig()
     output: Path
 
@@ -135,6 +163,20 @@ class RunConfig(_StrictModel):
             raise ValueError("Mass and count losses require a mass or context training phase.")
         if self.training.epochs.context > 0 and self.loss.mass == 0 and self.loss.count == 0:
             raise ValueError("Context training requires mass or count supervision.")
+        if self.validation.strategy == "checkpoint":
+            unknown = set(self.validation.values) - set(self.axis.labels[1:])
+            if unknown:
+                raise ValueError(
+                    f"Checkpoint validation contains unknown downstream labels: {sorted(unknown)}"
+                )
+            if set(self.validation.values) == set(self.axis.labels[1:]):
+                raise ValueError(
+                    "Checkpoint validation must leave a downstream checkpoint to train."
+                )
+        if self.validation.strategy == "context_group" and self.validation.fraction != 0:
+            raise ValueError("Explicit context-group validation requires validation.fraction=0.")
+        if self.validation.strategy == "checkpoint" and self.validation.fraction != 0:
+            raise ValueError("Explicit checkpoint validation requires validation.fraction=0.")
         return self
 
 
@@ -596,7 +638,9 @@ def validate_inputs(config: RunConfig | str | Path) -> dict[str, Any]:
     run_config = load_config(config) if isinstance(config, (str, Path)) else config
     data = load_data(run_config)
     validate_run_data(run_config, data)
+    source = data.metadata.get("dataset", {}).get("source", {})
     return {
+        "recipe": run_config.recipe,
         "measure_count": len(data.measure_ids),
         "embedding_count": len(data.embedding_ids),
         "control_measure_count": int(data.measure_meta["is_control"].sum()),
@@ -607,4 +651,6 @@ def validate_inputs(config: RunConfig | str | Path) -> dict[str, Any]:
         "mass_denominator_count": len(data.metadata.get("mass_denominators", [])),
         "claim_policy": data.claim_policy,
         "count_block_count": len(data.count_blocks),
+        "mass_denominator_scope": source.get("mass_denominator_scope"),
+        "count_block_scope": source.get("count_block_scope"),
     }

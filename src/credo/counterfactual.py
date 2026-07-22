@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import pandas as pd
 import torch
@@ -23,6 +23,25 @@ from .particles import (
 
 if TYPE_CHECKING:
     from .training import Trainer
+
+
+COUNTERFACTUAL_COLUMNS = [
+    "measure_id",
+    "time_label",
+    "context_policy",
+    "delta_log_mass",
+    "mean_shift_l2",
+    "energy_distance",
+    "context_dependence_shift",
+    "factual_ess",
+    "reference_ess",
+    "eval_particles",
+    "integration_steps",
+    "counterfactual_seed",
+    "checkpoint_sha256",
+    "evaluator_package_version",
+    "evaluator_git_sha",
+]
 
 
 def _weighted_mean(support: torch.Tensor, log_weight: torch.Tensor) -> torch.Tensor:
@@ -53,8 +72,30 @@ def counterfactual(
     *,
     context_policy: Literal["self_consistent", "clamped"] = "self_consistent",
     same_noise: bool = True,
+    n_particles: int | None = None,
+    particles: int | None = None,
+    seed: int | None = None,
+    study: Any = None,
 ) -> pd.DataFrame:
-    """Compare one perturbation with its residual removed in its full group."""
+    """Compare one measure with the same-start continuation after removing its residual."""
+    if n_particles is not None and particles is not None:
+        raise ValueError("Specify only one of particles and n_particles.")
+    resolved_particles = particles if particles is not None else n_particles
+    require = getattr(run, "require", None)
+    if callable(require):
+        require("counterfactual")
+    runtime_method = getattr(run, "counterfactual_runtime", None)
+    if callable(runtime_method):
+        return runtime_method(
+            measure_id,
+            context_policy=context_policy,
+            same_noise=same_noise,
+            n_particles=resolved_particles,
+            seed=seed,
+            study=study,
+        )
+    if study is not None and study is not run.data:
+        raise ValueError("External counterfactual data must be loaded as a separate run.")
     if context_policy not in {"self_consistent", "clamped"}:
         raise ValueError("context_policy must be 'self_consistent' or 'clamped'.")
     if not same_noise:
@@ -62,21 +103,30 @@ def counterfactual(
     metadata = run.data.measure_meta.set_index("measure_id")
     if measure_id not in metadata.index:
         raise KeyError(f"Unknown measure_id {measure_id!r}.")
-    if bool(metadata.loc[measure_id, "is_control"]):
-        raise ValueError("Reference counterfactuals require a non-control measure.")
     group_id = metadata.loc[measure_id, "context_group_id"]
-    group_ids = tuple(
-        value
-        for value in run.data.measure_ids
-        if metadata.loc[value, "context_group_id"] == group_id
-    )
+    if run.model.context_enabled:
+        group_ids = tuple(
+            value
+            for value in run.data.measure_ids
+            if metadata.loc[value, "context_group_id"] == group_id
+        )
+    else:
+        group_ids = (measure_id,)
     local_index = group_ids.index(measure_id)
-    digest = hashlib.sha256(measure_id.encode("utf-8")).hexdigest()
-    seed = run.config.training.seed + int(digest[:8], 16) % 1_000_000
+    particle_count = (
+        run.config.evaluation.particles if resolved_particles is None else int(resolved_particles)
+    )
+    if particle_count < 2:
+        raise ValueError("n_particles must be at least 2.")
+    if seed is None:
+        digest = hashlib.sha256(measure_id.encode("utf-8")).hexdigest()
+        seed = run.config.training.seed + int(digest[:8], 16) % 1_000_000
+    if seed < 0:
+        raise ValueError("seed must be nonnegative.")
     source = sample_initial_particles(
         run.data,
         group_ids,
-        run.config.training.eval_particles,
+        particle_count,
         device=run.device,
         dtype=run.dtype,
         seed=seed,
@@ -128,6 +178,7 @@ def counterfactual(
     checkpoint = checkpoint_indices(run.data.axis, run.grid)
     factual_diagnostics = weight_diagnostics(factual_rollout.logw_steps)
     reference_diagnostics = weight_diagnostics(reference_rollout.logw_steps)
+    evaluator = _evaluator_provenance(run)
     rows = []
     for label in run.data.axis.labels[1:]:
         step = checkpoint[label]
@@ -167,12 +218,28 @@ def counterfactual(
                 "context_dependence_shift": float(context_shift.cpu()),
                 "factual_ess": float(factual_diagnostics["ess"][step, local_index].cpu()),
                 "reference_ess": float(reference_diagnostics["ess"][step, local_index].cpu()),
+                "eval_particles": particle_count,
+                "integration_steps": len(run.grid) - 1,
+                "counterfactual_seed": seed,
+                **evaluator,
             }
         )
-    frame = pd.DataFrame(rows)
+    frame = pd.DataFrame(rows, columns=COUNTERFACTUAL_COLUMNS)
     run.counterfactual_rows.extend(rows)
     _persist_if_saved(run)
     return frame
+
+
+def _evaluator_provenance(run: Trainer) -> dict[str, str | None]:
+    from . import __version__
+    from .training import _git_state
+
+    git_sha, _ = _git_state()
+    return {
+        "checkpoint_sha256": run.checkpoint_sha256,
+        "evaluator_package_version": __version__,
+        "evaluator_git_sha": git_sha,
+    }
 
 
 def _persist_if_saved(run: Trainer) -> None:
@@ -180,26 +247,32 @@ def _persist_if_saved(run: Trainer) -> None:
     manifest_path = output / "manifest.json"
     if not manifest_path.exists():
         return
-    columns = [
+    path = output / "counterfactuals.parquet"
+    current = pd.DataFrame(run.counterfactual_rows, columns=COUNTERFACTUAL_COLUMNS)
+    if path.exists():
+        existing = pd.read_parquet(path)
+        unknown = set(existing.columns) - set(COUNTERFACTUAL_COLUMNS)
+        if unknown:
+            raise ValueError(
+                f"Existing counterfactuals.parquet has unknown columns: {sorted(unknown)}"
+            )
+        for column in COUNTERFACTUAL_COLUMNS:
+            if column not in existing:
+                existing[column] = pd.NA
+        existing = existing[COUNTERFACTUAL_COLUMNS]
+        if not existing.empty:
+            current = pd.concat((existing, current), ignore_index=True)
+    key = [
         "measure_id",
         "time_label",
         "context_policy",
-        "delta_log_mass",
-        "mean_shift_l2",
-        "energy_distance",
-        "context_dependence_shift",
-        "factual_ess",
-        "reference_ess",
+        "eval_particles",
+        "integration_steps",
+        "counterfactual_seed",
+        "checkpoint_sha256",
+        "evaluator_package_version",
+        "evaluator_git_sha",
     ]
-    path = output / "counterfactuals.parquet"
-    current = pd.DataFrame(run.counterfactual_rows, columns=columns)
-    if path.exists():
-        existing = pd.read_parquet(path)
-        if existing.columns.tolist() != columns:
-            raise ValueError("Existing counterfactuals.parquet has an incompatible schema.")
-        if not existing.empty:
-            current = pd.concat((existing, current), ignore_index=True)
-    key = ["measure_id", "time_label", "context_policy"]
     current = current.drop_duplicates(key, keep="last").reset_index(drop=True)
     run.counterfactual_rows = current.to_dict(orient="records")
     current.to_parquet(path, index=False)

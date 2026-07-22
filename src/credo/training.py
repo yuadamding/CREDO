@@ -9,7 +9,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
@@ -232,6 +232,21 @@ class CatalogBank:
         }
 
 
+@dataclass(frozen=True)
+class ValidationSplit:
+    train_measure_ids: tuple[str, ...]
+    validation_measure_ids: tuple[str, ...]
+    train_time_labels: tuple[str, ...]
+    validation_time_labels: tuple[str, ...]
+    source: Literal["held_out", "train_self_eval"]
+    strategy: Literal[
+        "context_group_holdout",
+        "checkpoint_holdout",
+        "within_embedding_holdout",
+        "train_self_eval",
+    ]
+
+
 @dataclass
 class Trainer:
     """The only CREDO trainer, with a fixed state to mass to context schedule."""
@@ -245,14 +260,20 @@ class Trainer:
     bank: CatalogBank
     train_measure_ids: tuple[str, ...]
     validation_measure_ids: tuple[str, ...]
+    train_time_labels: tuple[str, ...]
+    validation_time_labels: tuple[str, ...]
     validation_source: Literal["held_out", "train_self_eval"]
     validation_strategy: Literal[
-        "context_group_holdout", "within_embedding_holdout", "train_self_eval"
+        "context_group_holdout",
+        "checkpoint_holdout",
+        "within_embedding_holdout",
+        "train_self_eval",
     ]
     history_rows: list[dict[str, Any]] = field(default_factory=list)
     metrics: pd.DataFrame = field(default_factory=pd.DataFrame)
     counterfactual_rows: list[dict[str, Any]] = field(default_factory=list)
     completed_epochs: int = 0
+    checkpoint_sha256: str | None = None
 
     @classmethod
     def fit(
@@ -282,15 +303,14 @@ class Trainer:
                 n_programs=config.model.n_programs,
                 hidden_dim=config.model.hidden_dim,
                 context_mode=config.model.context,
+                growth_max=config.model.growth_max,
             )
         elif not _model_matches(model, data, config):
             raise ValueError("Provided model architecture disagrees with the run data or config.")
         model = model.to(device=selected_device, dtype=dtype)
         model.assert_soft_reference()
         validate_count_blocks(data)
-        train_ids, validation_ids, provenance, strategy = _validation_split(
-            data, config.training.validation_fraction, config.training.seed
-        )
+        split = _validation_split(data, config)
         grid = axis_grid(
             data.axis,
             config.training.steps_per_interval,
@@ -314,10 +334,12 @@ class Trainer:
                 torch.tensor(np.log(100.0), device=selected_device, dtype=dtype)
             ),
             bank=bank,
-            train_measure_ids=train_ids,
-            validation_measure_ids=validation_ids,
-            validation_source=provenance,
-            validation_strategy=strategy,
+            train_measure_ids=split.train_measure_ids,
+            validation_measure_ids=split.validation_measure_ids,
+            train_time_labels=split.train_time_labels,
+            validation_time_labels=split.validation_time_labels,
+            validation_source=split.source,
+            validation_strategy=split.strategy,
         )
         trainer._fit()
         return trainer
@@ -407,11 +429,39 @@ class Trainer:
                 self._refresh_bank(epoch=self.completed_epochs)
         self.metrics = self.evaluate()
 
-    def _batches(self, measure_ids: Sequence[str], *, seed: int) -> Iterable[tuple[str, ...]]:
-        values = list(measure_ids)
+    def _batches(
+        self,
+        measure_ids: Sequence[str],
+        *,
+        seed: int,
+        batch_size: int,
+        target_balanced: bool = False,
+    ) -> Iterable[tuple[str, ...]]:
         generator = np.random.default_rng(seed)
-        generator.shuffle(values)
-        batch_size = self.config.training.measures_per_batch
+        if target_balanced:
+            metadata = self.data.measure_meta.set_index("measure_id")
+            grouped: dict[str, list[str]] = {}
+            for measure_id in measure_ids:
+                row = metadata.loc[measure_id]
+                key = str(row["embedding_id"])
+                if bool(row["is_control"]):
+                    key = f"__control__::{row['guide_id']}"
+                grouped.setdefault(key, []).append(measure_id)
+            for values in grouped.values():
+                generator.shuffle(values)
+            values = []
+            active = list(grouped)
+            while active:
+                generator.shuffle(active)
+                next_active = []
+                for key in active:
+                    values.append(grouped[key].pop())
+                    if grouped[key]:
+                        next_active.append(key)
+                active = next_active
+        else:
+            values = list(measure_ids)
+            generator.shuffle(values)
         for start in range(0, len(values), batch_size):
             yield tuple(values[start : start + batch_size])
 
@@ -435,6 +485,7 @@ class Trainer:
             log_concentration=self.log_count_concentration,
             fitness_bank=self.bank,
             context_group_ids=groups,
+            time_labels=self.validation_time_labels,
         )
         return float(value.cpu()), block_count
 
@@ -466,7 +517,7 @@ class Trainer:
     def _training_ids_for_phase(self, phase: str) -> tuple[str, ...]:
         downstream = {
             measure_id
-            for label in self.data.axis.labels[1:]
+            for label in self.train_time_labels
             for measure_id in self.data.measures[label]
         }
         count_groups = {str(block.context_group_id) for block in self.data.count_blocks}
@@ -497,7 +548,14 @@ class Trainer:
         batch_count = 0
         seed = self.config.training.seed + self.completed_epochs * 10_000
         training_ids = self._training_ids_for_phase(phase)
-        for batch_index, batch_ids in enumerate(self._batches(training_ids, seed=seed)):
+        for batch_index, batch_ids in enumerate(
+            self._batches(
+                training_ids,
+                seed=seed,
+                batch_size=self.config.training.measures_per_batch,
+                target_balanced=self.config.training.batching == "target_balanced",
+            )
+        ):
             self.bank.tick()
             particle_rollout = self._rollout_ids(
                 batch_ids,
@@ -513,6 +571,8 @@ class Trainer:
                 include_mass=phase != "state",
                 log_concentration=self.log_count_concentration,
                 fitness_bank=self.bank if phase != "state" else None,
+                sinkhorn_epsilon=self.config.loss.sinkhorn_epsilon,
+                time_labels=self.train_time_labels,
             )
             model_regularization = self.model.regularization()
             loss = objective.total + model_regularization
@@ -606,19 +666,33 @@ class Trainer:
         *,
         include_mass: bool,
         validation_source: str,
+        particles: int | None = None,
+        seed: int | None = None,
     ) -> pd.DataFrame:
         self.model.eval()
         rows: list[dict[str, Any]] = []
+        evaluation_particles = (
+            self.config.evaluation.particles if particles is None else int(particles)
+        )
+        if evaluation_particles < 2:
+            raise ValueError("Evaluation requires at least two particles.")
+        evaluation_seed = self.config.training.seed + 9_100_001 if seed is None else int(seed)
+        if evaluation_seed < 0:
+            raise ValueError("Evaluation seed must be nonnegative.")
         provider = (
             CatalogContextProvider(self.bank) if self.model.context_enabled else NoContextProvider()
         )
         for batch_index, batch_ids in enumerate(
-            self._batches(measure_ids, seed=self.config.training.seed + 9_000_001)
+            self._batches(
+                measure_ids,
+                seed=self.config.training.seed + 9_000_001,
+                batch_size=self.config.evaluation.measures_per_batch,
+            )
         ):
             particle_rollout = self._rollout_ids(
                 batch_ids,
-                particles=self.config.training.eval_particles,
-                seed=self.config.training.seed + 9_100_001 + batch_index,
+                particles=evaluation_particles,
+                seed=evaluation_seed + batch_index,
                 provider=provider,
             )
             checkpoint = checkpoint_geometry_mass_loss(
@@ -627,13 +701,21 @@ class Trainer:
                 mass_weight=self.config.loss.mass,
                 include_mass=include_mass,
                 validation_source=validation_source,
+                sinkhorn_epsilon=self.config.loss.sinkhorn_epsilon,
+                time_labels=self.validation_time_labels,
             )
             rows.extend(checkpoint.rows)
         if not rows:
             raise RuntimeError("Evaluation produced no observed checkpoint rows.")
         return pd.DataFrame(rows)
 
-    def evaluate(self, data: TrajectoryData | None = None) -> pd.DataFrame:
+    def evaluate(
+        self,
+        data: TrajectoryData | None = None,
+        *,
+        particles: int | None = None,
+        seed: int | None = None,
+    ) -> pd.DataFrame:
         """Evaluate held-out measures, or training measures when no holdout exists."""
         if data is not None and data is not self.data:
             raise ValueError("External evaluation data must be loaded as a separate Trainer run.")
@@ -641,6 +723,29 @@ class Trainer:
             self.validation_measure_ids,
             include_mass=self.model.growth_enabled,
             validation_source=self.validation_source,
+            particles=particles,
+            seed=seed,
+        )
+
+    def evaluate_runtime(
+        self,
+        *,
+        study: TrajectoryData | None = None,
+        particles: int | None = None,
+        seed: int | None = None,
+        **kwargs: Any,
+    ) -> pd.DataFrame:
+        """Adapter from compact-v3 to the stable evaluation facade."""
+        if kwargs:
+            raise TypeError(f"Unsupported compact-v3 evaluation options: {sorted(kwargs)}")
+        from .evaluation import standardize_compact_metrics
+
+        frame = self.evaluate(study, particles=particles, seed=seed)
+        return standardize_compact_metrics(
+            self,
+            frame,
+            particles=self.config.evaluation.particles if particles is None else particles,
+            seed=self.config.training.seed + 9_100_001 if seed is None else seed,
         )
 
     def _manifest(self) -> dict[str, Any]:
@@ -665,6 +770,8 @@ class Trainer:
                 dependencies[name] = None
         return {
             "schema_version": 1,
+            "recipe": _compact_recipe_contract(),
+            "capabilities": asdict(_compact_capabilities()),
             "resolved_config": resolved_config(self.config),
             "package_version": __version__,
             "git_sha": git_sha,
@@ -672,6 +779,7 @@ class Trainer:
             "command": sys.argv,
             "dependencies": dependencies,
             "input_hashes": self.data.metadata.get("input_hashes", {}),
+            "dataset": self.data.metadata.get("dataset", {}),
             "axis": {
                 "kind": self.data.axis.kind,
                 "source": self.data.axis.source,
@@ -679,6 +787,7 @@ class Trainer:
                 "values": list(self.data.axis.values),
             },
             "mass_semantics": self.data.mass_semantics.value,
+            "representation_contract": self.data.representation.to_dict(),
             "mass_denominators": list(self.data.metadata.get("mass_denominators", [])),
             "claim_policy": self.data.claim_policy,
             "measure_meta_hash": _measure_meta_hash(self.data),
@@ -687,7 +796,12 @@ class Trainer:
                 "strategy": self.validation_strategy,
                 "train_measure_ids": list(self.train_measure_ids),
                 "validation_measure_ids": list(self.validation_measure_ids),
+                "train_time_labels": list(self.train_time_labels),
+                "validation_time_labels": list(self.validation_time_labels),
             },
+            "split_contract": _split_contract(self),
+            "checkpoint_mode": "inference_only",
+            "checkpoint_sha256": self.checkpoint_sha256,
             "bank_initialization": self.bank.diagnostics(),
             "ess_thresholds": {"warning_fraction": 0.2, "failure_fraction": 0.05},
             "counterfactual_status": ("evaluated" if self.counterfactual_rows else "not_requested"),
@@ -712,9 +826,11 @@ class Trainer:
                     f"Run directory contains files outside the five-artifact contract: {unknown}"
                 )
         output_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_path = output_dir / "checkpoint.pt"
         torch.save(
             {
-                "schema_version": 1,
+                "schema_version": 2,
+                "envelope": _compact_checkpoint_envelope(self),
                 "run_contract": _checkpoint_contract(self.data, self.config),
                 "architecture": self.model.architecture(),
                 "model_state": self.model.state_dict(),
@@ -722,25 +838,19 @@ class Trainer:
                 "completed_epochs": self.completed_epochs,
                 "train_measure_ids": self.train_measure_ids,
                 "validation_measure_ids": self.validation_measure_ids,
+                "train_time_labels": self.train_time_labels,
+                "validation_time_labels": self.validation_time_labels,
                 "validation_source": self.validation_source,
                 "validation_strategy": self.validation_strategy,
             },
-            output_dir / "checkpoint.pt",
+            checkpoint_path,
         )
+        self.checkpoint_sha256 = _file_sha256(checkpoint_path)
         pd.DataFrame(self.history_rows).to_parquet(output_dir / "history.parquet", index=False)
         self.metrics.to_parquet(output_dir / "metrics.parquet", index=False)
-        counterfactual_columns = [
-            "measure_id",
-            "time_label",
-            "context_policy",
-            "delta_log_mass",
-            "mean_shift_l2",
-            "energy_distance",
-            "context_dependence_shift",
-            "factual_ess",
-            "reference_ess",
-        ]
-        pd.DataFrame(self.counterfactual_rows, columns=counterfactual_columns).to_parquet(
+        from .counterfactual import COUNTERFACTUAL_COLUMNS
+
+        pd.DataFrame(self.counterfactual_rows, columns=COUNTERFACTUAL_COLUMNS).to_parquet(
             output_dir / "counterfactuals.parquet", index=False
         )
         (output_dir / "manifest.json").write_text(
@@ -756,13 +866,28 @@ class Trainer:
         config: RunConfig,
         *,
         device: str | torch.device = "cpu",
+        evaluation_overrides: dict[str, Any] | None = None,
     ) -> Trainer:
         """Reload a checkpoint into the same deterministic execution contract."""
         selected_device = torch.device(device)
+        if evaluation_overrides:
+            evaluation = type(config.evaluation).model_validate(
+                {**config.evaluation.model_dump(), **evaluation_overrides}
+            )
+            config = config.model_copy(update={"evaluation": evaluation})
         validate_run_data(config, data)
-        payload = torch.load(checkpoint, map_location=selected_device, weights_only=True)
-        if payload.get("schema_version") != 1:
+        checkpoint_path = Path(checkpoint).expanduser().resolve()
+        payload = torch.load(checkpoint_path, map_location=selected_device, weights_only=True)
+        if payload.get("schema_version") != 2:
             raise ValueError("Unsupported CREDO checkpoint schema.")
+        if "envelope" in payload:
+            from .artifacts import CheckpointEnvelope
+
+            envelope = CheckpointEnvelope.from_dict(payload["envelope"])
+            if envelope.recipe != _compact_recipe_contract():
+                raise ValueError("Checkpoint recipe disagrees with compact-v3.")
+            if envelope.representation_contract != data.representation.to_dict():
+                raise ValueError("Checkpoint representation contract disagrees with the data.")
         architecture = dict(payload["architecture"])
         model = CREDOModel(**architecture).to(selected_device)
         if not _model_matches(model, data, config):
@@ -795,9 +920,12 @@ class Trainer:
             bank=bank,
             train_measure_ids=tuple(payload["train_measure_ids"]),
             validation_measure_ids=tuple(payload["validation_measure_ids"]),
+            train_time_labels=tuple(payload["train_time_labels"]),
+            validation_time_labels=tuple(payload["validation_time_labels"]),
             validation_source=payload["validation_source"],
             validation_strategy=payload["validation_strategy"],
             completed_epochs=int(payload["completed_epochs"]),
+            checkpoint_sha256=_file_sha256(checkpoint_path),
         )
         final_phase = "context" if config.training.epochs.context else "mass"
         if not config.training.epochs.context and not config.training.epochs.mass:
@@ -811,24 +939,76 @@ class Trainer:
 
 def _validation_split(
     data: TrajectoryData,
-    fraction: float,
-    seed: int,
-) -> tuple[
-    tuple[str, ...],
-    tuple[str, ...],
-    Literal["held_out", "train_self_eval"],
-    Literal["context_group_holdout", "within_embedding_holdout", "train_self_eval"],
-]:
+    config: RunConfig,
+) -> ValidationSplit:
+    downstream_labels = tuple(data.axis.labels[1:])
     eligible = [
         measure_id
         for measure_id in data.measure_ids
-        if any(measure_id in data.measures[label] for label in data.axis.labels[1:])
+        if any(measure_id in data.measures[label] for label in downstream_labels)
     ]
     if not eligible:
         raise ValueError("No source measure has a downstream observation.")
-    if fraction <= 0 or len(eligible) < 2:
-        return data.measure_ids, tuple(eligible), "train_self_eval", "train_self_eval"
     metadata = data.measure_meta.set_index("measure_id")
+    validation = config.validation
+    if validation.strategy == "checkpoint":
+        validation_times = tuple(
+            label for label in downstream_labels if label in set(validation.values)
+        )
+        train_times = tuple(label for label in downstream_labels if label not in validation_times)
+        validation_ids = tuple(
+            measure_id
+            for measure_id in data.measure_ids
+            if any(measure_id in data.measures[label] for label in validation_times)
+        )
+        if not validation_ids:
+            raise ValueError("Explicit checkpoint validation has no observed measures.")
+        return ValidationSplit(
+            train_measure_ids=data.measure_ids,
+            validation_measure_ids=validation_ids,
+            train_time_labels=train_times,
+            validation_time_labels=validation_times,
+            source="held_out",
+            strategy="checkpoint_holdout",
+        )
+
+    if validation.strategy == "context_group":
+        available = set(metadata["context_group_id"].astype(str))
+        requested = set(validation.values)
+        unknown = requested - available
+        if unknown:
+            raise ValueError(f"Unknown validation context groups: {sorted(unknown)}")
+        validation_ids = tuple(
+            measure_id
+            for measure_id in eligible
+            if str(metadata.loc[measure_id, "context_group_id"]) in requested
+        )
+        train_ids = tuple(
+            measure_id
+            for measure_id in data.measure_ids
+            if str(metadata.loc[measure_id, "context_group_id"]) not in requested
+        )
+        _validate_holdout_embeddings(metadata, train_ids, validation_ids)
+        return ValidationSplit(
+            train_measure_ids=train_ids,
+            validation_measure_ids=validation_ids,
+            train_time_labels=downstream_labels,
+            validation_time_labels=downstream_labels,
+            source="held_out",
+            strategy="context_group_holdout",
+        )
+
+    fraction = validation.fraction
+    seed = config.training.seed
+    if validation.strategy == "train_self_eval" or fraction <= 0 or len(eligible) < 2:
+        return ValidationSplit(
+            train_measure_ids=data.measure_ids,
+            validation_measure_ids=tuple(eligible),
+            train_time_labels=downstream_labels,
+            validation_time_labels=downstream_labels,
+            source="train_self_eval",
+            strategy="train_self_eval",
+        )
 
     context_groups = tuple(
         dict.fromkeys(metadata.loc[list(data.measure_ids), "context_group_id"].tolist())
@@ -866,12 +1046,26 @@ def _validation_split(
                 if train and validation and validation_embeddings <= train_embeddings:
                     held_out = trial
                 if len(held_out) == holdout_count:
-                    return train, validation, "held_out", "context_group_holdout"
+                    return ValidationSplit(
+                        train_measure_ids=train,
+                        validation_measure_ids=validation,
+                        train_time_labels=downstream_labels,
+                        validation_time_labels=downstream_labels,
+                        source="held_out",
+                        strategy="context_group_holdout",
+                    )
 
     # Count outcomes are compositional within a whole context group. If a clean
     # group holdout is impossible, measure-level holdout would leak its counts.
     if data.count_blocks:
-        return data.measure_ids, tuple(eligible), "train_self_eval", "train_self_eval"
+        return ValidationSplit(
+            train_measure_ids=data.measure_ids,
+            validation_measure_ids=tuple(eligible),
+            train_time_labels=downstream_labels,
+            validation_time_labels=downstream_labels,
+            source="train_self_eval",
+            strategy="train_self_eval",
+        )
 
     validation_values: list[str] = []
     for embedding_id, rows in metadata.loc[eligible].groupby("embedding_id", observed=True):
@@ -907,9 +1101,42 @@ def _validation_split(
     validation_set = set(validation_values)
     validation = tuple(value for value in eligible if value in validation_set)
     if not validation:
-        return data.measure_ids, tuple(eligible), "train_self_eval", "train_self_eval"
+        return ValidationSplit(
+            train_measure_ids=data.measure_ids,
+            validation_measure_ids=tuple(eligible),
+            train_time_labels=downstream_labels,
+            validation_time_labels=downstream_labels,
+            source="train_self_eval",
+            strategy="train_self_eval",
+        )
     train = tuple(value for value in data.measure_ids if value not in validation_set)
-    return train, validation, "held_out", "within_embedding_holdout"
+    return ValidationSplit(
+        train_measure_ids=train,
+        validation_measure_ids=validation,
+        train_time_labels=downstream_labels,
+        validation_time_labels=downstream_labels,
+        source="held_out",
+        strategy="within_embedding_holdout",
+    )
+
+
+def _validate_holdout_embeddings(
+    metadata: pd.DataFrame,
+    train_ids: Sequence[str],
+    validation_ids: Sequence[str],
+) -> None:
+    if not train_ids or not validation_ids:
+        raise ValueError(
+            "Explicit context-group validation requires nonempty train and holdout sets."
+        )
+    train_embeddings = set(metadata.loc[list(train_ids), "embedding_id"])
+    validation_embeddings = set(metadata.loc[list(validation_ids), "embedding_id"])
+    missing = validation_embeddings - train_embeddings
+    if missing:
+        raise ValueError(
+            "Validation embeddings must be represented in training; "
+            f"missing={sorted(map(str, missing))[:5]}."
+        )
 
 
 def _model_matches(model: CREDOModel, data: TrajectoryData, config: RunConfig) -> bool:
@@ -922,7 +1149,7 @@ def _model_matches(model: CREDOModel, data: TrajectoryData, config: RunConfig) -
         "hidden_dim": config.model.hidden_dim,
         "context_mode": config.model.context,
         "sigma_min": 1e-3,
-        "growth_max": 3.0,
+        "growth_max": config.model.growth_max,
         "payoff_rank": min(4, config.model.n_programs),
     }
     return model.architecture() == expected
@@ -950,8 +1177,92 @@ def _checkpoint_contract(data: TrajectoryData, config: RunConfig) -> dict[str, A
         },
         "model": config.model.model_dump(mode="json"),
         "training": config.training.model_dump(mode="json"),
+        "validation": config.validation.model_dump(mode="json"),
         "loss": config.loss.model_dump(mode="json"),
     }
+
+
+def _compact_capabilities():
+    from .recipes.compact_v3 import recipe
+
+    return recipe.capabilities
+
+
+def _compact_recipe_contract() -> dict[str, str]:
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for name in ("model.py", "particles.py", "objective.py", "training.py"):
+        digest.update((root / name).read_bytes())
+    digest.update((root / "recipes/compact_v3.py").read_bytes())
+    return {
+        "id": "credo.compact_sde_v3",
+        "version": "3.0",
+        "implementation_hash": digest.hexdigest(),
+    }
+
+
+def _split_contract(trainer: Trainer) -> dict[str, Any]:
+    return {
+        "strategy": trainer.validation_strategy,
+        "train_measure_ids": list(trainer.train_measure_ids),
+        "validation_measure_ids": list(trainer.validation_measure_ids),
+        "train_time_labels": list(trainer.train_time_labels),
+        "validation_time_labels": list(trainer.validation_time_labels),
+        "representation_scope": "shared",
+    }
+
+
+def _tensor_state_hash(state: dict[str, torch.Tensor]) -> str:
+    digest = hashlib.sha256()
+    for name in sorted(state):
+        value = state[name].detach().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(value.dtype).encode("ascii"))
+        digest.update(np.asarray(value.shape, dtype="<i8").tobytes())
+        digest.update(value.numpy().tobytes(order="C"))
+    return digest.hexdigest()
+
+
+def _compact_checkpoint_envelope(trainer: Trainer) -> dict[str, Any]:
+    from .artifacts import CheckpointEnvelope, CheckpointMode
+
+    state = trainer.model.state_dict()
+    return CheckpointEnvelope(
+        recipe=_compact_recipe_contract(),
+        study_contract=_checkpoint_contract(trainer.data, trainer.config),
+        representation_contract=trainer.data.representation.to_dict(),
+        split_contract=_split_contract(trainer),
+        state={
+            "model": {
+                "source_key": "model_state",
+                "tensor_count": len(state),
+                "semantic_hash": _tensor_state_hash(state),
+            },
+            "ema": None,
+            "representation": {"embedded": False},
+            "objective": {"source_key": "log_count_concentration"},
+            "optimizer": None,
+            "scheduler": None,
+            "rng": None,
+        },
+        training={
+            "completed_epochs": trainer.completed_epochs,
+            "training_recipe_available": True,
+            "resume_supported": False,
+            "exact_retraining": True,
+        },
+        capabilities=asdict(_compact_capabilities()),
+        mode=CheckpointMode.INFERENCE_ONLY,
+    ).to_dict()
+
+
+def _file_sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(chunk_size):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _git_state() -> tuple[str | None, bool | None]:

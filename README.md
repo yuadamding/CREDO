@@ -1,9 +1,11 @@
 # CREDO
 
-CREDO is a compact research-alpha model for control-referenced finite-measure
-dynamics in longitudinal Perturb-seq. Version `3.0.0a1` deliberately provides
-one data representation, one soft-reference model, one particle rollout, one
-checkpoint objective, one trainer, one counterfactual engine, and one CLI.
+CREDO is a compact research-alpha framework for control-referenced
+finite-measure dynamics in longitudinal Perturb-seq. It provides one stable
+study, particle, evaluation, counterfactual, and artifact runtime with
+immutable model recipes. The default is `credo.compact_sde_v3@3.0`; archived
+transformer checkpoints use `credo.transformer_sde_v2@2.0` without translating
+their tensors into the compact architecture.
 
 CREDO estimates regularized effective-generator contrasts from destructive
 snapshots. It does not reconstruct cell genealogies or turn fitted-model
@@ -55,6 +57,8 @@ The YAML is authoritative. The CLI permits only operational overrides for
 output directory, device, and seed. Unknown or duplicate YAML keys are errors.
 
 ```yaml
+recipe: credo.compact_sde_v3@3.0
+
 data:
   support: data/support.h5ad
   latent_key: X_credo
@@ -73,19 +77,21 @@ model:
   n_programs: 8
   hidden_dim: 128
   context: catalog_bank
+  growth_max: 3.0
 
 training:
   epochs: {state: 40, mass: 20, context: 20}
   particles: 64
-  eval_particles: 256
   steps_per_interval: 4
   measures_per_batch: 256
+  batching: target_balanced
   learning_rate: 0.001
-  validation_fraction: 0.2
   patience: 10
   seed: 0
 
-loss: {mass: 1.0, count: 0.1}
+evaluation: {particles: 256, measures_per_batch: 256}
+validation: {strategy: auto, fraction: 0.2}
+loss: {mass: 1.0, count: 0.1, sinkhorn_epsilon: 0.1}
 output: runs/example
 ```
 
@@ -94,10 +100,12 @@ and optional counts, then ecological context. Before the latter two phases,
 CREDO initializes every catalog-bank entry with detached complete-group
 rollouts and refuses optimization unless coverage is complete.
 
-When compositional counts are present, held-out validation uses complete
-context groups so count denominators cannot leak held-out outcomes. If no such
-split is possible, the manifest says `train_self_eval` instead of overstating
-the validation evidence.
+Validation may be automatic, an explicit `context_group` list, an explicit
+downstream `checkpoint` list, or `train_self_eval`. Complete context groups are
+held out whenever compositional counts are present, so their denominators do
+not leak outcomes. Evaluation particle and batch counts are operational and may
+be overridden when loading a checkpoint; model, training, validation, and loss
+settings remain bound by the checkpoint contract.
 
 ## Counterfactuals
 
@@ -111,13 +119,16 @@ effects = counterfactual(
     trained_run,
     "D1::GENE1-1",
     context_policy="self_consistent",
+    n_particles=512,
 )
 ```
 
 Factual and reference branches use identical observed source particles and
 identical noise. The reference removes only the selected perturbation residual;
 all controls already have an exact zero residual around one shared learned
-reference. Context can be recomputed or clamped to the reference rollout.
+reference. Controls are valid numerical-null counterfactuals. Intrinsic models
+roll only the focal measure; contextual models use the complete context group.
+Context can be recomputed or clamped to the reference rollout.
 
 ## Artifacts
 
@@ -133,7 +144,31 @@ counterfactuals.parquet
 
 The manifest records the resolved config, package and dependency versions,
 Git state, command, input hashes, axis and mass contracts, validation split,
-bank coverage, and particle-weight thresholds.
+representation artifact, recipe capabilities, checkpoint mode, bank coverage,
+and particle-weight thresholds. Native compact checkpoints currently declare
+`inference_only`: fresh training is deterministic, but optimizer and RNG state
+are not persisted for trajectory continuation.
+
+## Recipes
+
+| Recipe | Representation | Context | Training | Imported checkpoint mode |
+| --- | --- | --- | --- | --- |
+| `credo.compact_sde_v3@3.0` | Frozen external latent | None or catalog bank | State, mass, context stages | Native inference, fresh retraining |
+| `credo.transformer_sde_v2@2.0` | Preserved 50-D expression VAE | Full-population inducing transformer | Published legacy joint plan | Historical inference only |
+
+Both recipes use absolute particle weights `log_m0 + logw`, exact shared-control
+reference semantics, same-start/same-noise counterfactuals, and the common
+metric table returned by `credo.evaluate`. Recipe-specific objective values are
+not comparable across model families.
+
+The v2 importer strict-loads raw or embedded EMA dynamics and the preserved VAE,
+records source hashes, and refuses resume when optimizer or RNG state is absent.
+Its frozen compatibility modules are loaded only when the recipe is requested
+and introduce no dependencies beyond the core runtime. Compact v3 has the
+released training executor; transformer v2 currently publishes its exact
+training plan for provenance but supports imported inference and replay only.
+See [runtime and recipes](docs/runtime_and_recipes.md) and the
+[LPS replay example](examples/lps_v2_replay/README.md).
 
 ## Cohort adapters
 
@@ -143,6 +178,8 @@ bank coverage, and particle-weight thresholds.
   HNSCC endpoint cohort with captured-count mass.
 - [`examples/lps`](examples/lps/README.md) converts the 90-minute to 10-hour LPS
   cohort and keeps expression preprocessing outside the installed package.
+- [`examples/lps_v2_replay`](examples/lps_v2_replay/README.md) imports and
+  replays the four preserved transformer-v2 donor folds.
 - [`examples/synthetic`](examples/synthetic/README.md) is the deterministic
   contract and smoke-test cohort.
 

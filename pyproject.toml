@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "credo"
-version = "3.0.0a1"
-description = "Compact soft-reference finite-measure dynamics for longitudinal Perturb-seq"
+version = "3.0.0a3"
+description = "Versioned finite-measure perturbation dynamics for longitudinal Perturb-seq"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
@@ -51,6 +51,10 @@ Repository = "https://github.com/yuadamding/CREDO"
 
 [project.scripts]
 credo = "credo.cli:main"
+
+[project.entry-points."credo.recipes"]
+"credo.compact_sde_v3__3.0" = "credo.recipes.compact_v3:recipe"
+"credo.transformer_sde_v2__2.0" = "credo.recipes.transformer_v2.recipe:recipe"
 
 [tool.setuptools]
 include-package-data = false

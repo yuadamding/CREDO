@@ -86,6 +86,10 @@ class ParticleRollout:
     def terminal_absolute_log_weight(self) -> torch.Tensor:
         return self.absolute_log_weight_steps[-1]
 
+    @property
+    def diffusion_steps(self) -> torch.Tensor:
+        return self.sigma_steps
+
     def slice_measure(self, index: int) -> ParticleRollout:
         item = slice(index, index + 1)
         return ParticleRollout(
@@ -101,12 +105,20 @@ class ParticleRollout:
             drift_steps=self.drift_steps[:, item],
             sigma_steps=self.sigma_steps[:, item],
             growth_steps=self.growth_steps[:, item],
-            context_steps=self.context_steps[:, item],
+            context_steps=(
+                self.context_steps[:, item] if self.context_steps.ndim >= 3 else self.context_steps
+            ),
             noise_steps=self.noise_steps[:, item],
         )
 
 
+RolloutResult = ParticleRollout
+
+
 class ContextProvider(Protocol):
+    requires_complete_catalog: bool
+    requires_full_group_rollout: bool
+
     def context(
         self,
         *,
@@ -129,6 +141,9 @@ def _group_index(values: Sequence[str], device: torch.device) -> torch.Tensor:
 
 
 class NoContextProvider:
+    requires_complete_catalog = False
+    requires_full_group_rollout = False
+
     def context(self, **kwargs: Any) -> torch.Tensor:
         z = kwargs["z"]
         model = kwargs["model"]
@@ -137,6 +152,9 @@ class NoContextProvider:
 
 class SelfConsistentContextProvider:
     """Compute context from every currently rolled-out measure in each group."""
+
+    requires_complete_catalog = False
+    requires_full_group_rollout = True
 
     def context(
         self,
@@ -166,6 +184,9 @@ class CatalogBankProtocol(Protocol):
 
 
 class CatalogContextProvider:
+    requires_complete_catalog = True
+    requires_full_group_rollout = False
+
     def __init__(self, bank: CatalogBankProtocol) -> None:
         self.bank = bank
 
@@ -189,6 +210,9 @@ class CatalogContextProvider:
 
 
 class ClampedContextProvider:
+    requires_complete_catalog = False
+    requires_full_group_rollout = False
+
     def __init__(self, context_steps: torch.Tensor) -> None:
         if context_steps.ndim != 3:
             raise ValueError("Clamped context must have shape [steps, measures, programs].")

@@ -17,6 +17,7 @@ model:
   n_programs: 4
   hidden_dim: 32
   context: catalog_bank
+  growth_max: 3.0
 
 training:
   epochs:
@@ -24,16 +25,24 @@ training:
     mass: 1
     context: 1
   particles: 16
-  eval_particles: 24
   steps_per_interval: 1
   measures_per_batch: 4
+  batching: random
   learning_rate: 0.001
-  validation_fraction: 0.5
   patience: 3
   seed: 0
+
+evaluation:
+  particles: 24
+  measures_per_batch: 4
+
+validation:
+  strategy: auto
+  fraction: 0.5
 
 loss:
   mass: 1.0
   count: 0.01
+  sinkhorn_epsilon: 0.1
 
 output: ../../runs/synthetic

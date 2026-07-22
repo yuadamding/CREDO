@@ -29,6 +29,13 @@ Before a cohort-level claim, predeclare and record:
 6. Donor- and guide-aware uncertainty intervals.
 7. Independent phenotype, arrayed perturbation, bulk, or external-cohort validation.
 8. Ablations for target sharing, soft reference, reaction, diffusion, context, payoff, and counts.
+9. A preflight showing observed required growth rates do not saturate `growth_max`.
+10. Latent gene coverage and decoded-pseudobulk checks at the configured Sinkhorn scale.
+
+Use explicit `validation.strategy: context_group` for frozen donor folds and
+`validation.strategy: checkpoint` for checkpoint masking. A strict held-out
+checkpoint claim also requires a representation whose fitting excluded that
+checkpoint; objective masking alone cannot remove encoder leakage.
 
 Evidence should point to immutable manifests and tables with acceptance
 criteria. Biology-specific aggregation belongs under `analysis/`, outside the

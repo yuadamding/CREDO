@@ -16,6 +16,7 @@ model:
   n_programs: 8
   hidden_dim: 128
   context: catalog_bank
+  growth_max: 3.0
 
 training:
   epochs:
@@ -23,16 +24,24 @@ training:
     mass: 20
     context: 20
   particles: 64
-  eval_particles: 256
   steps_per_interval: 8
   measures_per_batch: 128
+  batching: random
   learning_rate: 0.001
-  validation_fraction: 0.2
   patience: 10
   seed: 0
+
+evaluation:
+  particles: 256
+  measures_per_batch: 128
+
+validation:
+  strategy: auto
+  fraction: 0.2
 
 loss:
   mass: 1.0
   count: 0.0
+  sinkhorn_epsilon: 0.1
 
 output: ../../runs/lps/seed0

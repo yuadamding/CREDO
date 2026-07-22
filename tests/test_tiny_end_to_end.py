@@ -83,6 +83,16 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data) -> 
     after = loaded.metrics.reset_index(drop=True)
     pd.testing.assert_frame_equal(before, after, check_exact=True)
 
+    higher_resolution = Trainer.load(
+        trained_run.config.output / "checkpoint.pt",
+        tiny_data,
+        trained_run.config,
+        device="cpu",
+        evaluation_overrides={"particles": 10, "measures_per_batch": 6},
+    )
+    assert higher_resolution.config.evaluation.particles == 10
+    assert higher_resolution.config.evaluation.measures_per_batch == 6
+
     wrong_model = trained_run.config.model.model_copy(
         update={"hidden_dim": trained_run.config.model.hidden_dim + 8}
     )
@@ -134,10 +144,43 @@ def test_trainer_rejects_noncanonical_model_architecture(tiny_config, tiny_data)
         Trainer.fit(tiny_data, model, tiny_config, device="cpu")
 
 
+def test_growth_bound_is_configured_in_the_model(tiny_config, tiny_data) -> None:
+    model_config = tiny_config.model.model_copy(update={"growth_max": 7.5})
+    epochs = tiny_config.training.epochs.model_copy(update={"state": 1, "mass": 0, "context": 0})
+    training = tiny_config.training.model_copy(update={"epochs": epochs})
+    loss = tiny_config.loss.model_copy(update={"mass": 0.0, "count": 0.0})
+    config = tiny_config.model_copy(
+        update={"model": model_config, "training": training, "loss": loss}
+    )
+    trainer = Trainer.fit(tiny_data, None, config, device="cpu")
+    assert trainer.model.growth_max == 7.5
+
+
+def test_checkpoint_holdout_masks_training_and_evaluation_times(tiny_config, tiny_data) -> None:
+    raw = tiny_config.model_dump()
+    raw["training"]["epochs"] = {"state": 1, "mass": 0, "context": 0}
+    raw["training"]["particles"] = 4
+    raw["evaluation"]["particles"] = 4
+    raw["validation"] = {
+        "strategy": "checkpoint",
+        "values": ["Stim8hr"],
+        "fraction": 0,
+    }
+    raw["loss"] = {"mass": 0.0, "count": 0.0, "sinkhorn_epsilon": 0.1}
+    config = RunConfig.model_validate(raw)
+    trainer = Trainer.fit(tiny_data, None, config, device="cpu")
+    assert trainer.train_time_labels == ("Stim48hr",)
+    assert trainer.validation_time_labels == ("Stim8hr",)
+    assert set(trainer.metrics["time_label"]) == {"Stim8hr"}
+    expected_train_observations = len(tiny_data.measures["Stim48hr"])
+    assert trainer.history_rows[0]["train_observations"] == expected_train_observations
+
+
 def test_seed_reproduces_independent_fits(tiny_config, tiny_data, tmp_path) -> None:
     raw = tiny_config.model_dump()
     raw["training"]["epochs"] = {"state": 1, "mass": 0, "context": 0}
-    raw["training"].update({"particles": 4, "eval_particles": 4})
+    raw["training"].update({"particles": 4})
+    raw["evaluation"].update({"particles": 4})
     raw["loss"] = {"mass": 0.0, "count": 0.0}
     raw["output"] = tmp_path / "unused"
     config = RunConfig.model_validate(raw)
@@ -253,19 +296,24 @@ def test_counterfactual_persistence_preserves_prior_rows(trained_run, tiny_data)
         manifest_path.write_bytes(original_manifest)
 
 
-def test_installed_surface_has_fewer_than_ten_modules() -> None:
+def test_installed_surface_is_compact_and_recipe_runtime_is_explicit() -> None:
     modules = {module.name for module in pkgutil.iter_modules(credo.__path__)}
     assert modules == {
+        "artifacts",
         "cli",
         "contracts",
         "counterfactual",
+        "evaluation",
         "io",
         "model",
         "objective",
         "particles",
+        "recipes",
+        "registry",
+        "runtime",
         "training",
     }
-    assert len(credo.__all__) == 9
+    assert len(credo.__all__) == 15
 
 
 def test_cli_validate_and_summarize(tiny_config, trained_run, capsys, tmp_path) -> None:

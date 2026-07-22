@@ -42,15 +42,16 @@ def tiny_config(tmp_path_factory: pytest.TempPathFactory) -> RunConfig:
         update={
             "epochs": epochs,
             "particles": 6,
-            "eval_particles": 8,
             "measures_per_batch": 12,
             "patience": 2,
         }
     )
+    evaluation = config.evaluation.model_copy(update={"particles": 8})
     return config.model_copy(
         update={
             "data": data_config,
             "training": training,
+            "evaluation": evaluation,
             "output": root / "run",
         }
     )
