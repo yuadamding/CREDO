@@ -36,7 +36,8 @@
   blocks, training, evaluation, persistence, and counterfactual execution.
 - Added a fixed state to mass to context schedule with complete catalog-bank
   initialization and observation-weighted held-out evaluation.
-- Moved cohort preparation to GSE314342, HNSCC, LPS, and synthetic adapters.
+- Moved GSE314342, HNSCC, and LPS preparation to workspace-owned adapters and
+  retained only the synthetic contract example in CREDO.
 - Replaced mode-specific runners and compatibility aliases with `credo
   validate`, `credo run`, and `credo summarize`.
 - Reduced run output to one manifest, checkpoint, history table, metrics table,

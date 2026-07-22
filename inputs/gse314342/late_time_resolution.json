@@ -1,9 +1,0 @@
-{
-  "accession": "GSE314342",
-  "status": "resolved",
-  "processed_label": "Stim48hr",
-  "raw_label": "24 hr stim",
-  "physical_time_hours": 48.0,
-  "rationale": "The processed release, authors' analysis configuration, and associated validation experiments consistently identify the late condition as Stim48hr. The raw GEO lane-title discrepancy is retained here as provenance.",
-  "source": "GSE314342 processed-release metadata and validation experiment labels; reviewed 2026-07-15"
-}

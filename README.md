@@ -204,23 +204,16 @@ and introduce no dependencies beyond the core runtime. Compact v3 has the
 released training executor; transformer v2 preserves a typed, non-executable
 reconstruction and the complete source run config, but supports imported
 inference and replay only.
-See [runtime and recipes](docs/runtime_and_recipes.md) and the
-[LPS replay example](examples/lps_v2_replay/README.md).
+See [runtime and recipes](docs/runtime_and_recipes.md).
 
-## Cohort adapters
+## Examples
 
-- [`examples/gse314342`](examples/gse314342/README.md) converts the downloaded
-  primary human CD4+ T-cell cohort and preserves donor-guide measures.
-- [`examples/hnscc_p4_p60`](examples/hnscc_p4_p60/README.md) converts the P4/P60
-  HNSCC endpoint cohort with captured-count mass.
-- [`examples/lps`](examples/lps/README.md) converts the 90-minute to 10-hour LPS
-  cohort and keeps expression preprocessing outside the installed package.
-- [`examples/lps_v2_replay`](examples/lps_v2_replay/README.md) imports and
-  replays the four preserved transformer-v2 donor folds.
 - [`examples/synthetic`](examples/synthetic/README.md) is the deterministic
   contract and smoke-test cohort.
 
-Adding a dataset requires no change under `src/credo`.
+Cohort-specific adapters, configs, provenance, and replay commands belong to
+the surrounding analysis workspace and are not shipped with CREDO. Adding a
+dataset requires no change under `src/credo`.
 
 ## Verify
 
