@@ -3,10 +3,28 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+
+import numpy as np
+import torch
+
+
+def tensor_state_sha256(state: Mapping[str, torch.Tensor]) -> str:
+    """Hash tensor names, dtypes, shapes, and values with one canonical encoding."""
+    digest = hashlib.sha256()
+    for name in sorted(state):
+        tensor = state[name].detach().cpu().contiguous()
+        digest.update(name.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(tensor.dtype).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(np.asarray(tensor.shape, dtype="<i8").tobytes())
+        digest.update(tensor.reshape(-1).view(torch.uint8).numpy().tobytes(order="C"))
+    return digest.hexdigest()
 
 
 class CheckpointMode(StrEnum):
@@ -32,6 +50,20 @@ class CheckpointEnvelope:
         object.__setattr__(self, "mode", CheckpointMode(self.mode))
         if self.schema_version != 2:
             raise ValueError("CheckpointEnvelope schema_version must be 2.")
+        mappings = {
+            "recipe": self.recipe,
+            "study_contract": self.study_contract,
+            "representation_contract": self.representation_contract,
+            "split_contract": self.split_contract,
+            "state": self.state,
+            "training": self.training,
+            "capabilities": self.capabilities,
+        }
+        invalid = [name for name, value in mappings.items() if not isinstance(value, Mapping)]
+        if invalid:
+            raise ValueError(f"Checkpoint envelope fields must be mappings: {invalid}")
+        if self.import_provenance is not None and not isinstance(self.import_provenance, Mapping):
+            raise ValueError("Checkpoint envelope import_provenance must be a mapping or null.")
         recipe_id = str(self.recipe.get("id", ""))
         recipe_version = str(self.recipe.get("version", ""))
         if not recipe_id or not recipe_version:
@@ -51,7 +83,7 @@ class CheckpointEnvelope:
             ]
             if missing:
                 raise ValueError(f"Resume-capable checkpoint is missing state: {missing}")
-            if not bool(self.capabilities.get("resume_training")):
+            if not bool(self.capabilities.get("checkpoint_resume_supported")):
                 raise ValueError("A resume-capable checkpoint requires recipe resume capability.")
 
     def to_dict(self) -> dict[str, Any]:
@@ -74,6 +106,26 @@ class CheckpointEnvelope:
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> CheckpointEnvelope:
+        allowed = {
+            "schema_version",
+            "recipe",
+            "study_contract",
+            "representation_contract",
+            "split_contract",
+            "state",
+            "training",
+            "capabilities",
+            "mode",
+            "import_provenance",
+        }
+        required = allowed - {"import_provenance"}
+        unknown = set(payload) - allowed
+        missing = required - set(payload)
+        if unknown or missing:
+            raise ValueError(
+                "Checkpoint envelope has invalid fields; "
+                f"missing={sorted(missing)}, unknown={sorted(unknown)}."
+            )
         return cls(
             schema_version=int(payload.get("schema_version", -1)),
             recipe=payload["recipe"],

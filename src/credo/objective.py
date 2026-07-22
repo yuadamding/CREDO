@@ -404,12 +404,18 @@ def validate_count_blocks(data: TrajectoryData) -> None:
             )
 
 
-def rollout_regularization(rollout: ParticleRollout) -> torch.Tensor:
+def rollout_regularization(
+    rollout: ParticleRollout,
+    *,
+    drift_weight: float = 1e-4,
+    diffusion_weight: float = 1e-5,
+    growth_weight: float = 1e-4,
+) -> torch.Tensor:
     """Small auditable action penalty over generated coefficients."""
     return (
-        1e-4 * rollout.drift_steps.square().mean()
-        + 1e-5 * rollout.sigma_steps.square().mean()
-        + 1e-4 * rollout.growth_steps.square().mean()
+        float(drift_weight) * rollout.drift_steps.square().mean()
+        + float(diffusion_weight) * rollout.sigma_steps.square().mean()
+        + float(growth_weight) * rollout.growth_steps.square().mean()
     )
 
 
@@ -417,6 +423,7 @@ def total_objective(
     rollout: ParticleRollout,
     data: TrajectoryData,
     *,
+    geometry_weight: float = 1.0,
     mass_weight: float,
     count_weight: float,
     include_mass: bool,
@@ -425,6 +432,7 @@ def total_objective(
     validation_source: str = "train_self_eval",
     sinkhorn_epsilon: float = 0.1,
     time_labels: Iterable[str] | None = None,
+    action_weights: tuple[float, float, float] = (1e-4, 1e-5, 1e-4),
 ) -> ObjectiveResult:
     checkpoint = checkpoint_geometry_mass_loss(
         rollout,
@@ -446,9 +454,19 @@ def total_objective(
         if include_mass and count_weight > 0
         else rollout.z_steps.new_zeros(())
     )
-    regularization = rollout_regularization(rollout)
+    regularization = rollout_regularization(
+        rollout,
+        drift_weight=action_weights[0],
+        diffusion_weight=action_weights[1],
+        growth_weight=action_weights[2],
+    )
     return ObjectiveResult(
-        total=checkpoint.total + float(count_weight) * counts + regularization,
+        total=(
+            float(geometry_weight) * checkpoint.geometry
+            + (float(mass_weight) * checkpoint.log_mass_error if include_mass else 0.0)
+            + float(count_weight) * counts
+            + regularization
+        ),
         checkpoint=checkpoint,
         count=counts,
         regularization=regularization,

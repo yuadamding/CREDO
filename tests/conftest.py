@@ -18,7 +18,8 @@ except (KeyError, ValueError):
     pass
 
 from credo.io import RunConfig, load_config, load_data  # noqa: E402
-from credo.training import Trainer  # noqa: E402
+from credo.registry import get_recipe  # noqa: E402
+from credo.runtime import TrainingEngine  # noqa: E402
 from examples.synthetic.generate import generate  # noqa: E402
 
 
@@ -37,8 +38,9 @@ def tiny_config(tmp_path_factory: pytest.TempPathFactory) -> RunConfig:
             "dataset": data_dir / "dataset.json",
         }
     )
-    epochs = config.training.epochs.model_copy(update={"state": 1, "mass": 1, "context": 1})
-    training = config.training.model_copy(
+    settings = config.recipe_config
+    epochs = settings.training.epochs.model_copy(update={"state": 1, "mass": 1, "context": 1})
+    training = settings.training.model_copy(
         update={
             "epochs": epochs,
             "particles": 6,
@@ -46,12 +48,12 @@ def tiny_config(tmp_path_factory: pytest.TempPathFactory) -> RunConfig:
             "patience": 2,
         }
     )
-    evaluation = config.evaluation.model_copy(update={"particles": 8})
+    evaluation = settings.evaluation.model_copy(update={"particles": 8})
+    settings = settings.model_copy(update={"training": training, "evaluation": evaluation})
     return config.model_copy(
         update={
             "data": data_config,
-            "training": training,
-            "evaluation": evaluation,
+            "recipe_config": settings,
             "output": root / "run",
         }
     )
@@ -64,6 +66,8 @@ def tiny_data(tiny_config: RunConfig):
 
 @pytest.fixture(scope="session")
 def trained_run(tiny_config: RunConfig, tiny_data):
-    trainer = Trainer.fit(tiny_data, None, tiny_config, device="cpu")
+    trainer = TrainingEngine().fit(
+        get_recipe(tiny_config.recipe), tiny_data, tiny_config, device="cpu"
+    )
     trainer.save()
     return trainer

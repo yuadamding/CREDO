@@ -5,17 +5,25 @@ import pkgutil
 from dataclasses import replace
 
 import anndata as ad
+import numpy as np
 import pandas as pd
 import pytest
+import torch
 import yaml
 from pydantic import ValidationError
 
 import credo
 from credo.cli import main
 from credo.counterfactual import counterfactual
-from credo.io import RunConfig, load_config, write_canonical_dataset
+from credo.io import RunConfig, load_config, load_data, write_canonical_dataset
 from credo.model import CREDOModel
+from credo.registry import get_recipe
+from credo.runtime import TrainingEngine
 from credo.training import Trainer
+
+
+def _fit(config, data):
+    return TrainingEngine().fit(get_recipe(config.recipe), data, config, device="cpu")
 
 
 def test_tiny_gse_like_run_writes_five_artifacts(trained_run) -> None:
@@ -72,7 +80,7 @@ def test_tiny_gse_like_run_writes_five_artifacts(trained_run) -> None:
     assert manifest["validation_split"]["strategy"] == "context_group_holdout"
 
 
-def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data) -> None:
+def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp_path) -> None:
     loaded = Trainer.load(
         trained_run.config.output / "checkpoint.pt",
         tiny_data,
@@ -90,13 +98,13 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data) -> 
         device="cpu",
         evaluation_overrides={"particles": 10, "measures_per_batch": 6},
     )
-    assert higher_resolution.config.evaluation.particles == 10
-    assert higher_resolution.config.evaluation.measures_per_batch == 6
+    assert higher_resolution.settings.evaluation.particles == 10
+    assert higher_resolution.settings.evaluation.measures_per_batch == 6
 
-    wrong_model = trained_run.config.model.model_copy(
-        update={"hidden_dim": trained_run.config.model.hidden_dim + 8}
-    )
-    wrong_config = trained_run.config.model_copy(update={"model": wrong_model})
+    settings = trained_run.settings
+    wrong_model = settings.model.model_copy(update={"hidden_dim": settings.model.hidden_dim + 8})
+    wrong_settings = settings.model_copy(update={"model": wrong_model})
+    wrong_config = trained_run.config.model_copy(update={"recipe_config": wrong_settings})
     with pytest.raises(ValueError, match="architecture disagrees"):
         Trainer.load(
             trained_run.config.output / "checkpoint.pt",
@@ -105,10 +113,11 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data) -> 
             device="cpu",
         )
 
-    wrong_training = trained_run.config.training.model_copy(
-        update={"steps_per_interval": trained_run.config.training.steps_per_interval + 1}
+    wrong_training = settings.training.model_copy(
+        update={"steps_per_interval": settings.training.steps_per_interval + 1}
     )
-    wrong_config = trained_run.config.model_copy(update={"training": wrong_training})
+    wrong_settings = settings.model_copy(update={"training": wrong_training})
+    wrong_config = trained_run.config.model_copy(update={"recipe_config": wrong_settings})
     with pytest.raises(ValueError, match="run contract disagrees"):
         Trainer.load(
             trained_run.config.output / "checkpoint.pt",
@@ -128,47 +137,84 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data) -> 
             device="cpu",
         )
 
+    payload = torch.load(
+        trained_run.config.output / "checkpoint.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    payload.pop("envelope")
+    missing_envelope = tmp_path / "missing-envelope.pt"
+    torch.save(payload, missing_envelope)
+    with pytest.raises(ValueError, match="missing its envelope"):
+        Trainer.load(missing_envelope, tiny_data, trained_run.config, device="cpu")
+
+    corrupted = torch.load(
+        trained_run.config.output / "checkpoint.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    state_name = next(iter(corrupted["model_state"]))
+    corrupted["model_state"][state_name] = corrupted["model_state"][state_name].clone()
+    corrupted["model_state"][state_name].reshape(-1)[0] += 1
+    corrupted_checkpoint = tmp_path / "corrupted-model.pt"
+    torch.save(corrupted, corrupted_checkpoint)
+    with pytest.raises(ValueError, match="semantic hash"):
+        Trainer.load(corrupted_checkpoint, tiny_data, trained_run.config, device="cpu")
+
 
 def test_trainer_rejects_noncanonical_model_architecture(tiny_config, tiny_data) -> None:
+    settings = tiny_config.recipe_config
     model = CREDOModel(
         embedding_ids=tiny_data.embedding_ids,
         control_embedding_ids=tiny_data.control_embedding_ids,
         latent_dim=tiny_data.latent_dim,
-        embedding_dim=tiny_config.model.embedding_dim,
-        n_programs=tiny_config.model.n_programs,
-        hidden_dim=tiny_config.model.hidden_dim,
-        context_mode=tiny_config.model.context,
+        embedding_dim=settings.model.embedding_dim,
+        n_programs=settings.model.n_programs,
+        hidden_dim=settings.model.hidden_dim,
+        context_mode=settings.model.context,
         growth_max=2.0,
     )
+    recipe = get_recipe(tiny_config.recipe)
     with pytest.raises(ValueError, match="architecture disagrees"):
-        Trainer.fit(tiny_data, model, tiny_config, device="cpu")
+        Trainer.from_plan(
+            tiny_data,
+            model,
+            tiny_config,
+            recipe.training_plan(tiny_data, settings),
+            recipe.build_objectives(tiny_data, settings),
+            device="cpu",
+        )
 
 
 def test_growth_bound_is_configured_in_the_model(tiny_config, tiny_data) -> None:
-    model_config = tiny_config.model.model_copy(update={"growth_max": 7.5})
-    epochs = tiny_config.training.epochs.model_copy(update={"state": 1, "mass": 0, "context": 0})
-    training = tiny_config.training.model_copy(update={"epochs": epochs})
-    loss = tiny_config.loss.model_copy(update={"mass": 0.0, "count": 0.0})
-    config = tiny_config.model_copy(
+    settings = tiny_config.recipe_config
+    model_config = settings.model.model_copy(update={"growth_max": 7.5})
+    epochs = settings.training.epochs.model_copy(update={"state": 1, "mass": 0, "context": 0})
+    training = settings.training.model_copy(update={"epochs": epochs})
+    loss = settings.loss.model_copy(update={"mass": 0.0, "count": 0.0})
+    settings = settings.model_copy(
         update={"model": model_config, "training": training, "loss": loss}
     )
-    trainer = Trainer.fit(tiny_data, None, config, device="cpu")
+    config = tiny_config.model_copy(update={"recipe_config": settings})
+    trainer = _fit(config, tiny_data)
     assert trainer.model.growth_max == 7.5
 
 
 def test_checkpoint_holdout_masks_training_and_evaluation_times(tiny_config, tiny_data) -> None:
     raw = tiny_config.model_dump()
-    raw["training"]["epochs"] = {"state": 1, "mass": 0, "context": 0}
-    raw["training"]["particles"] = 4
-    raw["evaluation"]["particles"] = 4
-    raw["validation"] = {
+    recipe_config = raw["recipe_config"]
+    recipe_config["training"]["epochs"] = {"state": 1, "mass": 0, "context": 0}
+    recipe_config["training"]["particles"] = 4
+    recipe_config["evaluation"]["particles"] = 4
+    recipe_config["validation"] = {
         "strategy": "checkpoint",
         "values": ["Stim8hr"],
         "fraction": 0,
+        "representation_scope": "shared",
     }
-    raw["loss"] = {"mass": 0.0, "count": 0.0, "sinkhorn_epsilon": 0.1}
+    recipe_config["loss"] = {"mass": 0.0, "count": 0.0, "sinkhorn_epsilon": 0.1}
     config = RunConfig.model_validate(raw)
-    trainer = Trainer.fit(tiny_data, None, config, device="cpu")
+    trainer = _fit(config, tiny_data)
     assert trainer.train_time_labels == ("Stim48hr",)
     assert trainer.validation_time_labels == ("Stim8hr",)
     assert set(trainer.metrics["time_label"]) == {"Stim8hr"}
@@ -178,14 +224,15 @@ def test_checkpoint_holdout_masks_training_and_evaluation_times(tiny_config, tin
 
 def test_seed_reproduces_independent_fits(tiny_config, tiny_data, tmp_path) -> None:
     raw = tiny_config.model_dump()
-    raw["training"]["epochs"] = {"state": 1, "mass": 0, "context": 0}
-    raw["training"].update({"particles": 4})
-    raw["evaluation"].update({"particles": 4})
-    raw["loss"] = {"mass": 0.0, "count": 0.0}
+    recipe_config = raw["recipe_config"]
+    recipe_config["training"]["epochs"] = {"state": 1, "mass": 0, "context": 0}
+    recipe_config["training"].update({"particles": 4})
+    recipe_config["evaluation"].update({"particles": 4})
+    recipe_config["loss"] = {"mass": 0.0, "count": 0.0}
     raw["output"] = tmp_path / "unused"
     config = RunConfig.model_validate(raw)
-    first = Trainer.fit(tiny_data, None, config, device="cpu")
-    second = Trainer.fit(tiny_data, None, config, device="cpu")
+    first = _fit(config, tiny_data)
+    second = _fit(config, tiny_data)
     for name, value in first.model.state_dict().items():
         assert value.equal(second.model.state_dict()[name])
     pd.testing.assert_frame_equal(first.metrics, second.metrics, check_exact=True)
@@ -228,6 +275,23 @@ def test_canonical_writer_persists_validated_counts_and_rejects_stale_files(
     written_support = ad.read_h5ad(output / "support.h5ad")
     assert pd.api.types.is_numeric_dtype(written_support.obs["atom_weight"])
     assert written_support.obsm["X_credo"].dtype.name == "float32"
+    manifest = json.loads((output / "dataset.json").read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 2
+    assert manifest["representation"]["backend"] == "frozen_latent"
+    assert manifest["representation"]["fit_scope"] == "external"
+    assert manifest["representation"]["included_samples"] == []
+    assert manifest["representation"]["included_time_labels"] == []
+    data_config = tiny_config.data.model_copy(
+        update={
+            "support": output / "support.h5ad",
+            "measure_meta": output / "measure_meta.parquet",
+            "masses": output / "masses.parquet",
+            "counts": output / "counts.parquet",
+            "dataset": output / "dataset.json",
+        }
+    )
+    loaded = load_data(tiny_config.model_copy(update={"data": data_config}))
+    assert loaded.representation.to_dict() == manifest["representation"]
 
     with pytest.raises(FileExistsError, match="outside its contract"):
         write_canonical_dataset(
@@ -239,6 +303,47 @@ def test_canonical_writer_persists_validated_counts_and_rejects_stale_files(
             mass_semantics=tiny_data.mass_semantics,
             counts=None,
         )
+
+
+def test_lazy_support_matches_eager_loading_and_bounds_cache(tiny_config) -> None:
+    lazy_data_config = tiny_config.data.model_copy(update={"support_cache_size": 2})
+    lazy = load_data(tiny_config.model_copy(update={"data": lazy_data_config}))
+    eager_data_config = tiny_config.data.model_copy(update={"lazy_support": False})
+    eager = load_data(tiny_config.model_copy(update={"data": eager_data_config}))
+
+    assert getattr(lazy.measures, "is_lazy", False) is True
+    assert len(lazy.measures._cache) == 0
+    support_view = lazy.support
+    assert len(lazy.measures._cache) == 0
+    source_id = next(iter(support_view[lazy.axis.source]))
+    np.testing.assert_array_equal(
+        support_view[lazy.axis.source][source_id],
+        eager.measures[lazy.axis.source][source_id].support,
+    )
+    assert len(lazy.measures._cache) == 1
+    for label in lazy.axis.labels:
+        for measure_id in tuple(lazy.measures[label])[:3]:
+            lazy_measure = lazy.measures[label][measure_id]
+            eager_measure = eager.measures[label][measure_id]
+            np.testing.assert_array_equal(lazy_measure.support, eager_measure.support)
+            np.testing.assert_allclose(lazy_measure.weights, eager_measure.weights)
+            assert lazy_measure.total_mass == eager_measure.total_mass
+    assert len(lazy.measures._cache) <= 2
+    lazy.measures.close()
+    assert lazy.measures._handle is None
+
+
+def test_lazy_support_validation_scans_for_nonfinite_values(tiny_config, tmp_path) -> None:
+    support = ad.read_h5ad(tiny_config.data.support)
+    latent = np.asarray(support.obsm[tiny_config.data.latent_key]).copy()
+    latent[-1, -1] = np.nan
+    support.obsm[tiny_config.data.latent_key] = latent
+    corrupted_path = tmp_path / "nonfinite-support.h5ad"
+    support.write_h5ad(corrupted_path)
+    data_config = tiny_config.data.model_copy(update={"support": corrupted_path})
+
+    with pytest.raises(ValueError, match="contains non-finite values"):
+        load_data(tiny_config.model_copy(update={"data": data_config}))
 
 
 def test_counterfactual_persistence_preserves_prior_rows(trained_run, tiny_data) -> None:

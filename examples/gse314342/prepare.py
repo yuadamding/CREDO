@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 from pathlib import Path
 
 import anndata as ad
 import numpy as np
 import pandas as pd
+import torch
 
-from credo.contracts import Axis, MassSemantics
+from credo.artifacts import tensor_state_sha256
+from credo.contracts import Axis, MassSemantics, RepresentationArtifact
 from credo.io import write_canonical_dataset
 
 
@@ -21,6 +25,57 @@ def _as_bool(values: pd.Series) -> pd.Series:
     if not normalized.isin({"true", "false", "1", "0"}).all():
         raise ValueError("GSE314342 is_control contains nonboolean values.")
     return normalized.isin({"true", "1"})
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(8 * 1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _representation(source_dir: Path, support_path: Path) -> RepresentationArtifact:
+    artifact_dir = source_dir / "vae_artifact"
+    state_path = artifact_dir / "vae_state_dict.pt"
+    metadata_path = artifact_dir / "vae_metadata.json"
+    gene_names_path = source_dir / "vae_gene_names.txt"
+    gene_mask_path = artifact_dir / "vae_gene_indices.npy"
+    for path in (state_path, metadata_path, gene_names_path, gene_mask_path):
+        if not path.is_file():
+            raise FileNotFoundError(path)
+    state = torch.load(state_path, map_location="cpu", weights_only=True)
+    encoder = {
+        name: value
+        for name, value in state.items()
+        if name.startswith(("encoder.", "mu_head.", "logvar_head."))
+    }
+    decoder = {name: value for name, value in state.items() if name.startswith("decoder.")}
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    normalization = json.dumps(
+        metadata["latent_standardization"], sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    fit_selection_hash = metadata["vae_hyperparams"]["fit_selection_sha256"]
+    return RepresentationArtifact(
+        representation_id=f"gse314342-vae32:{_sha256(state_path)[:12]}",
+        backend="expression_vae",
+        latent_dim=int(metadata["vae_hyperparams"]["latent_dim"]),
+        gene_names_hash=_sha256(gene_names_path),
+        gene_mask_hash=_sha256(gene_mask_path),
+        encoder_state_hash=tensor_state_sha256(encoder),
+        decoder_state_hash=tensor_state_sha256(decoder),
+        latent_cache_hash=_sha256(support_path),
+        normalization_hash=hashlib.sha256(normalization).hexdigest(),
+        fit_scope="all_checkpoints",
+        included_samples=("D1", "D2", "D3", "D4"),
+        included_time_labels=("Rest", "Stim8hr", "Stim48hr"),
+        producer={
+            "model_state_file_sha256": _sha256(state_path),
+            "metadata_sha256": _sha256(metadata_path),
+            "fit_selection_sha256": fit_selection_hash,
+            "latent_cache_hash_kind": "support_h5ad_file_sha256",
+        },
+    )
 
 
 def prepare(source_dir: Path, output_dir: Path, *, pilot: bool) -> dict[str, Path]:
@@ -108,7 +163,7 @@ def prepare(source_dir: Path, output_dir: Path, *, pilot: bool) -> dict[str, Pat
         labels=("Rest", "Stim8hr", "Stim48hr"),
         values=(0.0, 8.0, 48.0),
     )
-    return write_canonical_dataset(
+    paths = write_canonical_dataset(
         output_dir,
         support=support,
         measure_meta=measure_meta,
@@ -124,8 +179,22 @@ def prepare(source_dir: Path, output_dir: Path, *, pilot: bool) -> dict[str, Pat
             "source_supported_measure_count": len(source_measure_ids),
             "excluded_without_source_support": len(all_measure_ids - source_measure_ids),
             "late_time_resolution": "Stim48hr follows processed author metadata",
+            "authors_processing_contract": (
+                "inputs/GSE314342/provenance/authors_processing_contract.json"
+            ),
+            "selection_contract": {
+                "kind": "source_supported_base_conversion",
+                "uses_downstream_expression": False,
+                "authors_keep_for_DE_reused_directly": False,
+                "strict_checkpoint_holdout_eligible": False,
+                "reason_not_strict": "the shared VAE uses all checkpoints",
+            },
         },
     )
+    manifest = json.loads(paths["dataset"].read_text(encoding="utf-8"))
+    manifest["representation"] = _representation(source_dir, paths["support"]).to_dict()
+    paths["dataset"].write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return paths
 
 
 def main() -> int:

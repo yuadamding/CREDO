@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from credo.contracts import Axis, FiniteMeasure, MassSemantics, SplitSpec, TrajectoryData
+from credo.counterfactual import COMMON_COUNTERFACTUAL_COLUMNS
 from credo.io import RunConfig, load_data, validate_run_data
 from credo.model import CREDOModel
 from credo.objective import (
@@ -19,14 +20,16 @@ from credo.objective import (
 )
 from credo.particles import (
     CatalogContextProvider,
+    DynamicsStep,
     NoContextProvider,
     ParticleState,
     axis_grid,
+    euler_maruyama_rollout,
     rollout,
     sample_initial_particles,
     sample_noise,
 )
-from credo.training import CatalogBank, _validation_split
+from credo.training import CatalogBank, _representation_scope, _validation_split
 
 
 def _model(data: TrajectoryData, *, context: str = "none") -> CREDOModel:
@@ -65,6 +68,75 @@ def test_representation_and_split_provenance_are_strict(tiny_data) -> None:
         SplitSpec(strategy="sample", train_values=("D1", "D1"))
     with pytest.raises(ValueError, match="must be disjoint"):
         SplitSpec(strategy="sample", train_values=("D1",), validation_values=("D1",))
+
+
+def test_representation_scope_rejects_nested_holdout_leakage(tiny_config, tiny_data) -> None:
+    settings = tiny_config.recipe_config
+    validation = type(settings.validation).model_validate(
+        {
+            "strategy": "context_group",
+            "values": ["D1"],
+            "fraction": 0,
+            "representation_scope": "nested",
+        }
+    )
+    config = tiny_config.model_copy(
+        update={"recipe_config": settings.model_copy(update={"validation": validation})}
+    )
+    split = _validation_split(tiny_data, config)
+    leaked = replace(
+        tiny_data.representation,
+        fit_scope="training_fold_source",
+        included_samples=("D1", "D2"),
+    )
+    nested_data = replace(tiny_data, representation=leaked)
+    with pytest.raises(ValueError, match="held-out representation samples"):
+        _representation_scope(nested_data, split, config)
+
+
+def test_all_checkpoint_representation_is_explicitly_shared(tiny_config, tiny_data) -> None:
+    representation = replace(
+        tiny_data.representation,
+        fit_scope="all_checkpoints",
+        included_samples=("D1", "D2"),
+        included_time_labels=tuple(tiny_data.axis.labels),
+    )
+    shared_data = replace(tiny_data, representation=representation)
+    split = _validation_split(shared_data, tiny_config)
+    assert _representation_scope(shared_data, split, tiny_config) == "shared"
+
+
+def test_training_split_representation_supports_strict_checkpoint_holdout(
+    tiny_config, tiny_data
+) -> None:
+    settings = tiny_config.recipe_config
+    validation = type(settings.validation).model_validate(
+        {
+            "strategy": "checkpoint",
+            "values": ["Stim8hr"],
+            "fraction": 0,
+            "representation_scope": "nested",
+        }
+    )
+    config = tiny_config.model_copy(
+        update={"recipe_config": settings.model_copy(update={"validation": validation})}
+    )
+    split = _validation_split(tiny_data, config)
+    representation = replace(
+        tiny_data.representation,
+        fit_scope="training_split",
+        included_samples=("D1", "D2"),
+        included_time_labels=("Rest", "Stim48hr"),
+    )
+    nested_data = replace(tiny_data, representation=representation)
+    assert _representation_scope(nested_data, split, config) == "nested"
+
+    leaked = replace(
+        nested_data.representation,
+        included_time_labels=("Rest", "Stim8hr", "Stim48hr"),
+    )
+    with pytest.raises(ValueError, match="held-out representation times"):
+        _representation_scope(replace(nested_data, representation=leaked), split, config)
 
 
 def test_control_residual_is_zero_and_controls_share_reference(tiny_data) -> None:
@@ -153,17 +225,17 @@ def test_effect_axis_config_blocks_reaction_training(tiny_config) -> None:
         "labels": ("reference", "observed"),
         "values": (0.0, 1.0),
     }
-    raw["model"]["context"] = "none"
-    raw["training"]["epochs"] = {"state": 1, "mass": 1, "context": 0}
-    raw["loss"] = {"mass": 1.0, "count": 0.0}
+    raw["recipe_config"]["model"]["context"] = "none"
+    raw["recipe_config"]["training"]["epochs"] = {"state": 1, "mass": 1, "context": 0}
+    raw["recipe_config"]["loss"] = {"mass": 1.0, "count": 0.0}
     with pytest.raises(ValueError, match="Growth and mass fitting"):
         RunConfig.model_validate(raw)
 
 
 def test_context_phase_requires_a_trained_mass_phase(tiny_config) -> None:
     raw = tiny_config.model_dump()
-    raw["training"]["epochs"] = {"state": 1, "mass": 0, "context": 1}
-    with pytest.raises(ValueError, match="positive mass phase"):
+    raw["recipe_config"]["training"]["epochs"] = {"state": 1, "mass": 0, "context": 1}
+    with pytest.raises(ValueError, match="positive mass stage"):
         RunConfig.model_validate(raw)
 
 
@@ -187,8 +259,8 @@ def test_unit_mass_allows_state_geometry_only(tiny_data, tiny_config) -> None:
     )
     raw = tiny_config.model_dump()
     raw["data"]["counts"] = None
-    raw["training"]["epochs"] = {"state": 1, "mass": 1, "context": 0}
-    raw["loss"] = {"mass": 1.0, "count": 0.0}
+    raw["recipe_config"]["training"]["epochs"] = {"state": 1, "mass": 1, "context": 0}
+    raw["recipe_config"]["loss"] = {"mass": 1.0, "count": 0.0}
     reaction_config = RunConfig.model_validate(raw)
     with pytest.raises(ValueError, match="state geometry training only"):
         validate_run_data(reaction_config, unit_data)
@@ -312,6 +384,50 @@ def test_no_context_chunks_equal_the_full_rollout(tiny_data) -> None:
     assert torch.allclose(full.terminal_z, torch.cat(terminals, dim=0), atol=1e-6)
 
 
+def test_common_rollout_rejects_malformed_kernel_output(tiny_data) -> None:
+    state = sample_initial_particles(tiny_data, tiny_data.measure_ids[:2], 4, seed=23)
+    grid = axis_grid(tiny_data.axis, 1, device="cpu", dtype=torch.float32)
+
+    class BrokenKernel:
+        def step(self, *, z, logw, **kwargs):
+            del kwargs
+            return DynamicsStep(
+                drift=torch.zeros_like(z),
+                sigma_diag=torch.ones_like(z),
+                growth=torch.zeros(logw.shape[0]),
+                context=torch.zeros(z.shape[0], 1),
+            )
+
+    with pytest.raises(ValueError, match="growth must match"):
+        euler_maruyama_rollout(BrokenKernel(), state, grid)
+
+    class BrokenContextKernel:
+        def step(self, *, z, logw, **kwargs):
+            del kwargs
+            return DynamicsStep(
+                drift=torch.zeros_like(z),
+                sigma_diag=torch.ones_like(z),
+                growth=torch.zeros_like(logw),
+                context=torch.zeros(z.shape[0] + 1, 1),
+            )
+
+    with pytest.raises(ValueError, match="global vector or have one leading row"):
+        euler_maruyama_rollout(BrokenContextKernel(), state, grid)
+
+    class GlobalContextKernel:
+        def step(self, *, z, logw, **kwargs):
+            del kwargs
+            return DynamicsStep(
+                drift=torch.zeros_like(z),
+                sigma_diag=torch.ones_like(z),
+                growth=torch.zeros_like(logw),
+                context=torch.zeros(3),
+            )
+
+    result = euler_maruyama_rollout(GlobalContextKernel(), state, grid)
+    assert result.context_steps.shape == (len(grid) - 1, 3)
+
+
 def test_count_loss_is_finite_and_differentiable(tiny_data) -> None:
     model = _model(tiny_data)
     model.set_phase("mass")
@@ -425,13 +541,16 @@ def test_count_validation_holds_out_complete_context_groups(tiny_data, trained_r
 
 
 def test_explicit_context_group_and_checkpoint_validation(tiny_config, tiny_data) -> None:
-    validation_type = type(tiny_config.validation)
+    settings = tiny_config.recipe_config
+    validation_type = type(settings.validation)
     donor_validation = validation_type.model_validate(
         {"strategy": "context_group", "values": ["D1"], "fraction": 0}
     )
     donor_split = _validation_split(
         tiny_data,
-        tiny_config.model_copy(update={"validation": donor_validation}),
+        tiny_config.model_copy(
+            update={"recipe_config": settings.model_copy(update={"validation": donor_validation})}
+        ),
     )
     assert donor_split.strategy == "context_group_holdout"
     assert {
@@ -444,19 +563,30 @@ def test_explicit_context_group_and_checkpoint_validation(tiny_config, tiny_data
     )
     checkpoint_split = _validation_split(
         tiny_data,
-        tiny_config.model_copy(update={"validation": checkpoint_validation}),
+        tiny_config.model_copy(
+            update={
+                "recipe_config": settings.model_copy(update={"validation": checkpoint_validation})
+            }
+        ),
     )
     assert checkpoint_split.strategy == "checkpoint_holdout"
     assert checkpoint_split.train_time_labels == ("Stim48hr",)
     assert checkpoint_split.validation_time_labels == ("Stim8hr",)
 
 
-def test_target_balanced_batches_are_deterministic_permutations(trained_run) -> None:
+def test_target_batching_modes_are_deterministic_permutations(trained_run) -> None:
     ids = trained_run.data.measure_ids
-    first = list(trained_run._batches(ids, seed=17, batch_size=5, target_balanced=True))
-    second = list(trained_run._batches(ids, seed=17, batch_size=5, target_balanced=True))
-    assert first == second
-    assert sorted(value for batch in first for value in batch) == sorted(ids)
+    for order in ("target_round_robin", "target_blocked"):
+        first = list(trained_run._batches(ids, seed=17, batch_size=5, order=order))
+        second = list(trained_run._batches(ids, seed=17, batch_size=5, order=order))
+        assert first == second
+        assert sorted(value for batch in first for value in batch) == sorted(ids)
+    metadata = trained_run.data.measure_meta.set_index("measure_id")
+    blocked = list(trained_run._batches(ids, seed=17, batch_size=5, order="target_blocked"))
+    batch_by_id = {measure_id: index for index, batch in enumerate(blocked) for measure_id in batch}
+    for _, rows in metadata.loc[list(ids)].groupby("embedding_id", observed=True):
+        if not rows["is_control"].any():
+            assert len({batch_by_id[measure_id] for measure_id in rows.index}) == 1
 
 
 def test_reference_counterfactual_uses_same_start_and_noise(trained_run, monkeypatch) -> None:
@@ -482,23 +612,7 @@ def test_reference_counterfactual_uses_same_start_and_noise(trained_run, monkeyp
     assert torch.equal(calls[0][1], calls[1][1])
     assert torch.equal(calls[0][2], calls[1][2])
     assert torch.equal(calls[0][3], calls[1][3])
-    assert result.columns.tolist() == [
-        "measure_id",
-        "time_label",
-        "context_policy",
-        "delta_log_mass",
-        "mean_shift_l2",
-        "energy_distance",
-        "context_dependence_shift",
-        "factual_ess",
-        "reference_ess",
-        "eval_particles",
-        "integration_steps",
-        "counterfactual_seed",
-        "checkpoint_sha256",
-        "evaluator_package_version",
-        "evaluator_git_sha",
-    ]
+    assert result.columns.tolist() == list(COMMON_COUNTERFACTUAL_COLUMNS)
     with pytest.raises(ValueError, match="same_noise=True"):
         module.counterfactual(trained_run, "D1::GENE1-1", same_noise=False)
     control = module.counterfactual(trained_run, "D1::NTC-1", n_particles=4)

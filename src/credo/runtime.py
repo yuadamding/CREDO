@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import math
+import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
+
+import numpy as np
+import torch
 
 from .contracts import (
     CapabilitySet,
@@ -51,6 +57,22 @@ class ObjectiveDescriptor:
     requires: frozenset[str] = frozenset()
     config: Mapping[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "name", str(self.name))
+        object.__setattr__(self, "weight", float(self.weight))
+        object.__setattr__(self, "requires", frozenset(str(value) for value in self.requires))
+        object.__setattr__(self, "config", MappingProxyType(dict(self.config)))
+        if not self.name or not math.isfinite(self.weight) or self.weight < 0:
+            raise ValueError("Objective names must be nonempty and weights nonnegative.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "weight": self.weight,
+            "requires": sorted(self.requires),
+            "config": dict(self.config),
+        }
+
 
 @runtime_checkable
 class CheckpointCodec(Protocol):
@@ -64,6 +86,8 @@ class CREDORecipe(Protocol):
     recipe_id: str
     recipe_version: str
     capabilities: CapabilitySet
+
+    def config_schema(self) -> type[Any]: ...
 
     def build_representation(
         self,
@@ -156,6 +180,9 @@ def validate_training_contract(
     if len(objective_names) != len(set(objective_names)):
         raise ValueError("Recipe objective names must be unique.")
     available = set(objective_names)
+    for objective in objectives:
+        if not objective.name or not math.isfinite(objective.weight) or objective.weight < 0:
+            raise ValueError("Recipe objective names must be nonempty and weights nonnegative.")
     for stage in plan.stages:
         if stage.epochs == 0:
             continue
@@ -184,16 +211,43 @@ class TrainingEngine:
         **kwargs: Any,
     ) -> Any:
         validate_recipe_study(recipe, study)
-        plan = recipe.training_plan(study, config)
-        objectives = recipe.build_objectives(study, config)
+        recipe.capabilities.require("train")
+        recipe_config = (
+            config.recipe_configuration()
+            if callable(getattr(config, "recipe_configuration", None))
+            else config
+        )
+        plan = recipe.training_plan(study, recipe_config)
+        objectives = recipe.build_objectives(study, recipe_config)
         validate_training_contract(recipe, objectives, plan)
-        executor = getattr(recipe, "fit", None)
+        executor = getattr(recipe, "execute_training", None)
         if not callable(executor):
             raise RuntimeError(
                 f"Recipe {recipe.recipe_id}@{recipe.recipe_version} publishes a training "
                 "plan but has no released training executor."
             )
-        return executor(study, config, **kwargs)
+        # Model initialization and recipe-owned sampling are part of the plan.
+        random.seed(plan.seed)
+        np.random.seed(plan.seed)
+        torch.manual_seed(plan.seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(plan.seed)
+        model = recipe.build_model(study, recipe_config)
+        result = executor(
+            study,
+            model=model,
+            plan=plan,
+            objectives=objectives,
+            run_config=config,
+            **kwargs,
+        )
+        if getattr(result, "training_plan", None) != plan:
+            raise RuntimeError("Training executor did not retain the recipe's immutable plan.")
+        if getattr(result, "objective_descriptors", None) != objectives:
+            raise RuntimeError(
+                "Training executor did not retain the recipe's objective declarations."
+            )
+        return result
 
 
 __all__ = [

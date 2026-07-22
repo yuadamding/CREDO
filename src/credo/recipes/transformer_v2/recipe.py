@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 import torch
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from ...artifacts import NativeCheckpointCodec
 from ...contracts import (
@@ -20,6 +21,106 @@ from ...contracts import (
 )
 from ...runtime import ObjectiveDescriptor
 from .model import FullDynamicsModel
+
+
+class _StrictConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class TransformerV2ModelConfig(_StrictConfig):
+    embedding_dim: int = Field(default=48, ge=1)
+    n_programs: int = Field(default=16, ge=1)
+    mediator_dim: int = Field(default=48, ge=1)
+    hidden_dim: int = Field(default=384, ge=1)
+    depth: int = Field(default=4, ge=1)
+    activation_checkpointing: bool = False
+    time_frequencies: int = Field(default=4, ge=1)
+    sigma_min: float = Field(default=1e-3, gt=0)
+    r_max: float = Field(default=3.0, gt=0)
+    n_payoff_ranks: int = Field(default=4, ge=1)
+    ecological_growth: bool = True
+    use_growth_intercept: bool = True
+    shared_guide_embedding: bool = False
+    control_mode: Literal["anchored", "soft_ref", "free"] = "soft_ref"
+    control_ref_penalty: float = Field(default=5e-4, ge=0)
+    context_kind: Literal["mlp", "transformer"] = "transformer"
+    transformer_token_dim: int = Field(default=128, ge=1)
+    transformer_heads: int = Field(default=4, ge=1)
+    transformer_within_layers: int = Field(default=1, ge=1)
+    transformer_cross_layers: int = Field(default=1, ge=1)
+    transformer_inducing: int = Field(default=32, ge=1)
+    transformer_dropout: float = Field(default=0.05, ge=0, lt=1)
+    mass_attention_temperature: float = Field(default=0.75, gt=0)
+    transformer_growth_only: bool = True
+
+    @model_validator(mode="after")
+    def _validate_attention_width(self) -> TransformerV2ModelConfig:
+        if self.context_kind == "transformer" and (
+            self.transformer_token_dim % self.transformer_heads
+        ):
+            raise ValueError("transformer_token_dim must be divisible by transformer_heads.")
+        return self
+
+
+class TransformerV2TrainingConfig(_StrictConfig):
+    optimizer: Literal["adam", "adamw"] = "adamw"
+    lambda_end: float = Field(default=1.0, ge=0)
+    lambda_weak: float = Field(default=0.12, ge=0)
+    lambda_reg_embed: float = Field(default=1e-4, ge=0)
+    lambda_reg_growth_bias: float = Field(default=1e-4, ge=0)
+    lambda_reg_net: float = Field(default=1e-4, ge=0)
+    lambda_reg_diffusion: float = Field(default=2e-4, ge=0)
+    lr_net: float = Field(default=3e-4, gt=0)
+    lr_embed: float = Field(default=1e-3, gt=0)
+    lr_transformer: float = Field(default=5e-5, gt=0)
+    weight_decay: float = Field(default=1e-6, ge=0)
+    transformer_weight_decay: float = Field(default=1e-4, ge=0)
+    grad_clip: float = Field(default=1.0, gt=0)
+    epochs: int = Field(default=500, ge=1)
+    early_stop_patience: int = Field(default=50, ge=1)
+    seed: int = Field(default=0, ge=0)
+    precision: Literal["fp32", "bf16", "fp16"] = "bf16"
+    sinkhorn_epsilon: float = Field(default=0.1, gt=0)
+    sinkhorn_tau: float = Field(default=1.0, gt=0)
+    sinkhorn_max_iter: int = Field(default=100, ge=1)
+    n_test_functions: int = Field(default=12, ge=1)
+    test_function_bandwidth: float = Field(default=1.0, gt=0)
+
+
+class TransformerV2SimulationConfig(_StrictConfig):
+    n_particles: int = Field(default=128, ge=2)
+    n_steps: int = Field(default=24, ge=1)
+
+
+class TransformerV2TrajectoryConfig(_StrictConfig):
+    steps_per_interval: int = Field(default=24, ge=1)
+    endpoint_time_weights: dict[str, float] = Field(default_factory=dict)
+    normalize_time_weights: bool = True
+
+
+class TransformerV2RecipeConfig(_StrictConfig):
+    model: TransformerV2ModelConfig = Field(default_factory=TransformerV2ModelConfig)
+    training: TransformerV2TrainingConfig = Field(default_factory=TransformerV2TrainingConfig)
+    simulation: TransformerV2SimulationConfig = Field(default_factory=TransformerV2SimulationConfig)
+    trajectory_training: TransformerV2TrajectoryConfig = Field(
+        default_factory=TransformerV2TrajectoryConfig
+    )
+    perturbation_ids: tuple[str, ...] = ()
+    control_ids: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _consistent_integration_grid(self) -> TransformerV2RecipeConfig:
+        if self.simulation.n_steps != self.trajectory_training.steps_per_interval:
+            raise ValueError(
+                "simulation.n_steps must equal trajectory_training.steps_per_interval."
+            )
+        if len(self.perturbation_ids) != len(set(self.perturbation_ids)):
+            raise ValueError("perturbation_ids must be unique.")
+        if len(self.control_ids) != len(set(self.control_ids)):
+            raise ValueError("control_ids must be unique.")
+        if self.control_ids and not set(self.control_ids) <= set(self.perturbation_ids):
+            raise ValueError("control_ids must be a subset of perturbation_ids.")
+        return self
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -46,13 +147,20 @@ class TransformerSDEV2Recipe:
         counts=False,
         weak_form=True,
         context="full_population",
-        context_affects=("growth",),
-        external_evaluation=True,
-        resume_training=False,
-        focal_counterfactual=True,
-        full_group_counterfactual=True,
-        exact_retraining=False,
+        context_affects=("drift", "diffusion", "growth"),
+        fresh_training_supported=False,
+        checkpoint_inference_supported=True,
+        checkpoint_resume_supported=False,
+        same_study_holdout_evaluation=True,
+        compatible_study_evaluation=False,
+        cross_dataset_evaluation=False,
+        deterministic_cpu_fresh_fit=False,
+        bitwise_retraining_demonstrated=False,
+        counterfactual_scope="full_population",
     )
+
+    def config_schema(self) -> type[TransformerV2RecipeConfig]:
+        return TransformerV2RecipeConfig
 
     def build_representation(
         self,
@@ -79,9 +187,11 @@ class TransformerSDEV2Recipe:
         raw = _mapping(config)
         model = _mapping(raw.get("model", raw))
         perturbation_ids = [
-            str(value) for value in raw.get("perturbation_ids", study.embedding_ids)
+            str(value) for value in (raw.get("perturbation_ids") or study.embedding_ids)
         ]
-        control_ids = [str(value) for value in raw.get("control_ids", study.control_embedding_ids)]
+        control_ids = [
+            str(value) for value in (raw.get("control_ids") or study.control_embedding_ids)
+        ]
         return self._construct_model(
             perturbation_ids,
             control_ids,
@@ -133,6 +243,7 @@ class TransformerSDEV2Recipe:
     ) -> tuple[ObjectiveDescriptor, ...]:
         study.axis.require_physical("transformer-v2 training")
         raw = _mapping(config)
+        model = _mapping(raw.get("model", {}))
         training = _mapping(raw.get("training", {}))
         trajectory = _mapping(raw.get("trajectory_training", {}))
         return (
@@ -143,12 +254,48 @@ class TransformerSDEV2Recipe:
                 {
                     "time_weights": trajectory.get("endpoint_time_weights", {}),
                     "normalize_time_weights": bool(trajectory.get("normalize_time_weights", True)),
+                    "sinkhorn_epsilon": float(training.get("sinkhorn_epsilon", 0.1)),
+                    "sinkhorn_tau": float(training.get("sinkhorn_tau", 1.0)),
+                    "sinkhorn_max_iter": int(training.get("sinkhorn_max_iter", 100)),
                 },
             ),
             ObjectiveDescriptor(
                 "weak_form_residual",
                 float(training.get("lambda_weak", 0.12)),
                 frozenset({"drift", "diffusion", "growth"}),
+                {
+                    "n_test_functions": int(training.get("n_test_functions", 12)),
+                    "bandwidth": float(training.get("test_function_bandwidth", 1.0)),
+                },
+            ),
+            ObjectiveDescriptor(
+                "rollout_regularization",
+                1.0,
+                frozenset({"drift", "diffusion", "growth"}),
+                {
+                    "drift_weight": float(training.get("lambda_reg_net", 1e-4)),
+                    "diffusion_weight": float(training.get("lambda_reg_diffusion", 2e-4)),
+                    "growth_weight": float(training.get("lambda_reg_net", 1e-4)),
+                },
+            ),
+            ObjectiveDescriptor(
+                "embedding_regularization",
+                1.0,
+                frozenset({"perturbation_embeddings"}),
+                {
+                    "residual_weight": float(training.get("lambda_reg_embed", 1e-4)),
+                    "control_reference_weight": float(model.get("control_ref_penalty", 5e-4)),
+                },
+            ),
+            ObjectiveDescriptor(
+                "growth_intercept_regularization",
+                float(training.get("lambda_reg_growth_bias", 1e-4)),
+                frozenset({"growth_intercepts"}),
+            ),
+            ObjectiveDescriptor(
+                "ecological_payoff_regularization",
+                1.0 if bool(model.get("ecological_growth", True)) else 0.0,
+                frozenset({"ecological_payoff"}),
             ),
         )
 
@@ -160,18 +307,32 @@ class TransformerSDEV2Recipe:
         study.axis.require_physical("transformer-v2 training")
         raw = _mapping(config)
         training = _mapping(raw.get("training", {}))
+        simulation = _mapping(raw.get("simulation", {}))
+        trajectory = _mapping(raw.get("trajectory_training", {}))
         parameter_rates = {
             "dynamics": float(training.get("lr_net", 3e-4)),
             "embeddings": float(training.get("lr_embed", 1e-3)),
             "transformer": float(training.get("lr_transformer", 5e-5)),
         }
         optimizer = OptimizerSpec(
-            "adamw",
-            parameter_rates["dynamics"],
-            float(training.get("weight_decay", 1e-6)),
-            parameter_rates,
+            kind=str(training.get("optimizer", "adamw")),
+            learning_rate=parameter_rates["dynamics"],
+            weight_decay=float(training.get("weight_decay", 1e-6)),
+            parameter_learning_rates=parameter_rates,
+            parameter_weight_decays={
+                "dynamics": float(training.get("weight_decay", 1e-6)),
+                "embeddings": float(training.get("weight_decay", 1e-6)),
+                "transformer": float(training.get("transformer_weight_decay", 1e-4)),
+            },
         )
         return TrainingPlan(
+            seed=int(training.get("seed", 0)),
+            particles=int(simulation.get("n_particles", 128)),
+            steps_per_interval=int(
+                trajectory.get("steps_per_interval", simulation.get("n_steps", 24))
+            ),
+            early_stopping_patience=int(training.get("early_stop_patience", 50)),
+            gradient_clip_norm=float(training.get("grad_clip", 1.0)),
             stages=(
                 Stage(
                     "legacy_joint",
@@ -179,12 +340,19 @@ class TransformerSDEV2Recipe:
                     ("dynamics", "perturbation_embeddings", "transformer_context"),
                     str(training.get("precision", "bf16")),
                     optimizer,
-                    ("checkpoint_geometry_mass", "weak_form_residual"),
+                    (
+                        "checkpoint_geometry_mass",
+                        "weak_form_residual",
+                        "rollout_regularization",
+                        "embedding_regularization",
+                        "growth_intercept_regularization",
+                        "ecological_payoff_regularization",
+                    ),
                     BatchingSpec("all_keys"),
                     "full_population",
                     "validation_endpoint_loss",
                 ),
-            )
+            ),
         )
 
     def checkpoint_codec(self) -> NativeCheckpointCodec:
@@ -214,4 +382,4 @@ class TransformerSDEV2Recipe:
 
 recipe = TransformerSDEV2Recipe()
 
-__all__ = ["TransformerSDEV2Recipe", "recipe"]
+__all__ = ["TransformerSDEV2Recipe", "TransformerV2RecipeConfig", "recipe"]

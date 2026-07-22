@@ -12,5 +12,5 @@ absolute growth.
 ```bash
 python examples/hnscc_p4_p60/prepare.py
 credo validate examples/hnscc_p4_p60/config.yaml
-credo run examples/hnscc_p4_p60/config.yaml
+credo train examples/hnscc_p4_p60/config.yaml
 ```

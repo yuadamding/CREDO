@@ -22,9 +22,10 @@ second data representation.
 
 Every SDE recipe uses `ParticleState`. Absolute particle weight is always
 `log_m0 + logw`; context code must not use stabilized conditional weights as
-absolute mass. Every rollout produces the common `ParticleRollout` /
-`RolloutResult` fields, including state, conditional and absolute weights,
-coefficients, context, IDs, grid, and consumed noise.
+absolute mass. Recipe-specific `DynamicsKernel` adapters feed one common
+Euler-Maruyama driver, which owns state and weight updates, noise consumption,
+and checkpoint capture. Every recipe produces the common `ParticleRollout` /
+`RolloutResult` fields.
 
 Controls have no residual parameter. Their effective embedding is exactly the
 single learned reference. A reference counterfactual reuses source particles,
@@ -57,8 +58,11 @@ public `recipe_id@version` form and verifies that the loaded object agrees.
 The default recipe preserves the current compact implementation: external
 latent coordinates, an exact soft reference, compact weighted SDE, optional
 catalog-bank growth context, geometry/mass/count/action objectives, FP32, and
-state-to-mass-to-context stages. The recipe adapter delegates to the existing
-trainer, and deterministic golden state and metric hashes guard behavior.
+state-to-mass-to-context stages. Its immutable plan supplies the model seed,
+integration, particles, optimizer, trainable tags, objective coefficients,
+batching, stage schedule, early stopping, and gradient clipping to the released
+executor. The execution trace records the concrete objects used, and
+deterministic golden state and metric hashes guard behavior.
 
 ### `credo.transformer_sde_v2@2.0`
 
@@ -71,8 +75,8 @@ The compatibility recipe preserves historical parameter names and operations:
 | Embedding / programs / mediator | 48 / 16 / 48 |
 | Coefficient MLP | hidden 384, depth 4 |
 | Context | token 128, 4 heads, 1 within, 1 cross, 32 inducing |
-| Context effect | Growth only |
-| Objective | Endpoint geometry/mass plus weak form at weight 0.12 |
+| Context effect | Mean field: all coefficients; inducing transformer: growth only |
+| Objective | Endpoint geometry/mass, weak form at 0.12, and archived regularizers |
 | Precision / optimizer | BF16 / AdamW |
 | Particles / integration | 128 train, 640 evaluation, 24 steps per interval |
 
@@ -104,8 +108,8 @@ training, capability, and import provenance contracts. Modes are:
 - `training_recipe_only`: a training design exists without an inference state.
 
 Historical v2 and current compact checkpoints are honestly marked
-`inference_only`. Both have released fresh-training plans; neither claims an
-exact continuation trajectory from the saved checkpoint.
+`inference_only`. Compact supports deterministic fresh CPU fitting, but neither
+checkpoint supports continuation from its saved state.
 
 The compact plan is backed by the released shared `TrainingEngine` executor.
 The v2 plan is presently a typed reconstruction of the archived design, not an
@@ -133,6 +137,46 @@ geometry differs from archived mean geometry by 0.009-0.061 across fold/time
 blocks. Agreement is classified as tolerance-level because the original global
 noise state and exact producer wrapper were not preserved. This is inference
 replay, not byte-for-byte retraining.
+
+## Compatibility matrix
+
+| Historical family | Codec | Strict load | Replay | Fresh training | Status |
+| --- | --- | ---: | ---: | ---: | --- |
+| LPS multi-time transformer | `legacy_v2_lps` | Yes | Yes, 268 OOF rows | No | Tolerance-level archived replay |
+| Transformer endpoint | Separate fixture required | Unverified | Unverified | No | Not claimed by v2 recipe |
+| Pre-compaction single-time | Separate adapter required | Unverified | Unverified | No | Not claimed by v2 recipe |
+| Compact pre-envelope checkpoint | No released codec | No | No | N/A | Migration fixture still required |
+| Compact v3 envelope schema 2 | Native | Yes | Yes | Yes | Current canonical format |
+
+An imported v2 directory is portable: `checkpoint.pt`, `representation.pt`,
+`representation.json`, `latents.npy`, `envelope.json`, and hash manifests are
+self-contained. Catalog order is preserved by an explicit `embedding_index` or
+identifier sequence; the verified LPS codec records its historical sorted
+catalog convention and an order hash.
+
+## Verification boundary
+
+Locked CPU CI uses `uv.lock` on Python 3.11-3.13 and generates a complete-shape
+legacy model/VAE fixture. It verifies wrapper parsing, strict state loading,
+catalog order, functional residual overrides, portable reload after deleting
+the source tree, artifact corruption rejection, and the common result schemas.
+
+The 268-row BF16 result remains an archived CUDA integration test over local
+research artifacts. Its input and result hashes are recorded, but it is not a
+public scheduled GPU job because the full archive has no durable downloadable
+release location. The compatibility table therefore limits the verified legacy
+family to that LPS archive and does not turn a skipped private test into a public
+reproducibility claim.
+
+## Capabilities
+
+Capabilities distinguish fresh fitting, checkpoint inference and resume,
+same-study, compatible-study and cross-dataset evaluation, tested CPU
+determinism, demonstrated bitwise retraining, and counterfactual population
+scope. Compact v3 currently supports fresh fitting and same-study evaluation;
+transformer v2 supports imported inference and same-study archived replay.
+Neither recipe claims checkpoint resume, arbitrary external-study evaluation,
+cross-hardware bitwise retraining, or cross-dataset evaluation.
 
 ## Comparison policy
 

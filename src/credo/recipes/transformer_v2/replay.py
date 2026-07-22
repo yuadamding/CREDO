@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from contextlib import nullcontext
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -15,9 +15,12 @@ import torch
 from ...contracts import Axis, CREDOStudy, FiniteMeasure, MassSemantics
 from ...objective import checkpoint_geometry_mass_loss
 from ...particles import (
+    DynamicsStep,
     ParticleRollout,
     ParticleState,
+    euler_maruyama_rollout,
     sample_initial_particles,
+    sample_noise,
     weight_diagnostics,
 )
 from .importer import (
@@ -59,7 +62,10 @@ def load_lps_replay_study(
 
     source_path = Path(study_source).expanduser().resolve()
     adata = ad.read_h5ad(source_path, backed="r")
-    obs = adata.obs.copy().reset_index(drop=True)
+    try:
+        obs = adata.obs.copy().reset_index(drop=True)
+    finally:
+        adata.file.close()
     latents = np.load(run.latents_path, mmap_mode="r")
     if len(obs) != len(latents):
         raise ValueError("Study rows and preserved latent cache are not aligned.")
@@ -114,7 +120,17 @@ def load_lps_replay_study(
             raise ValueError("One replay measure maps to multiple embedding IDs.")
         embedding_id = str(embedding_values[0])
         measure_id = str((sample_id, perturbation_id))
-        is_control = bool(source_rows["is_control"].astype(bool).all())
+        control_values = source_rows["is_control"]
+        if pd.api.types.is_bool_dtype(control_values.dtype):
+            normalized_controls = control_values.astype(bool)
+        else:
+            normalized = control_values.astype(str).str.lower()
+            if not normalized.isin({"true", "false", "1", "0"}).all():
+                raise ValueError("Replay is_control values must be boolean.")
+            normalized_controls = normalized.isin({"true", "1"})
+        if normalized_controls.nunique() != 1:
+            raise ValueError("One replay measure mixes control and non-control rows.")
+        is_control = bool(normalized_controls.iloc[0])
         metadata_rows.append(
             {
                 "measure_id": measure_id,
@@ -170,20 +186,34 @@ def load_lps_replay_study(
     return study
 
 
-def _sample_noise(
-    state: ParticleState,
-    grid: torch.Tensor,
-    *,
-    seed: int,
-) -> torch.Tensor:
-    generator = torch.Generator(device=state.z.device)
-    generator.manual_seed(int(seed))
-    return torch.randn(
-        (len(grid) - 1,) + tuple(state.z.shape),
-        device=state.z.device,
-        dtype=state.z.dtype,
-        generator=generator,
-    )
+@dataclass(frozen=True)
+class TransformerV2Kernel:
+    model: FullDynamicsModel
+
+    def step(
+        self,
+        *,
+        step_index: int,
+        z: torch.Tensor,
+        logw: torch.Tensor,
+        time: torch.Tensor,
+        state: ParticleState,
+    ) -> DynamicsStep:
+        del step_index
+        coefficients, context = self.model.step(
+            z,
+            time,
+            logw,
+            state.log_m0,
+            list(state.embedding_ids),
+            state.residual_scale,
+        )
+        return DynamicsStep(
+            drift=coefficients.drift,
+            sigma_diag=coefficients.sigma_diag,
+            growth=coefficients.growth,
+            context=context.context.detach(),
+        )
 
 
 @torch.no_grad()
@@ -194,50 +224,12 @@ def rollout_transformer_v2(
     *,
     noise: torch.Tensor,
 ) -> ParticleRollout:
-    integration_grid = grid.to(device=initial_state.z.device, dtype=initial_state.z.dtype)
-    expected = (len(integration_grid) - 1,) + tuple(initial_state.z.shape)
-    if tuple(noise.shape) != expected:
-        raise ValueError(f"noise must have shape {expected}.")
-    z = initial_state.z.clone()
-    logw = initial_state.logw.clone()
-    z_steps = [z]
-    logw_steps = [logw]
-    drift_steps = []
-    diffusion_steps = []
-    growth_steps = []
-    context_steps = []
-    for step in range(len(integration_grid) - 1):
-        coefficients, context = model.step(
-            z,
-            integration_grid[step],
-            logw,
-            initial_state.log_m0,
-            list(initial_state.embedding_ids),
-        )
-        dt = integration_grid[step + 1] - integration_grid[step]
-        z = z + coefficients.drift * dt + coefficients.sigma_diag * torch.sqrt(dt) * noise[step]
-        logw = logw + coefficients.growth * dt
-        z_steps.append(z)
-        logw_steps.append(logw)
-        drift_steps.append(coefficients.drift)
-        diffusion_steps.append(coefficients.sigma_diag)
-        growth_steps.append(coefficients.growth)
-        context_steps.append(context.context.detach())
-    return ParticleRollout(
-        z_steps=torch.stack(z_steps),
-        logw_steps=torch.stack(logw_steps),
-        log_m0=initial_state.log_m0,
-        axis_grid=grid.to(device=initial_state.z.device, dtype=torch.float32),
-        measure_ids=initial_state.measure_ids,
-        embedding_ids=initial_state.embedding_ids,
-        context_group_ids=initial_state.context_group_ids,
-        measure_indices=initial_state.measure_indices,
-        residual_scale=initial_state.residual_scale,
-        drift_steps=torch.stack(drift_steps),
-        sigma_steps=torch.stack(diffusion_steps),
-        growth_steps=torch.stack(growth_steps),
-        context_steps=torch.stack(context_steps),
-        noise_steps=noise,
+    """Run the historical model through the common integration driver."""
+    return euler_maruyama_rollout(
+        TransformerV2Kernel(model),
+        initial_state,
+        grid,
+        noise=noise,
     )
 
 
@@ -276,6 +268,9 @@ def evaluate_replay(
     run.require("evaluate")
     if particles < 2 or steps_per_interval < 1 or seed < 0:
         raise ValueError("Replay particles, integration steps, and seed are invalid.")
+    resolved_noise_seed = seed + 1_000_003 if noise_seed is None else int(noise_seed)
+    if resolved_noise_seed < 0:
+        raise ValueError("Replay noise seed must be nonnegative.")
     selected_device = torch.device(
         device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
     )
@@ -290,8 +285,7 @@ def evaluate_replay(
         dtype=dtype,
         seed=seed,
     )
-    resolved_noise_seed = seed + 1_000_003 if noise_seed is None else int(noise_seed)
-    noise = _sample_noise(source, grid, seed=resolved_noise_seed)
+    noise = sample_noise(source, grid, seed=resolved_noise_seed)
     autocast = (
         torch.autocast(device_type="cuda", dtype=torch.bfloat16)
         if selected_device.type == "cuda"
@@ -395,7 +389,9 @@ def counterfactual_replay(
     device: str | torch.device | None = None,
 ) -> pd.DataFrame:
     """Exact full-group, same-start, same-noise v2 reference contrast."""
+    from ... import __version__
     from ...counterfactual import _energy_distance, _weighted_mean
+    from ...training import _git_state
 
     run.require("counterfactual")
     if context_policy != "self_consistent":
@@ -413,6 +409,8 @@ def counterfactual_replay(
         import hashlib
 
         seed = int(hashlib.sha256(measure_id.encode()).hexdigest()[:8], 16) % 1_000_000
+    if seed < 0 or steps_per_interval < 1:
+        raise ValueError("Counterfactual integration steps and seed must be valid.")
     selected_device = torch.device(
         device if device is not None else ("cuda" if torch.cuda.is_available() else "cpu")
     )
@@ -427,7 +425,7 @@ def counterfactual_replay(
         dtype=dtype,
         seed=seed,
     )
-    noise = _sample_noise(source, grid, seed=seed + 1_000_003)
+    noise = sample_noise(source, grid, seed=seed + 1_000_003)
     if not torch.equal(source.z, source.z.clone()) or not torch.equal(noise, noise.clone()):
         raise AssertionError("Counterfactual source or noise cloning changed values.")
     autocast = (
@@ -439,51 +437,19 @@ def counterfactual_replay(
         factual = rollout_transformer_v2(run.model, source, grid, noise=noise)
 
     local_index = study.measure_ids.index(measure_id)
-    embedding_id = source.embedding_ids[local_index]
-    embedding = run.model.embedding
-    before = None if embedding.embeddings is None else embedding.embeddings.detach().clone()
-    before_growth = (
-        None if embedding.growth_bias is None else embedding.growth_bias.detach().clone()
+    reference_scale = source.residual_scale.clone()
+    reference_scale[local_index] = 0
+    reference_source = source.with_residual_scale(reference_scale)
+    factual_embedding = run.model.embedding(list(source.embedding_ids), source.residual_scale)
+    reference_embedding = run.model.embedding(
+        list(source.embedding_ids), reference_source.residual_scale
     )
-    residual_index = embedding._nc_to_local.get(embedding_id)
-    try:
-        if residual_index is not None:
-            with torch.no_grad():
-                embedding.embeddings[residual_index].zero_()
-                if embedding.growth_bias is not None:
-                    embedding.growth_bias[residual_index].zero_()
-        if before is not None:
-            after = embedding.embeddings.detach()
-            unselected = torch.ones(len(after), dtype=torch.bool, device=after.device)
-            if residual_index is not None:
-                unselected[residual_index] = False
-                if not torch.equal(after[residual_index], torch.zeros_like(after[residual_index])):
-                    raise AssertionError("Selected perturbation residual was not removed.")
-            if not torch.equal(before[unselected], after[unselected]):
-                raise AssertionError("Counterfactual changed an unselected perturbation residual.")
-        if before_growth is not None:
-            after_growth = embedding.growth_bias.detach()
-            unselected_growth = torch.ones(
-                len(after_growth), dtype=torch.bool, device=after_growth.device
-            )
-            if residual_index is not None:
-                unselected_growth[residual_index] = False
-                if not torch.equal(
-                    after_growth[residual_index],
-                    torch.zeros_like(after_growth[residual_index]),
-                ):
-                    raise AssertionError("Selected perturbation growth residual was not removed.")
-            if not torch.equal(before_growth[unselected_growth], after_growth[unselected_growth]):
-                raise AssertionError("Counterfactual changed an unselected growth residual.")
-        with autocast:
-            reference = rollout_transformer_v2(run.model, source, grid, noise=noise)
-    finally:
-        if before is not None:
-            with torch.no_grad():
-                embedding.embeddings.copy_(before)
-        if before_growth is not None:
-            with torch.no_grad():
-                embedding.growth_bias.copy_(before_growth)
+    unselected = torch.ones(len(source.measure_ids), dtype=torch.bool, device=selected_device)
+    unselected[local_index] = False
+    if not torch.equal(factual_embedding[unselected], reference_embedding[unselected]):
+        raise AssertionError("Counterfactual changed an unselected perturbation residual.")
+    with autocast:
+        reference = rollout_transformer_v2(run.model, reference_source, grid, noise=noise)
     if (
         not torch.equal(factual.z_steps[0], reference.z_steps[0])
         or not torch.equal(factual.logw_steps[0], reference.logw_steps[0])
@@ -498,6 +464,7 @@ def counterfactual_replay(
     checkpoints = checkpoint_indices(study.axis, factual.axis_grid)
     factual_diagnostics = weight_diagnostics(factual.logw_steps)
     reference_diagnostics = weight_diagnostics(reference.logw_steps)
+    git_sha, _ = _git_state()
     rows = []
     for label in study.axis.labels[1:]:
         step = checkpoints[label]
@@ -509,6 +476,7 @@ def counterfactual_replay(
             {
                 "recipe_id": run.recipe_id,
                 "recipe_version": run.recipe_version,
+                "implementation_hash": run.envelope.recipe["implementation_hash"],
                 "representation_id": run.representation.representation_id,
                 "split_id": run.split.split_id,
                 "measure_id": measure_id,
@@ -545,10 +513,13 @@ def counterfactual_replay(
                 ),
                 "factual_ess": float(factual_diagnostics["ess"][step, local_index].cpu()),
                 "reference_ess": float(reference_diagnostics["ess"][step, local_index].cpu()),
-                "eval_particles": particles,
+                "evaluation_particles": particles,
                 "integration_steps": len(grid) - 1,
-                "counterfactual_seed": seed,
+                "evaluation_seed": seed,
+                "noise_seed": seed + 1_000_003,
                 "checkpoint_sha256": run.envelope.import_provenance["source_checkpoint_sha256"],
+                "package_version": __version__,
+                "git_sha": git_sha,
             }
         )
     return pd.DataFrame(rows)

@@ -563,25 +563,29 @@ class PerturbationEmbedding(nn.Module):
             self.register_parameter("shared_growth_bias", None)
         self.register_buffer("_device_sentinel", torch.zeros(1))
 
-    def forward(self, perturbation_ids: list[str]) -> torch.Tensor:
+    def forward(
+        self,
+        perturbation_ids: list[str],
+        residual_scale: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         device = self._device_sentinel.device
         dtype = self._device_sentinel.dtype
+        output = self.residuals(perturbation_ids)
+        if residual_scale is not None:
+            scale = residual_scale.to(device=device, dtype=dtype).reshape(-1, 1)
+            if scale.shape[0] != len(perturbation_ids):
+                raise ValueError("residual_scale must have one value per perturbation.")
+            output = output * scale
         if self.shared_guide_embedding:
-            return (
-                self.shared_embedding.to(device=device, dtype=dtype)
-                .unsqueeze(0)
-                .expand(len(perturbation_ids), -1)
-            )
-        output = torch.zeros(len(perturbation_ids), self.embedding_dim, device=device, dtype=dtype)
-        for index, perturbation_id in enumerate(perturbation_ids):
-            if perturbation_id not in self.control_ids and self.embeddings is not None:
-                output[index] = self.embeddings[self._nc_to_local[perturbation_id]]
+            return output
         if self.reference_embedding is not None:
             output = output + self.reference_embedding.to(device=device, dtype=dtype).unsqueeze(0)
         return output
 
     def residuals(self, perturbation_ids: list[str]) -> torch.Tensor:
         output = self._device_sentinel.new_zeros(len(perturbation_ids), self.embedding_dim)
+        if self.shared_guide_embedding:
+            return self.shared_embedding.unsqueeze(0).expand_as(output)
         if self.embeddings is None:
             return output
         for index, perturbation_id in enumerate(perturbation_ids):
@@ -590,13 +594,23 @@ class PerturbationEmbedding(nn.Module):
                 output[index] = self.embeddings[local]
         return output
 
-    def growth_intercepts(self, perturbation_ids: list[str]) -> torch.Tensor:
+    def growth_intercepts(
+        self,
+        perturbation_ids: list[str],
+        residual_scale: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         output = self._device_sentinel.new_zeros(len(perturbation_ids))
-        if self.growth_bias is None:
-            return output
-        for index, perturbation_id in enumerate(perturbation_ids):
-            if perturbation_id not in self.control_ids:
-                output[index] = self.growth_bias[self._nc_to_local[perturbation_id]]
+        if self.shared_guide_embedding and self.shared_growth_bias is not None:
+            output = self.shared_growth_bias.expand_as(output)
+        elif self.growth_bias is not None:
+            for index, perturbation_id in enumerate(perturbation_ids):
+                if perturbation_id not in self.control_ids:
+                    output[index] = self.growth_bias[self._nc_to_local[perturbation_id]]
+        if residual_scale is not None:
+            scale = residual_scale.to(device=output.device, dtype=output.dtype).reshape(-1)
+            if scale.shape != output.shape:
+                raise ValueError("residual_scale must have one value per perturbation.")
+            output = output * scale
         return output
 
 
@@ -922,8 +936,12 @@ class FullDynamicsModel(nn.Module):
             ecological_growth,
         )
 
-    def get_embeddings(self, perturbation_ids: list[str] | None = None) -> torch.Tensor:
-        return self.embedding(perturbation_ids or self.perturbation_ids)
+    def get_embeddings(
+        self,
+        perturbation_ids: list[str] | None = None,
+        residual_scale: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.embedding(perturbation_ids or self.perturbation_ids, residual_scale)
 
     def step(
         self,
@@ -932,10 +950,11 @@ class FullDynamicsModel(nn.Module):
         logw: torch.Tensor,
         log_m0: torch.Tensor,
         perturbation_ids: list[str] | None = None,
+        residual_scale: torch.Tensor | None = None,
     ) -> tuple[Coefficients, ContextState]:
         identifiers = perturbation_ids or self.perturbation_ids
-        embedding = self.embedding(identifiers)
-        growth_intercept = self.embedding.growth_intercepts(identifiers)
+        embedding = self.embedding(identifiers, residual_scale)
+        growth_intercept = self.embedding.growth_intercepts(identifiers, residual_scale)
         context_state = self.context_agg(z, logw, embedding, log_m0, tau=tau)
         base_context = context_state.context
         growth_context = None

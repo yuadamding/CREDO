@@ -7,7 +7,7 @@ and one deliberately missing downstream guide-time measure.
 ```bash
 python examples/synthetic/generate.py
 credo validate examples/synthetic/config.yaml
-credo run examples/synthetic/config.yaml --device cpu
+credo train examples/synthetic/config.yaml --device cpu
 ```
 
 It is a numerical contract test, not a biological benchmark.

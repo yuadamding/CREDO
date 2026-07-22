@@ -4,17 +4,28 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from collections import OrderedDict
+from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Literal
 
 import anndata as ad
+import h5py
 import numpy as np
 import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .contracts import Axis, FiniteMeasure, MassSemantics, TrajectoryData, validate_measure_meta
+from .contracts import (
+    Axis,
+    FiniteMeasure,
+    MassSemantics,
+    RepresentationArtifact,
+    TrajectoryData,
+    validate_measure_meta,
+)
 
 try:
     pd.set_option("future.infer_string", False)
@@ -54,6 +65,8 @@ class DataConfig(_StrictModel):
     masses: Path
     counts: Path | None = None
     dataset: Path | None = None
+    lazy_support: bool = True
+    support_cache_size: int = Field(default=256, ge=0)
 
 
 class AxisConfig(_StrictModel):
@@ -71,113 +84,29 @@ class AxisConfig(_StrictModel):
         return Axis(kind=self.kind, source=self.source, labels=self.labels, values=self.values)
 
 
-class ModelConfig(_StrictModel):
-    embedding_dim: int = Field(default=8, ge=1)
-    n_programs: int = Field(default=8, ge=1)
-    hidden_dim: int = Field(default=128, ge=8)
-    context: Literal["none", "catalog_bank"] = "catalog_bank"
-    growth_max: float = Field(default=3.0, gt=0)
-
-
-class EpochConfig(_StrictModel):
-    state: int = Field(default=40, ge=0)
-    mass: int = Field(default=20, ge=0)
-    context: int = Field(default=20, ge=0)
-
-    @model_validator(mode="after")
-    def _require_training(self) -> EpochConfig:
-        if self.state + self.mass + self.context < 1:
-            raise ValueError("At least one training phase must have a positive epoch count.")
-        return self
-
-
-class TrainingConfig(_StrictModel):
-    epochs: EpochConfig = EpochConfig()
-    particles: int = Field(default=64, ge=2)
-    steps_per_interval: int = Field(default=4, ge=1)
-    measures_per_batch: int = Field(default=256, ge=1)
-    batching: Literal["random", "target_balanced"] = "random"
-    learning_rate: float = Field(default=1e-3, gt=0)
-    patience: int = Field(default=10, ge=1)
-    seed: int = Field(default=0, ge=0)
-
-
-class EvaluationConfig(_StrictModel):
-    particles: int = Field(default=256, ge=2)
-    measures_per_batch: int = Field(default=256, ge=1)
-
-
-class ValidationConfig(_StrictModel):
-    strategy: Literal["auto", "context_group", "checkpoint", "train_self_eval"] = "auto"
-    values: tuple[str, ...] = ()
-    fraction: float = Field(default=0.2, ge=0, lt=1)
-
-    @model_validator(mode="after")
-    def _validate_specification(self) -> ValidationConfig:
-        explicit = self.strategy in {"context_group", "checkpoint"}
-        if explicit and not self.values:
-            raise ValueError(f"validation.strategy={self.strategy!r} requires values.")
-        if not explicit and self.values:
-            raise ValueError(f"validation.strategy={self.strategy!r} does not accept values.")
-        if self.strategy == "train_self_eval" and self.fraction != 0:
-            raise ValueError("train_self_eval requires validation.fraction=0.")
-        if len(set(self.values)) != len(self.values):
-            raise ValueError("validation.values must be unique.")
-        return self
-
-
-class LossConfig(_StrictModel):
-    mass: float = Field(default=1.0, ge=0)
-    count: float = Field(default=0.1, ge=0)
-    sinkhorn_epsilon: float = Field(default=0.1, gt=0)
-
-
 class RunConfig(_StrictModel):
-    recipe: Literal["credo.compact_sde_v3@3.0"] = "credo.compact_sde_v3@3.0"
+    recipe: str = "credo.compact_sde_v3@3.0"
     data: DataConfig
     axis: AxisConfig
-    model: ModelConfig = ModelConfig()
-    training: TrainingConfig = TrainingConfig()
-    evaluation: EvaluationConfig = EvaluationConfig()
-    validation: ValidationConfig = ValidationConfig()
-    loss: LossConfig = LossConfig()
+    recipe_config: Any
     output: Path
 
     @model_validator(mode="after")
-    def _validate_modes(self) -> RunConfig:
-        reaction_epochs = self.training.epochs.mass + self.training.epochs.context
-        if self.axis.kind == "effect":
-            if self.data.counts is not None or self.loss.count > 0:
-                raise ValueError("Count likelihood cannot be configured for an effect axis.")
-            if reaction_epochs > 0 or self.loss.mass > 0:
-                raise ValueError("Growth and mass fitting cannot be configured for an effect axis.")
-            if self.model.context != "none":
-                raise ValueError("Effect-axis runs require model.context='none'.")
-        if self.model.context == "none" and self.training.epochs.context > 0:
-            raise ValueError("Context epochs must be zero when model.context is 'none'.")
-        if self.training.epochs.context > 0 and self.training.epochs.mass == 0:
-            raise ValueError("Context training requires a positive mass phase first.")
-        if self.loss.count > 0 and self.data.counts is None:
-            raise ValueError("Positive count loss requires data.counts.")
-        if reaction_epochs == 0 and (self.loss.mass > 0 or self.loss.count > 0):
-            raise ValueError("Mass and count losses require a mass or context training phase.")
-        if self.training.epochs.context > 0 and self.loss.mass == 0 and self.loss.count == 0:
-            raise ValueError("Context training requires mass or count supervision.")
-        if self.validation.strategy == "checkpoint":
-            unknown = set(self.validation.values) - set(self.axis.labels[1:])
-            if unknown:
-                raise ValueError(
-                    f"Checkpoint validation contains unknown downstream labels: {sorted(unknown)}"
-                )
-            if set(self.validation.values) == set(self.axis.labels[1:]):
-                raise ValueError(
-                    "Checkpoint validation must leave a downstream checkpoint to train."
-                )
-        if self.validation.strategy == "context_group" and self.validation.fraction != 0:
-            raise ValueError("Explicit context-group validation requires validation.fraction=0.")
-        if self.validation.strategy == "checkpoint" and self.validation.fraction != 0:
-            raise ValueError("Explicit checkpoint validation requires validation.fraction=0.")
+    def _validate_recipe(self) -> RunConfig:
+        from .registry import get_recipe
+
+        recipe = get_recipe(self.recipe)
+        canonical_identifier = f"{recipe.recipe_id}@{recipe.recipe_version}"
+        object.__setattr__(self, "recipe", canonical_identifier)
+        schema = recipe.config_schema()
+        object.__setattr__(self, "recipe_config", schema.model_validate(self.recipe_config))
+        validator = getattr(recipe, "validate_run_config", None)
+        if callable(validator):
+            validator(self)
         return self
+
+    def recipe_configuration(self) -> Any:
+        return self.recipe_config
 
 
 def _resolve_path(base: Path, value: Any) -> Any:
@@ -226,7 +155,15 @@ def _load_dataset_manifest(config: DataConfig, axis: Axis) -> tuple[dict[str, An
         manifest = json.load(handle)
     if not isinstance(manifest, dict):
         raise ValueError("dataset.json must contain a JSON object.")
-    allowed = {"schema_version", "axis", "latent_key", "mass_semantics", "description", "source"}
+    allowed = {
+        "schema_version",
+        "axis",
+        "latent_key",
+        "mass_semantics",
+        "description",
+        "source",
+        "representation",
+    }
     required = {"schema_version", "axis", "latent_key", "mass_semantics", "source"}
     unknown = set(manifest) - allowed
     if unknown:
@@ -234,8 +171,13 @@ def _load_dataset_manifest(config: DataConfig, axis: Axis) -> tuple[dict[str, An
     missing = required - set(manifest)
     if missing:
         raise ValueError(f"dataset.json is missing required keys: {sorted(missing)}")
-    if int(manifest.get("schema_version", -1)) != 1:
-        raise ValueError("dataset.json schema_version must be 1.")
+    schema_version = int(manifest.get("schema_version", -1))
+    if schema_version not in {1, 2}:
+        raise ValueError("dataset.json schema_version must be 1 or 2.")
+    if schema_version == 1 and "representation" in manifest:
+        raise ValueError("dataset.json schema 1 cannot contain a representation contract.")
+    if schema_version == 2 and not isinstance(manifest.get("representation"), dict):
+        raise ValueError("dataset.json schema 2 requires a representation object.")
     if not isinstance(manifest["axis"], dict):
         raise ValueError("dataset.json axis must be a JSON object.")
     declared = Axis(**manifest["axis"])
@@ -252,25 +194,173 @@ def _load_dataset_manifest(config: DataConfig, axis: Axis) -> tuple[dict[str, An
     return manifest, path
 
 
-def _read_support(path: Path, latent_key: str) -> tuple[pd.DataFrame, np.ndarray]:
-    adata = ad.read_h5ad(path)
-    required = {"measure_id", "time_label"}
-    missing = required - set(adata.obs.columns)
-    if missing:
-        raise ValueError(f"support.h5ad obs is missing columns: {sorted(missing)}")
-    if latent_key not in adata.obsm:
-        raise ValueError(f"support.h5ad is missing obsm[{latent_key!r}].")
-    obs = adata.obs.copy().reset_index(drop=True)
-    for column in required:
-        if obs[column].isna().any():
-            raise ValueError(f"support.h5ad {column} contains missing values.")
-        obs[column] = obs[column].astype(str)
-        if obs[column].str.len().eq(0).any():
-            raise ValueError(f"support.h5ad {column} contains empty values.")
-    latent = np.asarray(adata.obsm[latent_key], dtype=np.float32)
-    if latent.ndim != 2 or len(latent) != len(obs) or not np.isfinite(latent).all():
-        raise ValueError("The configured latent representation must be finite and two-dimensional.")
-    return obs, latent
+def _read_support(
+    path: Path,
+    latent_key: str,
+    *,
+    lazy: bool,
+) -> tuple[pd.DataFrame, np.ndarray | None, int]:
+    adata = ad.read_h5ad(path, backed="r" if lazy else None)
+    try:
+        required = {"measure_id", "time_label"}
+        missing = required - set(adata.obs.columns)
+        if missing:
+            raise ValueError(f"support.h5ad obs is missing columns: {sorted(missing)}")
+        obs = adata.obs.copy().reset_index(drop=True)
+        for column in required:
+            if obs[column].isna().any():
+                raise ValueError(f"support.h5ad {column} contains missing values.")
+            obs[column] = obs[column].astype(str)
+            if obs[column].str.len().eq(0).any():
+                raise ValueError(f"support.h5ad {column} contains empty values.")
+        if not lazy:
+            if latent_key not in adata.obsm:
+                raise ValueError(f"support.h5ad is missing obsm[{latent_key!r}].")
+            latent = np.asarray(adata.obsm[latent_key], dtype=np.float32)
+            if latent.ndim != 2 or len(latent) != len(obs) or not np.isfinite(latent).all():
+                raise ValueError(
+                    "The configured latent representation must be finite and two-dimensional."
+                )
+            return obs, latent, int(latent.shape[1])
+    finally:
+        if lazy:
+            adata.file.close()
+
+    with h5py.File(path, "r") as handle:
+        node = handle.get(f"obsm/{latent_key}")
+        if not isinstance(node, h5py.Dataset) or len(node.shape) != 2:
+            raise ValueError("Lazy support requires a dense two-dimensional HDF5 obsm dataset.")
+        shape = tuple(int(value) for value in node.shape)
+        if shape[0] != len(obs) or shape[1] < 1:
+            raise ValueError("The configured latent representation is not aligned to obs.")
+        block_bytes = max(1, shape[1] * node.dtype.itemsize)
+        rows_per_block = max(1, (8 * 1024 * 1024) // block_bytes)
+        for start in range(0, shape[0], rows_per_block):
+            block = np.asarray(node[start : start + rows_per_block])
+            try:
+                finite = np.isfinite(block).all()
+            except TypeError as exc:
+                raise ValueError("The configured latent representation must be numeric.") from exc
+            if not finite:
+                raise ValueError("The configured latent representation contains non-finite values.")
+    return obs, None, shape[1]
+
+
+class _H5ADCheckpointMeasures(Mapping[str, FiniteMeasure]):
+    def __init__(self, store: H5ADFiniteMeasureStore, label: str) -> None:
+        self._store = store
+        self._label = label
+
+    def __getitem__(self, measure_id: str) -> FiniteMeasure:
+        return self._store.measure(self._label, str(measure_id))
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._store.measure_ids_by_label[self._label])
+
+    def __len__(self) -> int:
+        return len(self._store.measure_ids_by_label[self._label])
+
+
+class H5ADFiniteMeasureStore(Mapping[str, Mapping[str, FiniteMeasure]]):
+    """Bounded, lazy finite-measure view over a dense H5AD latent cache."""
+
+    is_lazy = True
+
+    def __init__(
+        self,
+        path: Path,
+        latent_key: str,
+        obs: pd.DataFrame,
+        masses: pd.DataFrame,
+        axis: Axis,
+        *,
+        latent_dim: int,
+        cache_size: int,
+    ) -> None:
+        self.path = path
+        self.latent_key = latent_key
+        self.latent_dim = int(latent_dim)
+        self.cache_size = int(cache_size)
+        self._lock = threading.RLock()
+        self._handle: h5py.File | None = None
+        self._cache: OrderedDict[tuple[str, str], FiniteMeasure] = OrderedDict()
+        self._mass = masses.set_index(["measure_id", "time_label"])["mass"].to_dict()
+        self._atom_weight = (
+            pd.to_numeric(obs["atom_weight"], errors="raise").to_numpy(dtype=np.float64)
+            if "atom_weight" in obs
+            else np.ones(len(obs), dtype=np.float64)
+        )
+        if not np.isfinite(self._atom_weight).all() or np.any(self._atom_weight <= 0):
+            raise ValueError("support.h5ad atom_weight values must be positive and finite.")
+        grouped = obs.groupby(["time_label", "measure_id"], observed=True, sort=False).indices
+        self._positions: dict[tuple[str, str], tuple[int, int] | np.ndarray] = {}
+        ids_by_label: dict[str, list[str]] = {label: [] for label in axis.labels}
+        for (label, measure_id), raw_positions in grouped.items():
+            label = str(label)
+            measure_id = str(measure_id)
+            positions = np.sort(np.asarray(raw_positions, dtype=np.int64))
+            contiguous = bool(len(positions) and positions[-1] - positions[0] + 1 == len(positions))
+            self._positions[(label, measure_id)] = (
+                (int(positions[0]), int(positions[-1]) + 1) if contiguous else positions
+            )
+            ids_by_label[label].append(measure_id)
+        self.measure_ids_by_label = {label: tuple(ids_by_label[label]) for label in axis.labels}
+        self._views = {label: _H5ADCheckpointMeasures(self, label) for label in axis.labels}
+
+    def __getitem__(self, label: str) -> Mapping[str, FiniteMeasure]:
+        return self._views[str(label)]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._views)
+
+    def __len__(self) -> int:
+        return len(self._views)
+
+    def _dataset(self) -> h5py.Dataset:
+        if self._handle is None:
+            self._handle = h5py.File(self.path, "r")
+        node = self._handle[f"obsm/{self.latent_key}"]
+        if not isinstance(node, h5py.Dataset):  # pragma: no cover - checked at construction.
+            raise TypeError("Configured latent cache is not a dense HDF5 dataset.")
+        return node
+
+    def measure(self, label: str, measure_id: str) -> FiniteMeasure:
+        key = (str(label), str(measure_id))
+        with self._lock:
+            cached = self._cache.get(key)
+            if cached is not None:
+                self._cache.move_to_end(key)
+                return cached
+            if key not in self._positions:
+                raise KeyError(measure_id)
+            selection = self._positions[key]
+            if isinstance(selection, tuple):
+                positions = np.arange(selection[0], selection[1], dtype=np.int64)
+                support = np.asarray(self._dataset()[selection[0] : selection[1]], dtype=np.float32)
+            else:
+                positions = selection
+                support = np.asarray(self._dataset()[positions], dtype=np.float32)
+            total_mass = float(self._mass[(measure_id, label)])
+            local = self._atom_weight[positions]
+            measure = FiniteMeasure(support, total_mass * local / local.sum(), total_mass)
+            if self.cache_size > 0:
+                self._cache[key] = measure
+                self._cache.move_to_end(key)
+                while len(self._cache) > self.cache_size:
+                    self._cache.popitem(last=False)
+            return measure
+
+    def close(self) -> None:
+        with self._lock:
+            if self._handle is not None:
+                self._handle.close()
+                self._handle = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 def _validate_mass_table(frame: pd.DataFrame) -> tuple[pd.DataFrame, MassSemantics]:
@@ -343,10 +433,15 @@ def _validate_denominators(
 
 def _build_measures(
     obs: pd.DataFrame,
-    latent: np.ndarray,
+    latent: np.ndarray | None,
     masses: pd.DataFrame,
     axis: Axis,
-) -> dict[str, dict[str, FiniteMeasure]]:
+    *,
+    support_path: Path,
+    latent_key: str,
+    latent_dim: int,
+    cache_size: int,
+) -> Mapping[str, Mapping[str, FiniteMeasure]]:
     observed_pairs = set(zip(obs["measure_id"], obs["time_label"], strict=False))
     mass_pairs = set(zip(masses["measure_id"], masses["time_label"], strict=False))
     if observed_pairs != mass_pairs:
@@ -357,6 +452,16 @@ def _build_measures(
     if unknown_labels:
         raise ValueError(
             f"Support contains labels outside the configured axis: {sorted(unknown_labels)}"
+        )
+    if latent is None:
+        return H5ADFiniteMeasureStore(
+            support_path,
+            latent_key,
+            obs,
+            masses,
+            axis,
+            latent_dim=latent_dim,
+            cache_size=cache_size,
         )
     mass_lookup = masses.set_index(["measure_id", "time_label"])["mass"].to_dict()
     atom_weight = (
@@ -458,13 +563,26 @@ def load_data(config: RunConfig | str | Path) -> TrajectoryData:
     axis = run_config.axis.build()
     dataset_manifest, dataset_path = _load_dataset_manifest(run_config.data, axis)
     measure_meta = validate_measure_meta(pd.read_parquet(run_config.data.measure_meta))
-    obs, latent = _read_support(run_config.data.support, run_config.data.latent_key)
+    obs, latent, latent_dim = _read_support(
+        run_config.data.support,
+        run_config.data.latent_key,
+        lazy=run_config.data.lazy_support,
+    )
     masses, mass_semantics = _read_masses(run_config.data.masses)
     _validate_denominators(masses, measure_meta, mass_semantics)
     declared_semantics = MassSemantics(dataset_manifest["mass_semantics"])
     if declared_semantics is not mass_semantics:
         raise ValueError("masses.parquet mass semantics disagree with dataset.json.")
-    measures = _build_measures(obs, latent, masses, axis)
+    measures = _build_measures(
+        obs,
+        latent,
+        masses,
+        axis,
+        support_path=run_config.data.support,
+        latent_key=run_config.data.latent_key,
+        latent_dim=latent_dim,
+        cache_size=run_config.data.support_cache_size,
+    )
     measure_ids = tuple(measure_meta["measure_id"].tolist())
     count_blocks = _read_count_blocks(run_config.data.counts, measure_meta, measure_ids)
     input_paths = {
@@ -481,6 +599,17 @@ def load_data(config: RunConfig | str | Path) -> TrajectoryData:
         "dataset": dataset_manifest,
         "mass_denominators": sorted(masses["denominator"].unique().tolist()),
     }
+    representation = (
+        None
+        if int(dataset_manifest["schema_version"]) == 1
+        else RepresentationArtifact.from_dict(dataset_manifest["representation"])
+    )
+    if (
+        representation is not None
+        and representation.producer.get("latent_cache_hash_kind") == "support_h5ad_file_sha256"
+        and representation.latent_cache_hash != metadata["input_hashes"]["support"]
+    ):
+        raise ValueError("Representation latent-cache hash disagrees with support.h5ad.")
     return TrajectoryData(
         axis=axis,
         measures=measures,
@@ -488,6 +617,7 @@ def load_data(config: RunConfig | str | Path) -> TrajectoryData:
         mass_semantics=mass_semantics,
         count_blocks=count_blocks,
         metadata=metadata,
+        representation=representation,
     )
 
 
@@ -503,6 +633,7 @@ def write_canonical_dataset(
     counts: pd.DataFrame | None = None,
     description: str = "",
     source: dict[str, Any] | None = None,
+    representation: RepresentationArtifact | None = None,
 ) -> dict[str, Path]:
     """Write the one canonical adapter output contract."""
     output = Path(output_dir)
@@ -568,8 +699,31 @@ def write_canonical_dataset(
         axis.index(block.time_label)
     if source is not None and not isinstance(source, dict):
         raise ValueError("Canonical source provenance must be a JSON object.")
+    if representation is None:
+        digest = hashlib.sha256()
+        digest.update(np.asarray(latent.shape, dtype="<i8").tobytes())
+        digest.update(np.asarray(latent, dtype="<f4", order="C").tobytes(order="C"))
+        for measure_id, time_label in zip(obs["measure_id"], obs["time_label"], strict=True):
+            digest.update(str(measure_id).encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(str(time_label).encode("utf-8"))
+            digest.update(b"\0")
+        latent_hash = digest.hexdigest()
+        representation = RepresentationArtifact(
+            representation_id=f"frozen-latent:{latent_hash[:12]}",
+            backend="frozen_latent",
+            latent_dim=latent.shape[1],
+            latent_cache_hash=latent_hash,
+            fit_scope="external",
+            producer={
+                "source": "canonical_dataset_writer",
+                "fitting_cohort_known": False,
+            },
+        )
+    if representation.latent_dim != latent.shape[1]:
+        raise ValueError("Representation latent_dim disagrees with canonical support.")
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "axis": {
             "kind": axis.kind,
             "source": axis.source,
@@ -578,6 +732,7 @@ def write_canonical_dataset(
         },
         "latent_key": latent_key,
         "mass_semantics": MassSemantics(mass_semantics).value,
+        "representation": representation.to_dict(),
         "description": description,
         "source": source or {},
     }
@@ -621,13 +776,21 @@ def validate_run_data(config: RunConfig, data: TrajectoryData) -> None:
     """Reject scientifically inconsistent run and loaded-data combinations."""
     if data.axis != config.axis.build():
         raise ValueError("Loaded data axis disagrees with the run configuration.")
-    reaction_epochs = config.training.epochs.mass + config.training.epochs.context
-    if config.loss.count > 0 and not data.count_blocks:
+    from .registry import get_recipe
+    from .runtime import validate_recipe_study
+
+    recipe = get_recipe(config.recipe)
+    validate_recipe_study(recipe, data)
+    if recipe.recipe_id != "credo.compact_sde_v3":
+        return
+    settings = config.recipe_config
+    reaction_epochs = settings.training.epochs.mass + settings.training.epochs.context
+    if settings.loss.count > 0 and not data.count_blocks:
         raise ValueError("Positive count loss requires at least one complete CountBlock.")
     if data.count_blocks and data.axis.kind != "physical":
         raise ValueError("Count likelihood requires a physical axis.")
     if data.mass_semantics is MassSemantics.UNIT:
-        if reaction_epochs > 0 or config.loss.mass > 0 or config.loss.count > 0:
+        if reaction_epochs > 0 or settings.loss.mass > 0 or settings.loss.count > 0:
             raise ValueError("unit mass semantics permits state geometry training only.")
         if data.count_blocks:
             raise ValueError("unit mass semantics cannot be combined with count blocks.")

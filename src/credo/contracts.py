@@ -93,6 +93,7 @@ RepresentationFitScope = Literal[
     "external",
     "all_source_samples",
     "training_fold_source",
+    "training_split",
     "all_checkpoints",
 ]
 
@@ -146,6 +147,7 @@ class RepresentationArtifact:
             "external",
             "all_source_samples",
             "training_fold_source",
+            "training_split",
             "all_checkpoints",
         }:
             raise ValueError(f"Unknown representation fit_scope {self.fit_scope!r}.")
@@ -184,6 +186,38 @@ class RepresentationArtifact:
             "included_time_labels": list(self.included_time_labels),
             "producer": dict(self.producer),
         }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> RepresentationArtifact:
+        allowed = {
+            "representation_id",
+            "backend",
+            "latent_dim",
+            "gene_names_hash",
+            "gene_mask_hash",
+            "encoder_state_hash",
+            "decoder_state_hash",
+            "latent_cache_hash",
+            "normalization_hash",
+            "fit_scope",
+            "included_samples",
+            "included_time_labels",
+            "producer",
+        }
+        unknown = set(payload) - allowed
+        missing = {
+            "representation_id",
+            "backend",
+            "latent_dim",
+            "latent_cache_hash",
+            "fit_scope",
+        } - set(payload)
+        if unknown or missing:
+            raise ValueError(
+                "Representation contract has invalid fields; "
+                f"missing={sorted(missing)}, unknown={sorted(unknown)}."
+            )
+        return cls(**dict(payload))
 
 
 @dataclass(frozen=True)
@@ -253,11 +287,20 @@ class CapabilitySet:
     weak_form: bool
     context: Literal["none", "full_population", "catalog_bank"]
     context_affects: tuple[str, ...]
-    external_evaluation: bool
-    resume_training: bool
-    focal_counterfactual: bool
-    full_group_counterfactual: bool
-    exact_retraining: bool = False
+    fresh_training_supported: bool
+    checkpoint_inference_supported: bool
+    checkpoint_resume_supported: bool
+    same_study_holdout_evaluation: bool
+    compatible_study_evaluation: bool
+    cross_dataset_evaluation: bool
+    deterministic_cpu_fresh_fit: bool
+    bitwise_retraining_demonstrated: bool
+    counterfactual_scope: Literal[
+        "none",
+        "focal",
+        "catalog_background",
+        "full_population",
+    ]
 
     def __post_init__(self) -> None:
         affects = tuple(str(value) for value in self.context_affects)
@@ -269,17 +312,34 @@ class CapabilitySet:
             raise ValueError(f"Unknown context-affected coefficients: {sorted(unknown)}")
         if self.context == "none" and affects:
             raise ValueError("A no-context recipe cannot declare context-affected coefficients.")
+        if self.counterfactual_scope not in {
+            "none",
+            "focal",
+            "catalog_background",
+            "full_population",
+        }:
+            raise ValueError(f"Unknown counterfactual scope {self.counterfactual_scope!r}.")
+        if self.checkpoint_resume_supported and not self.checkpoint_inference_supported:
+            raise ValueError("Checkpoint resume requires checkpoint inference support.")
 
     def require(self, operation: str) -> None:
         aliases = {
-            "evaluate": "external_evaluation",
-            "resume": "resume_training",
-            "counterfactual": "focal_counterfactual",
-            "full_group_counterfactual": "full_group_counterfactual",
+            "train": "fresh_training_supported",
+            "inference": "checkpoint_inference_supported",
+            "evaluate": "same_study_holdout_evaluation",
+            "resume": "checkpoint_resume_supported",
             "weak_form": "weak_form",
             "counts": "counts",
             "mass": "mass",
         }
+        if operation == "counterfactual":
+            if self.counterfactual_scope == "none":
+                raise RuntimeError("Recipe does not support 'counterfactual'.")
+            return
+        if operation == "full_group_counterfactual":
+            if self.counterfactual_scope not in {"catalog_background", "full_population"}:
+                raise RuntimeError("Recipe does not support 'full_group_counterfactual'.")
+            return
         field_name = aliases.get(operation, operation)
         if not hasattr(self, field_name):
             raise ValueError(f"Unknown recipe operation {operation!r}.")
@@ -293,6 +353,7 @@ class OptimizerSpec:
     learning_rate: float
     weight_decay: float = 0.0
     parameter_learning_rates: Mapping[str, float] = field(default_factory=dict)
+    parameter_weight_decays: Mapping[str, float] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -300,6 +361,13 @@ class OptimizerSpec:
             "parameter_learning_rates",
             MappingProxyType(
                 {str(name): float(value) for name, value in self.parameter_learning_rates.items()}
+            ),
+        )
+        object.__setattr__(
+            self,
+            "parameter_weight_decays",
+            MappingProxyType(
+                {str(name): float(value) for name, value in self.parameter_weight_decays.items()}
             ),
         )
         if self.kind not in {"adam", "adamw"}:
@@ -310,12 +378,32 @@ class OptimizerSpec:
             )
         if any(value <= 0 for value in self.parameter_learning_rates.values()):
             raise ValueError("Per-parameter learning rates must be positive.")
+        if any(value < 0 for value in self.parameter_weight_decays.values()):
+            raise ValueError("Per-parameter weight decays must be nonnegative.")
+        unknown_decay_groups = set(self.parameter_weight_decays) - set(
+            self.parameter_learning_rates
+        )
+        if unknown_decay_groups:
+            raise ValueError(
+                "Per-parameter weight decay requires a matching learning-rate group: "
+                f"{sorted(unknown_decay_groups)}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "learning_rate": self.learning_rate,
+            "weight_decay": self.weight_decay,
+            "parameter_learning_rates": dict(self.parameter_learning_rates),
+            "parameter_weight_decays": dict(self.parameter_weight_decays),
+        }
 
 
 @dataclass(frozen=True)
 class BatchingSpec:
     mode: Literal["all_keys", "measure_batches"]
     measures_per_batch: int | None = None
+    order: Literal["random", "target_round_robin", "target_blocked"] = "random"
 
     def __post_init__(self) -> None:
         if self.mode not in {"all_keys", "measure_batches"}:
@@ -326,6 +414,17 @@ class BatchingSpec:
             self.measures_per_batch is None or self.measures_per_batch < 1
         ):
             raise ValueError("measure_batches requires a positive measures_per_batch.")
+        if self.order not in {"random", "target_round_robin", "target_blocked"}:
+            raise ValueError(f"Unknown batching order {self.order!r}.")
+        if self.mode == "all_keys" and self.order != "random":
+            raise ValueError("all_keys batching has no configurable ordering.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "measures_per_batch": self.measures_per_batch,
+            "order": self.order,
+        }
 
 
 @dataclass(frozen=True)
@@ -356,16 +455,54 @@ class Stage:
         ):
             raise ValueError("Stage active_objectives must be nonempty and unique.")
 
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "epochs": self.epochs,
+            "trainable_tags": list(self.trainable_tags),
+            "precision": self.precision,
+            "optimizer": self.optimizer.to_dict(),
+            "active_objectives": list(self.active_objectives),
+            "batching": self.batching.to_dict(),
+            "context_policy": self.context_policy,
+            "checkpoint_metric": self.checkpoint_metric,
+        }
+
 
 @dataclass(frozen=True)
 class TrainingPlan:
     stages: tuple[Stage, ...]
+    seed: int = 0
+    particles: int = 64
+    steps_per_interval: int = 4
+    early_stopping_patience: int = 10
+    gradient_clip_norm: float | None = 10.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "stages", tuple(self.stages))
         names = [stage.name for stage in self.stages]
         if not names or len(names) != len(set(names)):
             raise ValueError("TrainingPlan requires at least one uniquely named stage.")
+        if self.seed < 0:
+            raise ValueError("TrainingPlan seed must be nonnegative.")
+        if self.particles < 2 or self.steps_per_interval < 1:
+            raise ValueError(
+                "TrainingPlan requires at least two particles and one integration step."
+            )
+        if self.early_stopping_patience < 1:
+            raise ValueError("TrainingPlan early_stopping_patience must be positive.")
+        if self.gradient_clip_norm is not None and self.gradient_clip_norm <= 0:
+            raise ValueError("TrainingPlan gradient_clip_norm must be positive when supplied.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "seed": self.seed,
+            "particles": self.particles,
+            "steps_per_interval": self.steps_per_interval,
+            "early_stopping_patience": self.early_stopping_patience,
+            "gradient_clip_norm": self.gradient_clip_norm,
+            "stages": [stage.to_dict() for stage in self.stages],
+        }
 
 
 @dataclass(frozen=True)
@@ -418,6 +555,34 @@ MEASURE_META_COLUMNS = (
 
 SupportStore = Mapping[str, Mapping[str, np.ndarray]]
 MassTable = pd.DataFrame
+
+
+class _CheckpointSupportView(Mapping[str, np.ndarray]):
+    def __init__(self, measures: Mapping[str, FiniteMeasure]) -> None:
+        self._measures = measures
+
+    def __getitem__(self, measure_id: str) -> np.ndarray:
+        return self._measures[str(measure_id)].support
+
+    def __iter__(self):
+        return iter(self._measures)
+
+    def __len__(self) -> int:
+        return len(self._measures)
+
+
+class _SupportView(Mapping[str, Mapping[str, np.ndarray]]):
+    def __init__(self, measures: Mapping[str, Mapping[str, FiniteMeasure]]) -> None:
+        self._measures = measures
+
+    def __getitem__(self, label: str) -> Mapping[str, np.ndarray]:
+        return _CheckpointSupportView(self._measures[str(label)])
+
+    def __iter__(self):
+        return iter(self._measures)
+
+    def __len__(self) -> int:
+        return len(self._measures)
 
 
 def _support_sha256(measures: Mapping[str, Mapping[str, FiniteMeasure]]) -> str:
@@ -479,13 +644,18 @@ class TrajectoryData:
     def __post_init__(self) -> None:
         measure_meta = validate_measure_meta(self.measure_meta)
         semantics = MassSemantics(self.mass_semantics)
-        measures = {
-            str(label): MappingProxyType({str(key): value for key, value in by_id.items()})
-            for label, by_id in self.measures.items()
-        }
+        if bool(getattr(self.measures, "is_lazy", False)):
+            measures = self.measures
+        else:
+            measures = MappingProxyType(
+                {
+                    str(label): MappingProxyType({str(key): value for key, value in by_id.items()})
+                    for label, by_id in self.measures.items()
+                }
+            )
         object.__setattr__(self, "measure_meta", measure_meta)
         object.__setattr__(self, "mass_semantics", semantics)
-        object.__setattr__(self, "measures", MappingProxyType(measures))
+        object.__setattr__(self, "measures", measures)
         object.__setattr__(self, "count_blocks", tuple(self.count_blocks))
         metadata = dict(self.metadata)
         object.__setattr__(self, "metadata", MappingProxyType(metadata))
@@ -504,9 +674,10 @@ class TrajectoryData:
                 ),
                 latent_cache_hash=latent_hash,
                 fit_scope="external",
-                included_samples=tuple(dict.fromkeys(measure_meta["sample_id"].tolist())),
-                included_time_labels=tuple(self.axis.labels),
-                producer={"source": "canonical_dataset"},
+                producer={
+                    "source": "canonical_dataset",
+                    "fitting_cohort_known": False,
+                },
             )
         object.__setattr__(self, "representation", representation)
         self.validate()
@@ -525,7 +696,10 @@ class TrajectoryData:
                 "Every metadata measure must have source support and no source key may be unknown; "
                 f"missing={missing}, extra={extra}."
             )
-        latent_dims: set[int] = set()
+        declared_latent_dim = getattr(self.measures, "latent_dim", None)
+        latent_dims: set[int] = (
+            {int(declared_latent_dim)} if declared_latent_dim is not None else set()
+        )
         for label in self.axis.labels:
             downstream_ids = set(self.measures[label])
             if not downstream_ids <= source_ids:
@@ -533,7 +707,8 @@ class TrajectoryData:
                 raise ValueError(
                     f"Checkpoint {label!r} has measures without source support: {unknown}"
                 )
-            latent_dims.update(measure.latent_dim for measure in self.measures[label].values())
+            if declared_latent_dim is None:
+                latent_dims.update(measure.latent_dim for measure in self.measures[label].values())
         if len(latent_dims) != 1:
             raise ValueError("All finite measures must share one latent dimension.")
         if self.representation.latent_dim != next(iter(latent_dims)):
@@ -581,7 +756,7 @@ class TrajectoryData:
 
     @property
     def latent_dim(self) -> int:
-        return next(iter(self.measures[self.axis.source].values())).latent_dim
+        return self.representation.latent_dim
 
     @property
     def embedding_ids(self) -> tuple[str, ...]:
@@ -590,14 +765,7 @@ class TrajectoryData:
     @property
     def support(self) -> SupportStore:
         """Recipe-neutral support view keyed by checkpoint and measure ID."""
-        return MappingProxyType(
-            {
-                label: MappingProxyType(
-                    {measure_id: measure.support for measure_id, measure in by_measure.items()}
-                )
-                for label, by_measure in self.measures.items()
-            }
-        )
+        return _SupportView(self.measures)
 
     @property
     def masses(self) -> MassTable:

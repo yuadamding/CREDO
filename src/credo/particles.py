@@ -130,6 +130,34 @@ class ContextProvider(Protocol):
     ) -> torch.Tensor: ...
 
 
+@dataclass(frozen=True)
+class DynamicsStep:
+    """Recipe-neutral coefficients and context for one integration step.
+
+    Context is either a global vector ``[C]`` or a measure-indexed tensor whose
+    leading dimension is ``G``. The rollout preserves that distinction.
+    """
+
+    drift: torch.Tensor
+    sigma_diag: torch.Tensor
+    growth: torch.Tensor
+    context: torch.Tensor
+
+
+class DynamicsKernel(Protocol):
+    """Adapter boundary between a recipe model and the common EM driver."""
+
+    def step(
+        self,
+        *,
+        step_index: int,
+        z: torch.Tensor,
+        logw: torch.Tensor,
+        time: torch.Tensor,
+        state: ParticleState,
+    ) -> DynamicsStep: ...
+
+
 def _group_index(values: Sequence[str], device: torch.device) -> torch.Tensor:
     mapping: dict[str, int] = {}
     indices = []
@@ -322,21 +350,54 @@ def sample_noise(
     )
 
 
-def rollout(
-    model: CREDOModel,
+@dataclass(frozen=True)
+class CompactV3Kernel:
+    model: CREDOModel
+    context_provider: ContextProvider
+
+    def step(
+        self,
+        *,
+        step_index: int,
+        z: torch.Tensor,
+        logw: torch.Tensor,
+        time: torch.Tensor,
+        state: ParticleState,
+    ) -> DynamicsStep:
+        absolute_log_weight = state.log_m0[:, None] + logw
+        context = self.context_provider.context(
+            step_index=step_index,
+            z=z,
+            absolute_log_weight=absolute_log_weight,
+            state=state,
+            model=self.model,
+        )
+        output = self.model(
+            z,
+            time,
+            state.embedding_ids,
+            context,
+            state.residual_scale,
+        )
+        return DynamicsStep(
+            drift=output.drift,
+            sigma_diag=output.sigma_diag,
+            growth=output.growth,
+            context=context,
+        )
+
+
+def euler_maruyama_rollout(
+    kernel: DynamicsKernel,
     initial_state: ParticleState,
     axis_grid: torch.Tensor,
     *,
-    context_provider: ContextProvider | None = None,
     noise: torch.Tensor | None = None,
 ) -> ParticleRollout:
-    """Run the only Euler-Maruyama particle execution path."""
+    """Execute the common state, weight, noise, and capture loop."""
     grid = axis_grid.to(device=initial_state.z.device, dtype=initial_state.z.dtype)
     if grid.ndim != 1 or len(grid) < 2 or not torch.all(grid[1:] > grid[:-1]):
         raise ValueError("axis_grid must be a strictly increasing one-dimensional tensor.")
-    provider: ContextProvider = context_provider or (
-        NoContextProvider() if model.context_mode == "none" else SelfConsistentContextProvider()
-    )
     if noise is None:
         noise = sample_noise(initial_state, grid, seed=0)
     noise = noise.to(device=initial_state.z.device, dtype=initial_state.z.dtype)
@@ -353,21 +414,26 @@ def rollout(
     growth_steps = []
     context_steps = []
     for step_index in range(len(grid) - 1):
-        absolute_log_weight = initial_state.log_m0[:, None] + logw
-        context = provider.context(
+        output = kernel.step(
             step_index=step_index,
             z=z,
-            absolute_log_weight=absolute_log_weight,
+            logw=logw,
+            time=grid[step_index],
             state=initial_state,
-            model=model,
         )
-        output = model(
-            z,
-            grid[step_index],
-            initial_state.embedding_ids,
-            context,
-            initial_state.residual_scale,
-        )
+        if tuple(output.drift.shape) != tuple(z.shape):
+            raise ValueError("DynamicsKernel drift must match the particle-state shape.")
+        if tuple(output.sigma_diag.shape) != tuple(z.shape):
+            raise ValueError("DynamicsKernel diffusion must match the particle-state shape.")
+        if tuple(output.growth.shape) != tuple(logw.shape):
+            raise ValueError("DynamicsKernel growth must match the particle-weight shape.")
+        if output.context.ndim == 0 or (
+            output.context.ndim >= 2 and output.context.shape[0] != z.shape[0]
+        ):
+            raise ValueError(
+                "DynamicsKernel context must be a global vector or have one leading "
+                "row per measure."
+            )
         dt = grid[step_index + 1] - grid[step_index]
         z = z + output.drift * dt + output.sigma_diag * torch.sqrt(dt) * noise[step_index]
         logw = logw + output.growth * dt
@@ -376,12 +442,12 @@ def rollout(
         drift_steps.append(output.drift)
         sigma_steps.append(output.sigma_diag)
         growth_steps.append(output.growth)
-        context_steps.append(context)
+        context_steps.append(output.context)
     return ParticleRollout(
         z_steps=torch.stack(z_steps),
         logw_steps=torch.stack(logw_steps),
         log_m0=initial_state.log_m0,
-        axis_grid=grid,
+        axis_grid=axis_grid.to(device=initial_state.z.device, dtype=torch.float32),
         measure_ids=initial_state.measure_ids,
         embedding_ids=initial_state.embedding_ids,
         context_group_ids=initial_state.context_group_ids,
@@ -392,6 +458,26 @@ def rollout(
         growth_steps=torch.stack(growth_steps),
         context_steps=torch.stack(context_steps),
         noise_steps=noise,
+    )
+
+
+def rollout(
+    model: CREDOModel,
+    initial_state: ParticleState,
+    axis_grid: torch.Tensor,
+    *,
+    context_provider: ContextProvider | None = None,
+    noise: torch.Tensor | None = None,
+) -> ParticleRollout:
+    """Run compact-v3 through the common Euler-Maruyama driver."""
+    provider: ContextProvider = context_provider or (
+        NoContextProvider() if model.context_mode == "none" else SelfConsistentContextProvider()
+    )
+    return euler_maruyama_rollout(
+        CompactV3Kernel(model, provider),
+        initial_state,
+        axis_grid,
+        noise=noise,
     )
 
 

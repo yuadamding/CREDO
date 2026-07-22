@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
     "anndata>=0.10",
     "geomloss>=0.2.6",
+    "h5py>=3.10",
     "numpy>=1.26",
     "pandas>=2.1",
     "pyarrow>=14",
@@ -75,6 +76,9 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.coverage.run]
 source = ["credo"]
+# Frozen transformer-v2 has generated contract tests plus optional archive replay;
+# the line gate tracks the released fresh-training runtime rather than compatibility code.
+omit = ["src/credo/recipes/transformer_v2/*"]
 
 [tool.coverage.report]
 fail_under = 75

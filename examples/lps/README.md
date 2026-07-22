@@ -19,5 +19,5 @@ package.
 ```bash
 python examples/lps/prepare.py
 credo validate examples/lps/config.yaml
-credo run examples/lps/config.yaml
+credo train examples/lps/config.yaml
 ```

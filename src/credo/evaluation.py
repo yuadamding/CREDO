@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 import pandas as pd
@@ -23,6 +25,21 @@ COMMON_METRIC_COLUMNS = (
     "integration_steps",
     "evaluation_seed",
 )
+
+
+def compact_split_id(run: Any) -> str:
+    split_payload = {
+        "strategy": run.validation_strategy,
+        "source": run.validation_source,
+        "train_measure_ids": list(run.train_measure_ids),
+        "validation_measure_ids": list(run.validation_measure_ids),
+        "train_time_labels": list(run.train_time_labels),
+        "validation_time_labels": list(run.validation_time_labels),
+    }
+    split_hash = hashlib.sha256(
+        json.dumps(split_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"compact-v3:{run.validation_strategy}:{split_hash[:12]}"
 
 
 def _validate_common_metrics(metrics: Any) -> pd.DataFrame:
@@ -51,7 +68,7 @@ def standardize_compact_metrics(
     frame.insert(0, "recipe_id", "credo.compact_sde_v3")
     frame.insert(1, "recipe_version", "3.0")
     frame.insert(2, "representation_id", run.data.representation.representation_id)
-    frame.insert(3, "split_id", f"compact-v3:{run.validation_strategy}")
+    frame.insert(3, "split_id", compact_split_id(run))
     frame["evaluation_particles"] = int(particles)
     frame["integration_steps"] = int(len(run.grid) - 1)
     frame["evaluation_seed"] = int(seed)

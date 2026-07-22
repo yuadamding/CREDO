@@ -25,7 +25,12 @@ if TYPE_CHECKING:
     from .training import Trainer
 
 
-COUNTERFACTUAL_COLUMNS = [
+COMMON_COUNTERFACTUAL_COLUMNS = (
+    "recipe_id",
+    "recipe_version",
+    "implementation_hash",
+    "representation_id",
+    "split_id",
     "measure_id",
     "time_label",
     "context_policy",
@@ -35,13 +40,45 @@ COUNTERFACTUAL_COLUMNS = [
     "context_dependence_shift",
     "factual_ess",
     "reference_ess",
-    "eval_particles",
+    "evaluation_particles",
     "integration_steps",
-    "counterfactual_seed",
+    "evaluation_seed",
+    "noise_seed",
     "checkpoint_sha256",
-    "evaluator_package_version",
-    "evaluator_git_sha",
-]
+    "package_version",
+    "git_sha",
+)
+COUNTERFACTUAL_COLUMNS = list(COMMON_COUNTERFACTUAL_COLUMNS)
+
+
+def validate_counterfactual_result(result: Any) -> pd.DataFrame:
+    if not isinstance(result, pd.DataFrame):
+        raise TypeError("A CREDO counterfactual runtime must return a pandas DataFrame.")
+    missing = set(COMMON_COUNTERFACTUAL_COLUMNS) - set(result.columns)
+    if missing:
+        raise ValueError(f"Counterfactual result omitted common columns: {sorted(missing)}")
+    key = [
+        "recipe_id",
+        "recipe_version",
+        "split_id",
+        "measure_id",
+        "time_label",
+        "context_policy",
+        "evaluation_particles",
+        "evaluation_seed",
+        "noise_seed",
+    ]
+    if result.duplicated(key).any():
+        raise ValueError("Counterfactual result contains duplicate recipe/measure/checkpoint rows.")
+    if (result["evaluation_particles"] < 2).any():
+        raise ValueError("Counterfactual result contains an invalid particle count.")
+    if (
+        (result["integration_steps"] < 1).any()
+        or (result["evaluation_seed"] < 0).any()
+        or (result["noise_seed"] < 0).any()
+    ):
+        raise ValueError("Counterfactual result contains invalid integration or seed provenance.")
+    return result
 
 
 def _weighted_mean(support: torch.Tensor, log_weight: torch.Tensor) -> torch.Tensor:
@@ -76,6 +113,7 @@ def counterfactual(
     particles: int | None = None,
     seed: int | None = None,
     study: Any = None,
+    device: str | torch.device | None = None,
 ) -> pd.DataFrame:
     """Compare one measure with the same-start continuation after removing its residual."""
     if n_particles is not None and particles is not None:
@@ -86,14 +124,22 @@ def counterfactual(
         require("counterfactual")
     runtime_method = getattr(run, "counterfactual_runtime", None)
     if callable(runtime_method):
-        return runtime_method(
-            measure_id,
-            context_policy=context_policy,
-            same_noise=same_noise,
-            n_particles=resolved_particles,
-            seed=seed,
-            study=study,
+        runtime_options = {}
+        if device is not None:
+            runtime_options["device"] = device
+        return validate_counterfactual_result(
+            runtime_method(
+                measure_id,
+                context_policy=context_policy,
+                same_noise=same_noise,
+                n_particles=resolved_particles,
+                seed=seed,
+                study=study,
+                **runtime_options,
+            )
         )
+    if device is not None and torch.device(device) != run.device:
+        raise ValueError("Compact counterfactual device must match the loaded runtime device.")
     if study is not None and study is not run.data:
         raise ValueError("External counterfactual data must be loaded as a separate run.")
     if context_policy not in {"self_consistent", "clamped"}:
@@ -114,13 +160,13 @@ def counterfactual(
         group_ids = (measure_id,)
     local_index = group_ids.index(measure_id)
     particle_count = (
-        run.config.evaluation.particles if resolved_particles is None else int(resolved_particles)
+        run.settings.evaluation.particles if resolved_particles is None else int(resolved_particles)
     )
     if particle_count < 2:
         raise ValueError("n_particles must be at least 2.")
     if seed is None:
         digest = hashlib.sha256(measure_id.encode("utf-8")).hexdigest()
-        seed = run.config.training.seed + int(digest[:8], 16) % 1_000_000
+        seed = run.training_plan.seed + int(digest[:8], 16) % 1_000_000
     if seed < 0:
         raise ValueError("seed must be nonnegative.")
     source = sample_initial_particles(
@@ -179,6 +225,10 @@ def counterfactual(
     factual_diagnostics = weight_diagnostics(factual_rollout.logw_steps)
     reference_diagnostics = weight_diagnostics(reference_rollout.logw_steps)
     evaluator = _evaluator_provenance(run)
+    from .evaluation import compact_split_id
+    from .training import _compact_recipe_contract
+
+    recipe_contract = _compact_recipe_contract()
     rows = []
     for label in run.data.axis.labels[1:]:
         step = checkpoint[label]
@@ -202,6 +252,11 @@ def counterfactual(
             context_shift = factual_support.new_zeros(())
         rows.append(
             {
+                "recipe_id": recipe_contract["id"],
+                "recipe_version": recipe_contract["version"],
+                "implementation_hash": recipe_contract["implementation_hash"],
+                "representation_id": run.data.representation.representation_id,
+                "split_id": compact_split_id(run),
                 "measure_id": measure_id,
                 "time_label": label,
                 "context_policy": context_policy,
@@ -218,16 +273,17 @@ def counterfactual(
                 "context_dependence_shift": float(context_shift.cpu()),
                 "factual_ess": float(factual_diagnostics["ess"][step, local_index].cpu()),
                 "reference_ess": float(reference_diagnostics["ess"][step, local_index].cpu()),
-                "eval_particles": particle_count,
+                "evaluation_particles": particle_count,
                 "integration_steps": len(run.grid) - 1,
-                "counterfactual_seed": seed,
+                "evaluation_seed": seed,
+                "noise_seed": seed + 1_000_003,
                 **evaluator,
             }
         )
     frame = pd.DataFrame(rows, columns=COUNTERFACTUAL_COLUMNS)
     run.counterfactual_rows.extend(rows)
     _persist_if_saved(run)
-    return frame
+    return validate_counterfactual_result(frame)
 
 
 def _evaluator_provenance(run: Trainer) -> dict[str, str | None]:
@@ -237,8 +293,8 @@ def _evaluator_provenance(run: Trainer) -> dict[str, str | None]:
     git_sha, _ = _git_state()
     return {
         "checkpoint_sha256": run.checkpoint_sha256,
-        "evaluator_package_version": __version__,
-        "evaluator_git_sha": git_sha,
+        "package_version": __version__,
+        "git_sha": git_sha,
     }
 
 
@@ -266,12 +322,13 @@ def _persist_if_saved(run: Trainer) -> None:
         "measure_id",
         "time_label",
         "context_policy",
-        "eval_particles",
+        "evaluation_particles",
         "integration_steps",
-        "counterfactual_seed",
+        "evaluation_seed",
+        "noise_seed",
         "checkpoint_sha256",
-        "evaluator_package_version",
-        "evaluator_git_sha",
+        "package_version",
+        "git_sha",
     ]
     current = current.drop_duplicates(key, keep="last").reset_index(drop=True)
     run.counterfactual_rows = current.to_dict(orient="records")

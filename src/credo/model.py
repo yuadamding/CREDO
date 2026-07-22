@@ -308,37 +308,51 @@ class CREDOModel(nn.Module):
             growth = z.new_zeros(group_count, particle_count)
         return DynamicsOutput(drift=drift, sigma_diag=sigma_diag, growth=growth, programs=programs)
 
-    def set_phase(self, phase: Literal["state", "mass", "context"]) -> None:
-        """Apply the fixed state, mass, or ecological continuation phase."""
-        if phase not in {"state", "mass", "context"}:
-            raise ValueError(f"Unknown training phase {phase!r}.")
+    def set_trainable_tags(
+        self,
+        tags: Sequence[str],
+        *,
+        growth_enabled: bool,
+        context_enabled: bool,
+    ) -> tuple[str, ...]:
+        """Apply recipe-declared parameter groups and return trainable names."""
+        requested = tuple(str(value) for value in tags)
+        known = {
+            "reference_embedding",
+            "residual_embeddings",
+            "shared_dynamics",
+            "drift",
+            "diffusion",
+            "growth",
+            "program_encoder",
+            "ecological_payoff",
+        }
+        if unknown := set(requested) - known:
+            raise ValueError(f"Unknown compact-v3 trainable tags: {sorted(unknown)}")
         for parameter in self.parameters():
             parameter.requires_grad_(False)
-        self.growth_enabled = phase != "state"
-        self.context_enabled = phase == "context" and self.context_mode == "catalog_bank"
-        if phase in {"state", "mass"}:
-            for parameter in (
-                self.reference_embedding,
-                self.residual_embedding,
-            ):
-                parameter.requires_grad_(True)
-            for module in (
-                self.trunk,
-                self.drift_reference,
-                self.drift_residual,
-                self.sigma_reference,
-                self.sigma_residual,
-            ):
-                for parameter in module.parameters():
-                    parameter.requires_grad_(True)
-        if phase == "mass":
+        self.growth_enabled = bool(growth_enabled)
+        self.context_enabled = bool(context_enabled) and self.context_mode == "catalog_bank"
+
+        if "reference_embedding" in requested:
+            self.reference_embedding.requires_grad_(True)
+        if "residual_embeddings" in requested:
+            self.residual_embedding.requires_grad_(True)
+        modules = {
+            "shared_dynamics": (self.trunk,),
+            "drift": (self.drift_reference, self.drift_residual),
+            "diffusion": (self.sigma_reference, self.sigma_residual),
+            "growth": (self.growth_reference, self.growth_residual),
+            "program_encoder": (self.program_encoder,),
+        }
+        for tag, selected in modules.items():
+            if tag in requested:
+                for module in selected:
+                    for parameter in module.parameters():
+                        parameter.requires_grad_(True)
+        if "growth" in requested:
             self.growth_bias.requires_grad_(True)
-            for module in (self.growth_reference, self.growth_residual):
-                for parameter in module.parameters():
-                    parameter.requires_grad_(True)
-        if phase == "context":
-            for parameter in self.program_encoder.parameters():
-                parameter.requires_grad_(True)
+        if "ecological_payoff" in requested:
             for parameter in (
                 self.payoff_reference_left,
                 self.payoff_reference_right,
@@ -346,14 +360,43 @@ class CREDOModel(nn.Module):
                 self.payoff_residual_right,
             ):
                 parameter.requires_grad_(True)
+        return tuple(name for name, parameter in self.named_parameters() if parameter.requires_grad)
 
-    def regularization(self) -> torch.Tensor:
+    def set_phase(self, phase: Literal["state", "mass", "context"]) -> None:
+        """Compatibility wrapper for the released continuation phases."""
+        phase_tags = {
+            "state": (
+                "reference_embedding",
+                "residual_embeddings",
+                "shared_dynamics",
+                "drift",
+                "diffusion",
+            ),
+            "mass": (
+                "reference_embedding",
+                "residual_embeddings",
+                "shared_dynamics",
+                "drift",
+                "diffusion",
+                "growth",
+            ),
+            "context": ("program_encoder", "ecological_payoff"),
+        }
+        if phase not in phase_tags:
+            raise ValueError(f"Unknown training phase {phase!r}.")
+        self.set_trainable_tags(
+            phase_tags[phase],
+            growth_enabled=phase != "state",
+            context_enabled=phase == "context",
+        )
+
+    def regularization(self, *, coefficient: float = 1e-4) -> torch.Tensor:
         residual_penalty = (
             self.residual_embedding.square().mean()
             if self.residual_embedding.numel()
             else self.reference_embedding.new_zeros(())
         )
-        return 1e-4 * (
+        return float(coefficient) * (
             self.reference_embedding.square().mean()
             + residual_penalty
             + self.payoff_reference_left.square().mean()
