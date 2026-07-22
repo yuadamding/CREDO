@@ -557,18 +557,16 @@ def _read_count_blocks(
     return _build_count_blocks(_normalize_count_table(frame), measure_meta, measure_ids)
 
 
-def load_data(config: RunConfig | str | Path) -> TrajectoryData:
-    """Load canonical support, metadata, mass, and optional count blocks."""
-    run_config = load_config(config) if isinstance(config, (str, Path)) else config
-    axis = run_config.axis.build()
-    dataset_manifest, dataset_path = _load_dataset_manifest(run_config.data, axis)
-    measure_meta = validate_measure_meta(pd.read_parquet(run_config.data.measure_meta))
+def _load_canonical_data(data_config: DataConfig, axis: Axis) -> TrajectoryData:
+    """Load the current five-file compatibility schema into ``TrajectoryData``."""
+    dataset_manifest, dataset_path = _load_dataset_manifest(data_config, axis)
+    measure_meta = validate_measure_meta(pd.read_parquet(data_config.measure_meta))
     obs, latent, latent_dim = _read_support(
-        run_config.data.support,
-        run_config.data.latent_key,
-        lazy=run_config.data.lazy_support,
+        data_config.support,
+        data_config.latent_key,
+        lazy=data_config.lazy_support,
     )
-    masses, mass_semantics = _read_masses(run_config.data.masses)
+    masses, mass_semantics = _read_masses(data_config.masses)
     _validate_denominators(masses, measure_meta, mass_semantics)
     declared_semantics = MassSemantics(dataset_manifest["mass_semantics"])
     if declared_semantics is not mass_semantics:
@@ -578,20 +576,20 @@ def load_data(config: RunConfig | str | Path) -> TrajectoryData:
         latent,
         masses,
         axis,
-        support_path=run_config.data.support,
-        latent_key=run_config.data.latent_key,
+        support_path=data_config.support,
+        latent_key=data_config.latent_key,
         latent_dim=latent_dim,
-        cache_size=run_config.data.support_cache_size,
+        cache_size=data_config.support_cache_size,
     )
     measure_ids = tuple(measure_meta["measure_id"].tolist())
-    count_blocks = _read_count_blocks(run_config.data.counts, measure_meta, measure_ids)
+    count_blocks = _read_count_blocks(data_config.counts, measure_meta, measure_ids)
     input_paths = {
-        "support": run_config.data.support,
-        "measure_meta": run_config.data.measure_meta,
-        "masses": run_config.data.masses,
+        "support": data_config.support,
+        "measure_meta": data_config.measure_meta,
+        "masses": data_config.masses,
     }
-    if run_config.data.counts is not None:
-        input_paths["counts"] = run_config.data.counts
+    if data_config.counts is not None:
+        input_paths["counts"] = data_config.counts
     input_paths["dataset"] = dataset_path
     metadata = {
         "input_paths": {name: str(path) for name, path in input_paths.items()},
@@ -619,6 +617,12 @@ def load_data(config: RunConfig | str | Path) -> TrajectoryData:
         metadata=metadata,
         representation=representation,
     )
+
+
+def load_data(config: RunConfig | str | Path) -> TrajectoryData:
+    """Load canonical support, metadata, mass, and optional count blocks."""
+    run_config = load_config(config) if isinstance(config, (str, Path)) else config
+    return _load_canonical_data(run_config.data, run_config.axis.build())
 
 
 def write_canonical_dataset(

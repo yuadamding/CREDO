@@ -413,6 +413,7 @@ def test_installed_surface_is_compact_and_recipe_runtime_is_explicit() -> None:
         "cli",
         "contracts",
         "counterfactual",
+        "data",
         "evaluation",
         "io",
         "model",
@@ -423,7 +424,7 @@ def test_installed_surface_is_compact_and_recipe_runtime_is_explicit() -> None:
         "runtime",
         "training",
     }
-    assert len(credo.__all__) == 15
+    assert len(credo.__all__) == 18
 
 
 def test_cli_validate_and_summarize(tiny_config, trained_run, capsys, tmp_path) -> None:

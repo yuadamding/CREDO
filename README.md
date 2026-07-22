@@ -1,11 +1,12 @@
 # CREDO
 
 CREDO is a compact research-alpha framework for control-referenced
-finite-measure dynamics in longitudinal Perturb-seq. It provides one stable
-study, particle, evaluation, counterfactual, and artifact runtime with
-immutable model recipes. The default is `credo.compact_sde_v3@3.0`; archived
-transformer checkpoints use `credo.transformer_sde_v2@2.0` without translating
-their tensors into the compact architecture.
+finite-measure dynamics in longitudinal Perturb-seq. Its storage-independent
+`Study` model separates experimental meaning from support storage and recipe
+execution. Immutable model recipes own model and numerical behavior. The
+default is `credo.compact_sde_v3@3.0`; archived transformer checkpoints use
+`credo.transformer_sde_v2@2.0` without translating their tensors into the
+compact architecture.
 
 CREDO estimates regularized effective-generator contrasts from destructive
 snapshots. It does not reconstruct cell genealogies or turn fitted-model
@@ -22,9 +23,28 @@ Python 3.11 through 3.13 are supported.
 CUDA execution through PyTorch/Triton also requires a C compiler and development
 headers matching the selected Python interpreter (for example, `python3.12-dev`).
 
-## Canonical data
+## Study model
 
-Every adapter writes the same files:
+The semantic API uses explicit condition, longitudinal-series, and observation
+identities. Empirical atom probabilities are normalized independently of named
+abundance channels, observation-level context can vary by checkpoint, stable
+string IDs define composition blocks, and multiple representation variants can
+coexist in one study.
+
+```python
+from credo import open_study
+
+study = open_study("examples/synthetic/data/dataset.json")
+snapshot = study.snapshot("D1::GENE1-1@Rest")
+study.close()
+```
+
+See [the study model](docs/study_model.md) for contracts and the current
+compatibility boundary.
+
+## Compatibility data
+
+Existing adapters continue to write the schema-v1/v2 five-file codec:
 
 | File | Contract |
 | --- | --- |
@@ -34,8 +54,10 @@ Every adapter writes the same files:
 | `counts.parquet` | Optional complete context-group/time compositional count blocks. |
 | `dataset.json` | Axis, latent key, mass semantics, representation contract, and source provenance. |
 
-Dense H5AD latent supports are read lazily by default through a bounded
-finite-measure cache. Set `data.lazy_support: false` only for small fixtures.
+`open_study()` normalizes this format into `Study` without copying support
+atoms or materializing lazy support for abundance access. Dense H5AD latent
+supports remain lazy through a bounded cache. Set `data.lazy_support: false`
+only for small fixtures.
 
 The model never parses `measure_id`. `perturbation_id` identifies the
 experimental construct, while `embedding_id` identifies the learned residual;

@@ -11,6 +11,7 @@ from .contracts import (
     TrajectoryData,
 )
 from .counterfactual import counterfactual
+from .data import Study, StudyView, open_study
 from .evaluation import evaluate
 from .io import load_config, load_data
 from .model import CREDOModel
@@ -26,6 +27,8 @@ __all__ = [
     "MassSemantics",
     "RepresentationArtifact",
     "SplitSpec",
+    "Study",
+    "StudyView",
     "Trainer",
     "TrajectoryData",
     "counterfactual",
@@ -33,6 +36,7 @@ __all__ = [
     "get_recipe",
     "load_config",
     "load_data",
+    "open_study",
 ]
 
 __version__ = "3.0.0a3"

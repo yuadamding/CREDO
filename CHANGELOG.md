@@ -2,6 +2,9 @@
 
 ## 3.0.0a3 - 2026-07-21
 
+- Added the storage-independent `Study` model and a lazy five-file compatibility
+  codec with explicit conditions, series, observations, abundance, composition,
+  representation, and support-store contracts.
 - Introduced one stable study, particle, evaluation, counterfactual, training-plan,
   and checkpoint-envelope runtime with immutable recipe identifiers.
 - Preserved compact v3 behind `credo.compact_sde_v3@3.0` with golden state,
