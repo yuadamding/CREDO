@@ -76,6 +76,11 @@ def test_tiny_gse_like_run_writes_five_artifacts(trained_run) -> None:
     ]
     assert manifest["claim_policy"]["absolute_growth"] is False
     assert manifest["claim_policy"]["abundance_claim"] == "relative_only"
+    assert manifest["runtime"] == {
+        "device": "cpu",
+        "dtype": "float32",
+        "accelerator": {"type": "cpu", "name": "CPU", "cuda_runtime": None},
+    }
     assert manifest["bank_initialization"]["bank_seen_fraction"] == 1.0
     assert manifest["validation_split"]["strategy"] == "context_group_holdout"
 

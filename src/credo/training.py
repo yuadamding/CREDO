@@ -915,6 +915,9 @@ class Trainer:
                 dependencies[name] = importlib.metadata.version(distribution)
             except importlib.metadata.PackageNotFoundError:
                 dependencies[name] = None
+        accelerator_name = (
+            torch.cuda.get_device_name(self.device) if self.device.type == "cuda" else "CPU"
+        )
         return {
             "schema_version": 2,
             "recipe": _compact_recipe_contract(),
@@ -925,6 +928,15 @@ class Trainer:
             "git_dirty": git_dirty,
             "command": sys.argv,
             "dependencies": dependencies,
+            "runtime": {
+                "device": str(self.device),
+                "dtype": str(self.dtype).removeprefix("torch."),
+                "accelerator": {
+                    "type": self.device.type,
+                    "name": accelerator_name,
+                    "cuda_runtime": torch.version.cuda if self.device.type == "cuda" else None,
+                },
+            },
             "input_hashes": self.data.metadata.get("input_hashes", {}),
             "dataset": self.data.metadata.get("dataset", {}),
             "axis": {

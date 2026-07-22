@@ -19,6 +19,8 @@ credo --help
 ```
 
 Python 3.11 through 3.13 are supported.
+CUDA execution through PyTorch/Triton also requires a C compiler and development
+headers matching the selected Python interpreter (for example, `python3.12-dev`).
 
 ## Canonical data
 
@@ -151,8 +153,9 @@ metrics.parquet
 counterfactuals.parquet
 ```
 
-The manifest records the resolved config, package and dependency versions,
-Git state, command, input hashes, axis and mass contracts, validation split,
+The manifest records the resolved config, runtime device and dtype, package and
+dependency versions, Git state, command, input hashes, axis and mass contracts,
+validation split,
 representation artifact, recipe capabilities, checkpoint mode, bank coverage,
 and particle-weight thresholds. Native compact checkpoints currently declare
 `inference_only`: fresh training is deterministic, but optimizer and RNG state
