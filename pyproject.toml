@@ -5,13 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "credo"
 version = "3.0.0a3"
-description = "Versioned finite-measure perturbation dynamics for longitudinal Perturb-seq"
+description = "Versioned finite-measure perturbation dynamics"
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
     { name = "Yu Adam Ding" },
 ]
-license = "MIT"
+license = "AGPL-3.0-only"
 license-files = ["LICENSE"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -76,8 +76,8 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.coverage.run]
 source = ["credo"]
-# Frozen transformer-v2 has generated contract tests plus optional archive replay;
-# the line gate tracks the released fresh-training runtime rather than compatibility code.
+# Frozen transformer-v2 has generated contract tests; the line gate tracks the
+# released fresh-training runtime rather than compatibility code.
 omit = ["src/credo/recipes/transformer_v2/*"]
 
 [tool.coverage.report]

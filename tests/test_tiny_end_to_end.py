@@ -436,6 +436,27 @@ def test_cli_validate_and_summarize(tiny_config, trained_run, capsys, tmp_path) 
     assert main(["summarize", str(trained_run.config.output)]) == 0
     summary = json.loads(capsys.readouterr().out)
     assert summary["metric_rows"] == len(trained_run.metrics)
+    metrics_path = tmp_path / "cli_metrics.parquet"
+    assert (
+        main(
+            [
+                "evaluate",
+                str(trained_run.config.output / "checkpoint.pt"),
+                "--config",
+                str(config_path),
+                "--output",
+                str(metrics_path),
+                "--particles",
+                "4",
+                "--seed",
+                "19",
+            ]
+        )
+        == 0
+    )
+    evaluated = json.loads(capsys.readouterr().out)
+    assert evaluated["status"] == "evaluated"
+    assert len(pd.read_parquet(metrics_path)) == evaluated["rows"]
     with pytest.raises(ValidationError, match="greater than or equal to 0"):
         main(["run", str(config_path), "--seed", "-1"])
 

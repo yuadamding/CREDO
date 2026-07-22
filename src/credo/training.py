@@ -1289,7 +1289,12 @@ def _validation_split(
         ids = rows.index.tolist()
         guides: dict[str, list[str]] = {}
         for measure_id in ids:
-            guides.setdefault(str(metadata.loc[measure_id, "guide_id"]), []).append(measure_id)
+            guide_id = (
+                str(metadata.loc[measure_id, "guide_id"])
+                if "guide_id" in metadata
+                else str(measure_id)
+            )
+            guides.setdefault(guide_id, []).append(measure_id)
         if len(guides) > 1:
             holdout_count = min(
                 max(1, int(round(len(guides) * fraction))),
@@ -1426,7 +1431,9 @@ def _model_matches(model: CREDOModel, data: TrajectoryData, config: RunConfig) -
 
 
 def _measure_meta_hash(data: TrajectoryData) -> str:
-    canonical = data.measure_meta.loc[:, MEASURE_META_COLUMNS]
+    canonical = data.measure_meta.loc[
+        :, [column for column in MEASURE_META_COLUMNS if column in data.measure_meta]
+    ]
     payload = canonical.to_csv(index=False, lineterminator="\n").encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
 

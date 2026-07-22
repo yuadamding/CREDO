@@ -5,6 +5,11 @@
 - Added the storage-independent `Study` model and a lazy five-file compatibility
   codec with explicit conditions, series, observations, abundance, composition,
   representation, and support-store contracts.
+- Added real loader verification levels, immutable semantic tables,
+  representation-specific support coverage, multiple support stores, replicate
+  observations, and topology-aware design validation.
+- Added recipe requirements and StudyView compilers; `credo train` now enters
+  compact-v3 through the semantic Study layer while preserving golden numerics.
 - Introduced one stable study, particle, evaluation, counterfactual, training-plan,
   and checkpoint-envelope runtime with immutable recipe identifiers.
 - Preserved compact v3 behind `credo.compact_sde_v3@3.0` with golden state,
@@ -13,6 +18,8 @@
   preserved VAE loading, weak-form diagnostics, and inference-only provenance.
 - Replayed all four archived LPS donor folds into the common metric contract;
   all 268 rows and measure ordering match with tolerance-level numerical agreement.
+- Moved LPS raw-data interpretation and replay orchestration to the external
+  workspace; core transformer tests now use a generated compatibility fixture.
 - Made representation scope, validation split, recipe capability, implementation
   hash, and checkpoint continuation limits explicit and machine-readable.
 

@@ -199,6 +199,7 @@ def _read_support(
     latent_key: str,
     *,
     lazy: bool,
+    scan_values: bool = True,
 ) -> tuple[pd.DataFrame, np.ndarray | None, int]:
     adata = ad.read_h5ad(path, backed="r" if lazy else None)
     try:
@@ -233,16 +234,21 @@ def _read_support(
         shape = tuple(int(value) for value in node.shape)
         if shape[0] != len(obs) or shape[1] < 1:
             raise ValueError("The configured latent representation is not aligned to obs.")
-        block_bytes = max(1, shape[1] * node.dtype.itemsize)
-        rows_per_block = max(1, (8 * 1024 * 1024) // block_bytes)
-        for start in range(0, shape[0], rows_per_block):
-            block = np.asarray(node[start : start + rows_per_block])
-            try:
-                finite = np.isfinite(block).all()
-            except TypeError as exc:
-                raise ValueError("The configured latent representation must be numeric.") from exc
-            if not finite:
-                raise ValueError("The configured latent representation contains non-finite values.")
+        if scan_values:
+            block_bytes = max(1, shape[1] * node.dtype.itemsize)
+            rows_per_block = max(1, (8 * 1024 * 1024) // block_bytes)
+            for start in range(0, shape[0], rows_per_block):
+                block = np.asarray(node[start : start + rows_per_block])
+                try:
+                    finite = np.isfinite(block).all()
+                except TypeError as exc:
+                    raise ValueError(
+                        "The configured latent representation must be numeric."
+                    ) from exc
+                if not finite:
+                    raise ValueError(
+                        "The configured latent representation contains non-finite values."
+                    )
     return obs, None, shape[1]
 
 

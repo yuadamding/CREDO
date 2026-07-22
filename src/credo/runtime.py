@@ -19,6 +19,8 @@ from .contracts import (
     SplitSpec,
     TrainingPlan,
 )
+from .data.study import Study, StudyView
+from .data.validation import ValidationIssue, ValidationReport
 
 
 @dataclass(frozen=True)
@@ -81,6 +83,33 @@ class CheckpointCodec(Protocol):
     def decode(self, payload: Mapping[str, Any]) -> Mapping[str, Any]: ...
 
 
+@dataclass(frozen=True)
+class RecipeRequirements:
+    """Semantic study capabilities required before recipe compilation."""
+
+    supported_axis_kinds: frozenset[str]
+    supported_topologies: frozenset[str]
+    supported_representation_kinds: frozenset[str]
+    permitted_abundance_semantics: frozenset[str]
+    requires_reference_binding: bool
+    requires_source_geometry: bool
+    permits_missing_target_geometry: bool
+    supports_compositions: bool
+    supports_replicates: bool
+
+    def __post_init__(self) -> None:
+        for name in (
+            "supported_axis_kinds",
+            "supported_topologies",
+            "supported_representation_kinds",
+            "permitted_abundance_semantics",
+        ):
+            values = frozenset(str(value) for value in getattr(self, name))
+            if not values:
+                raise ValueError(f"RecipeRequirements.{name} must be nonempty.")
+            object.__setattr__(self, name, values)
+
+
 @runtime_checkable
 class CREDORecipe(Protocol):
     recipe_id: str
@@ -88,6 +117,15 @@ class CREDORecipe(Protocol):
     capabilities: CapabilitySet
 
     def config_schema(self) -> type[Any]: ...
+
+    def requirements(self, config: Any) -> RecipeRequirements: ...
+
+    def compile_study(
+        self,
+        view: StudyView,
+        split: SplitSpec,
+        config: Any,
+    ) -> Any: ...
 
     def build_representation(
         self,
@@ -170,6 +208,172 @@ def validate_recipe_study(recipe: CREDORecipe, study: CREDOStudy) -> None:
         )
 
 
+def validate_view_for_recipe(
+    view: StudyView,
+    split: SplitSpec,
+    requirements: RecipeRequirements,
+) -> ValidationReport:
+    """Validate a semantic view before any recipe-owned tensorization."""
+    del split
+    issues: list[ValidationIssue] = []
+    design = view.study.design
+    axis_kinds = {axis.kind for axis in design.axes}
+    unsupported_axes = axis_kinds - requirements.supported_axis_kinds
+    if unsupported_axes:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.axis_kind",
+                f"Recipe does not support axis kinds {sorted(unsupported_axes)}.",
+                ("design", "axes"),
+            )
+        )
+    if design.topology not in requirements.supported_topologies:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.topology",
+                f"Recipe does not support topology {design.topology!r}.",
+                ("design", "topology"),
+            )
+        )
+    if view.representation.space_kind not in requirements.supported_representation_kinds:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.representation_kind",
+                f"Recipe does not support representation kind {view.representation.space_kind!r}.",
+                ("representations", view.representation_id, "space_kind"),
+            )
+        )
+    if view.abundance_channel is None or view.study.abundance is None:
+        abundance_semantics = "none"
+    else:
+        abundance_semantics = view.study.abundance.channels[view.abundance_channel].semantics.value
+    if abundance_semantics not in requirements.permitted_abundance_semantics:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.abundance_semantics",
+                f"Recipe does not support abundance semantics {abundance_semantics!r}.",
+                ("abundance", view.abundance_channel or "none"),
+            )
+        )
+
+    observations = view.observations()
+    support_index = view.study.support_index._unsafe_view()
+    support_index = support_index.loc[
+        support_index["representation_id"].eq(view.representation_id)
+        & support_index["observation_id"].isin(observations["observation_id"])
+    ]
+    available = set(support_index.loc[support_index["available"], "observation_id"])
+    source = observations.loc[observations["checkpoint_id"].eq(design.source_checkpoint_id)]
+    if requirements.requires_source_geometry:
+        missing_source_series = set(view.series_ids) - set(source["series_id"])
+        missing_source = set(source["observation_id"]) - available
+        if missing_source_series or missing_source:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.source_geometry",
+                    "Recipe requires one source geometry per selected series; "
+                    f"missing_series={sorted(missing_source_series)[:5]}, "
+                    f"missing_support={sorted(missing_source)[:5]}.",
+                    ("support_index", view.representation_id),
+                )
+            )
+    if not requirements.permits_missing_target_geometry:
+        targets = observations.loc[~observations["checkpoint_id"].eq(design.source_checkpoint_id)]
+        missing_targets = set(targets["observation_id"]) - available
+        if missing_targets:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.target_geometry",
+                    f"Recipe requires target geometry; missing={sorted(missing_targets)[:5]}.",
+                    ("support_index", view.representation_id),
+                )
+            )
+    if (
+        not requirements.supports_replicates
+        and observations.duplicated(["series_id", "checkpoint_id"]).any()
+    ):
+        duplicate = observations.loc[
+            observations.duplicated(["series_id", "checkpoint_id"]),
+            ["series_id", "checkpoint_id"],
+        ].iloc[0]
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.replicates",
+                "Recipe requires replicates to be selected or pooled before compilation; "
+                f"duplicate={tuple(duplicate)!r}.",
+                ("observations",),
+            )
+        )
+    if requirements.requires_reference_binding:
+        selected_series = view.study.series._unsafe_view()
+        selected_series = selected_series.loc[selected_series["series_id"].isin(view.series_ids)]
+        selected_conditions = view.study.conditions._unsafe_view()
+        selected_conditions = selected_conditions.loc[
+            selected_conditions["condition_id"].isin(selected_series["condition_id"])
+        ]
+        reference_groups = set(
+            selected_conditions.loc[
+                selected_conditions["is_reference"], "reference_group_id"
+            ].astype(str)
+        )
+        unresolved = (
+            set(
+                selected_conditions.loc[
+                    ~selected_conditions["is_reference"], "reference_group_id"
+                ].astype(str)
+            )
+            - reference_groups
+        )
+        if unresolved:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.reference_binding",
+                    f"Selected interventions lack resolvable reference pools: "
+                    f"{sorted(unresolved)[:5]}.",
+                    ("conditions", "reference_group_id"),
+                )
+            )
+        if not reference_groups:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.reference_binding",
+                    "Recipe requires at least one selected reference condition.",
+                    ("conditions", "is_reference"),
+                )
+            )
+    try:
+        compositions = view.compositions()
+    except ValueError as exc:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.composition_closure",
+                str(exc),
+                ("selection", "composition_policy"),
+            )
+        )
+    else:
+        if len(compositions) and not requirements.supports_compositions:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.compositions",
+                    "Recipe does not support compositional observations.",
+                    ("compositions",),
+                )
+            )
+    return ValidationReport(tuple(issues))
+
+
 def validate_training_contract(
     recipe: CREDORecipe,
     objectives: tuple[ObjectiveDescriptor, ...],
@@ -206,19 +410,39 @@ class TrainingEngine:
     def fit(
         self,
         recipe: CREDORecipe,
-        study: CREDOStudy,
+        study: Study | StudyView | CREDOStudy,
         config: Any,
+        split: SplitSpec | None = None,
         **kwargs: Any,
     ) -> Any:
-        validate_recipe_study(recipe, study)
-        recipe.capabilities.require("train")
         recipe_config = (
             config.recipe_configuration()
             if callable(getattr(config, "recipe_configuration", None))
             else config
         )
-        plan = recipe.training_plan(study, recipe_config)
-        objectives = recipe.build_objectives(study, recipe_config)
+        if isinstance(study, Study):
+            study = study.view()
+        if isinstance(study, StudyView):
+            if split is None:
+                representation_scope = getattr(
+                    getattr(recipe_config, "validation", None),
+                    "representation_scope",
+                    "shared",
+                )
+                split = SplitSpec(
+                    strategy="none",
+                    representation_scope=representation_scope,
+                    split_id=f"study-view:{study.semantic_hash()[:12]}",
+                )
+            requirements = recipe.requirements(recipe_config)
+            validate_view_for_recipe(study, split, requirements).raise_for_errors()
+            compiled_study = recipe.compile_study(study, split, recipe_config)
+        else:
+            compiled_study = study
+        validate_recipe_study(recipe, compiled_study)
+        recipe.capabilities.require("train")
+        plan = recipe.training_plan(compiled_study, recipe_config)
+        objectives = recipe.build_objectives(compiled_study, recipe_config)
         validate_training_contract(recipe, objectives, plan)
         executor = getattr(recipe, "execute_training", None)
         if not callable(executor):
@@ -232,9 +456,9 @@ class TrainingEngine:
         torch.manual_seed(plan.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(plan.seed)
-        model = recipe.build_model(study, recipe_config)
+        model = recipe.build_model(compiled_study, recipe_config)
         result = executor(
-            study,
+            compiled_study,
             model=model,
             plan=plan,
             objectives=objectives,
@@ -258,8 +482,10 @@ __all__ = [
     "ModelRecipe",
     "ObjectiveDescriptor",
     "ObjectiveTerm",
+    "RecipeRequirements",
     "RuntimeState",
     "TrainingEngine",
     "validate_recipe_study",
     "validate_training_contract",
+    "validate_view_for_recipe",
 ]

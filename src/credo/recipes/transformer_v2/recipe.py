@@ -19,7 +19,8 @@ from ...contracts import (
     Stage,
     TrainingPlan,
 )
-from ...runtime import ObjectiveDescriptor
+from ...runtime import ObjectiveDescriptor, RecipeRequirements
+from ..trajectory_compiler import compile_trajectory_view
 from .model import FullDynamicsModel
 
 
@@ -161,6 +162,26 @@ class TransformerSDEV2Recipe:
 
     def config_schema(self) -> type[TransformerV2RecipeConfig]:
         return TransformerV2RecipeConfig
+
+    def requirements(self, config: Any) -> RecipeRequirements:
+        del config
+        return RecipeRequirements(
+            supported_axis_kinds=frozenset({"physical_time"}),
+            supported_topologies=frozenset({"chain"}),
+            supported_representation_kinds=frozenset({"latent"}),
+            permitted_abundance_semantics=frozenset(
+                {"absolute", "relative", "capture_count", "unit"}
+            ),
+            requires_reference_binding=True,
+            requires_source_geometry=True,
+            permits_missing_target_geometry=True,
+            supports_compositions=False,
+            supports_replicates=False,
+        )
+
+    def compile_study(self, view: Any, split: SplitSpec, config: Any) -> CREDOStudy:
+        del split, config
+        return compile_trajectory_view(view)
 
     def build_representation(
         self,

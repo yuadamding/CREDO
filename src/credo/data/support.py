@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
@@ -14,13 +14,14 @@ from .validation import ValidationIssue, ValidationReport
 
 @dataclass(frozen=True, order=True)
 class SupportRef:
-    """Stable reference to one empirical law in one representation."""
+    """Stable reference to one empirical law in one store and representation."""
 
+    store_id: str
     representation_id: str
     support_key: str
 
     def __post_init__(self) -> None:
-        for name in ("representation_id", "support_key"):
+        for name in ("store_id", "representation_id", "support_key"):
             value = str(getattr(self, name))
             if not value:
                 raise ValueError(f"SupportRef.{name} must be nonempty.")
@@ -124,6 +125,62 @@ class SupportStore(Protocol):
     def close(self) -> None: ...
 
 
+class SupportStoreRegistry(Mapping[str, SupportStore]):
+    """Immutable routing table for one or more support backends."""
+
+    def __init__(self, stores: Mapping[str, SupportStore] | Sequence[SupportStore]) -> None:
+        values = tuple(stores.values()) if isinstance(stores, Mapping) else tuple(stores)
+        catalog = {store.store_id: store for store in values}
+        if not catalog:
+            raise ValueError("SupportStoreRegistry requires at least one store.")
+        if len(catalog) != len(values):
+            raise ValueError("Support store identifiers must be unique.")
+        if isinstance(stores, Mapping):
+            mismatched = [key for key, store in stores.items() if str(key) != store.store_id]
+            if mismatched:
+                raise ValueError(
+                    f"SupportStoreRegistry keys must equal store_id; invalid={mismatched[:5]}."
+                )
+        self._stores = MappingProxyType(catalog)
+
+    def __getitem__(self, store_id: str) -> SupportStore:
+        return self._stores[str(store_id)]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._stores)
+
+    def __len__(self) -> int:
+        return len(self._stores)
+
+    @property
+    def store_ids(self) -> tuple[str, ...]:
+        return tuple(self._stores)
+
+    def contains(self, ref: SupportRef) -> bool:
+        store = self._stores.get(ref.store_id)
+        return store is not None and store.contains(ref)
+
+    def read(self, ref: SupportRef) -> EmpiricalLaw:
+        try:
+            store = self._stores[ref.store_id]
+        except KeyError as exc:
+            raise KeyError(f"Unknown support store {ref.store_id!r}.") from exc
+        return store.read(ref)
+
+    def read_many(self, refs: Sequence[SupportRef]) -> Mapping[SupportRef, EmpiricalLaw]:
+        return MappingProxyType({ref: self.read(ref) for ref in refs})
+
+    def validate(self, *, full_scan: bool = False) -> ValidationReport:
+        report = ValidationReport()
+        for store in self._stores.values():
+            report = report.merged(store.validate(full_scan=full_scan))
+        return report
+
+    def close(self) -> None:
+        for store in self._stores.values():
+            store.close()
+
+
 class InMemorySupportStore:
     """Small immutable support backend for tests and simulations."""
 
@@ -158,7 +215,7 @@ class InMemorySupportStore:
         return self._dimensions[str(representation_id)]
 
     def contains(self, ref: SupportRef) -> bool:
-        return not self._closed and ref in self._laws
+        return not self._closed and ref.store_id == self._store_id and ref in self._laws
 
     def read(self, ref: SupportRef) -> EmpiricalLaw:
         if self._closed:
@@ -221,6 +278,7 @@ class LegacyFiniteMeasureSupportStore:
     def contains(self, ref: SupportRef) -> bool:
         return (
             not self._closed
+            and ref.store_id == self._store_id
             and ref.representation_id == self._representation_id
             and ref.support_key in self._support_pairs
         )
@@ -230,10 +288,16 @@ class LegacyFiniteMeasureSupportStore:
             raise RuntimeError("Support store is closed.")
         if not self.contains(ref):
             raise KeyError(f"Unknown support reference {ref!r}.")
-        checkpoint_id, series_id = self._support_pairs[ref.support_key]
-        measure = self._measures[checkpoint_id][series_id]
+        measure = self.finite_measure(ref)
         probabilities = np.asarray(measure.weights, dtype=np.float64) / float(measure.total_mass)
         return EmpiricalLaw(measure.support, probabilities)
+
+    def finite_measure(self, ref: SupportRef) -> Any:
+        """Return the original compatibility measure without numerical round-tripping."""
+        if not self.contains(ref):
+            raise KeyError(f"Unknown support reference {ref!r}.")
+        checkpoint_id, series_id = self._support_pairs[ref.support_key]
+        return self._measures[checkpoint_id][series_id]
 
     def read_many(self, refs: Sequence[SupportRef]) -> Mapping[SupportRef, EmpiricalLaw]:
         return MappingProxyType({ref: self.read(ref) for ref in refs})
@@ -258,7 +322,7 @@ class LegacyFiniteMeasureSupportStore:
                     )
                 )
             elif full_scan:
-                ref = SupportRef(self._representation_id, support_key)
+                ref = SupportRef(self._store_id, self._representation_id, support_key)
                 try:
                     law = self.read(ref)
                 except (KeyError, TypeError, ValueError) as exc:
@@ -291,4 +355,5 @@ __all__ = [
     "MeasureSnapshot",
     "SupportRef",
     "SupportStore",
+    "SupportStoreRegistry",
 ]

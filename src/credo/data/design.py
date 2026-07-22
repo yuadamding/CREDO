@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -140,8 +141,16 @@ class StudyDesign:
             adjacency[pair[0]].append(pair[1])
             indegree[pair[1]] += 1
         self._validate_acyclic(adjacency, indegree)
+        source_id = sources[0].checkpoint_id
+        if indegree[source_id] != 0:
+            raise ValueError("The source checkpoint cannot have an incoming transition.")
+        self._validate_reachability(adjacency, source_id)
         if self.topology == "chain":
-            self._validate_chain(adjacency, indegree, sources[0].checkpoint_id)
+            self._validate_chain(adjacency, indegree, source_id)
+        elif self.topology == "star":
+            self._validate_star(adjacency, indegree, source_id)
+        self._validate_roles(adjacency)
+        self._validate_ordered_axes()
         object.__setattr__(
             self,
             "_checkpoint_by_id",
@@ -171,8 +180,6 @@ class StudyDesign:
     ) -> None:
         if len(self.transitions) != len(self.checkpoints) - 1:
             raise ValueError("A chain design requires exactly n_checkpoints - 1 transitions.")
-        if indegree[source] != 0:
-            raise ValueError("The source checkpoint cannot have an incoming transition.")
         if any(len(targets) > 1 for targets in adjacency.values()):
             raise ValueError("A chain checkpoint cannot have multiple outgoing transitions.")
         if any(degree > 1 for degree in indegree.values()):
@@ -187,6 +194,97 @@ class StudyDesign:
             current = targets[0]
         if len(visited) != len(self.checkpoints):
             raise ValueError("A chain design must connect every checkpoint from the source.")
+
+    def _validate_star(
+        self,
+        adjacency: Mapping[str, list[str]],
+        indegree: Mapping[str, int],
+        source: str,
+    ) -> None:
+        if len(self.transitions) != len(self.checkpoints) - 1:
+            raise ValueError("A star design requires exactly n_checkpoints - 1 transitions.")
+        expected_targets = set(self.checkpoint_ids) - {source}
+        if set(adjacency[source]) != expected_targets:
+            raise ValueError("A star source must connect directly to every other checkpoint.")
+        if any(adjacency[node] for node in expected_targets):
+            raise ValueError("Only the source checkpoint may have outgoing edges in a star.")
+        if any(indegree[node] != 1 for node in expected_targets):
+            raise ValueError("Every non-source checkpoint in a star must have one incoming edge.")
+
+    @staticmethod
+    def _validate_reachability(adjacency: Mapping[str, list[str]], source: str) -> None:
+        visited: set[str] = set()
+        stack = [source]
+        while stack:
+            node = stack.pop()
+            if node in visited:
+                continue
+            visited.add(node)
+            stack.extend(adjacency[node])
+        if visited != set(adjacency):
+            missing = sorted(set(adjacency) - visited)
+            raise ValueError(
+                f"Every checkpoint must be reachable from the source; unreachable={missing}."
+            )
+
+    def _validate_roles(self, adjacency: Mapping[str, list[str]]) -> None:
+        invalid_targets = [
+            checkpoint.checkpoint_id
+            for checkpoint in self.checkpoints
+            if checkpoint.role == "target" and adjacency[checkpoint.checkpoint_id]
+        ]
+        if invalid_targets:
+            raise ValueError(
+                f"Target checkpoints must be graph leaves; invalid={sorted(invalid_targets)}."
+            )
+
+    def _validate_ordered_axes(self) -> None:
+        checkpoints = {checkpoint.checkpoint_id: checkpoint for checkpoint in self.checkpoints}
+        for axis in self.axes:
+            if not axis.ordered:
+                continue
+            values = [checkpoint.coordinates[axis.axis_id] for checkpoint in self.checkpoints]
+            if len(values) != len(set(values)):
+                raise ValueError(
+                    f"Ordered axis {axis.axis_id!r} requires unique checkpoint coordinates."
+                )
+            numeric = all(isinstance(value, (int, float)) for value in values)
+            if axis.kind in {"physical_time", "developmental_stage", "effect", "dose"}:
+                if not numeric or not all(math.isfinite(float(value)) for value in values):
+                    raise ValueError(
+                        f"Ordered axis {axis.axis_id!r} requires finite numeric coordinates."
+                    )
+            ranks = (
+                {value: float(value) for value in values}
+                if numeric
+                else {value: float(index) for index, value in enumerate(values)}
+            )
+            for transition in self.transitions:
+                source_value = checkpoints[transition.source_checkpoint_id].coordinates[
+                    axis.axis_id
+                ]
+                target_value = checkpoints[transition.target_checkpoint_id].coordinates[
+                    axis.axis_id
+                ]
+                if ranks[target_value] <= ranks[source_value]:
+                    raise ValueError(
+                        f"Transition {transition.transition_id!r} moves backward on ordered "
+                        f"axis {axis.axis_id!r}."
+                    )
+
+    @property
+    def ordered_checkpoint_ids(self) -> tuple[str, ...]:
+        """Return the unique source-to-target order for a chain design."""
+        if self.topology != "chain":
+            raise ValueError("Only chain designs have one checkpoint order.")
+        next_by_source = {
+            transition.source_checkpoint_id: transition.target_checkpoint_id
+            for transition in self.transitions
+        }
+        ordered = [self.source_checkpoint_id]
+        while ordered[-1] in next_by_source:
+            ordered.append(next_by_source[ordered[-1]])
+        return tuple(ordered)
 
     @property
     def axis_ids(self) -> tuple[str, ...]:

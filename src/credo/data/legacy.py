@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -12,8 +13,27 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
-from ..contracts import Axis, MassSemantics, TrajectoryData
-from ..io import DataConfig, RunConfig, _load_canonical_data, load_config, load_data
+from ..contracts import (
+    Axis,
+    MassSemantics,
+    RepresentationArtifact,
+    TrajectoryData,
+    validate_measure_meta,
+)
+from ..io import (
+    DataConfig,
+    H5ADFiniteMeasureStore,
+    RunConfig,
+    _build_count_blocks,
+    _build_measures,
+    _load_dataset_manifest,
+    _normalize_count_table,
+    _read_support,
+    _sha256,
+    _validate_denominators,
+    _validate_mass_table,
+    load_config,
+)
 from .design import AxisSpec, Checkpoint, StudyDesign, Transition
 from .representations import ArtifactRef, RepresentationCatalog, RepresentationSpec
 from .study import Study, StudyManifest
@@ -26,6 +46,7 @@ from .tables import (
     ConditionTable,
     ObservationTable,
     SeriesTable,
+    SupportIndexTable,
 )
 
 VerifyLevel = Literal["none", "schema", "manifest", "semantic", "full"]
@@ -207,11 +228,11 @@ def _abundance_spec(semantics: MassSemantics) -> AbundanceChannelSpec:
         channel_id="legacy_mass",
         semantics=mapped,
         unit="count" if semantics is MassSemantics.CAPTURED_COUNT else None,
-        denominator_required=semantics
-        in {MassSemantics.RELATIVE_WITHIN_GROUP, MassSemantics.CAPTURED_COUNT},
-        permits_absolute_claim=semantics is MassSemantics.ABSOLUTE,
-        permits_relative_claim=semantics
-        in {MassSemantics.ABSOLUTE, MassSemantics.RELATIVE_WITHIN_GROUP},
+        denominator_scope=(
+            "context_checkpoint"
+            if semantics in {MassSemantics.RELATIVE_WITHIN_GROUP, MassSemantics.CAPTURED_COUNT}
+            else "none"
+        ),
         zero_policy="forbidden",
     )
 
@@ -239,70 +260,266 @@ def _artifact_ref(
     )
 
 
+@dataclass(frozen=True)
+class _ResolvedFiveFile:
+    data: DataConfig
+    axis: Axis
+    manifest: Mapping[str, Any]
+    manifest_path: Path
+
+
+@dataclass(frozen=True)
+class _LegacyComponents:
+    axis: Axis
+    measures: Mapping[str, Mapping[str, Any]]
+    measure_meta: pd.DataFrame
+    mass_semantics: MassSemantics
+    count_blocks: tuple[Any, ...]
+    metadata: Mapping[str, Any]
+    representation: RepresentationArtifact
+
+    @property
+    def measure_ids(self) -> tuple[str, ...]:
+        return tuple(self.measure_meta["measure_id"].tolist())
+
+
+def _resolved_source(
+    source: RunConfig | str | Path,
+    *,
+    lazy_support: bool | None,
+    support_cache_size: int | None,
+) -> _ResolvedFiveFile:
+    if isinstance(source, RunConfig):
+        config = source
+        updates = {}
+        if lazy_support is not None:
+            updates["lazy_support"] = bool(lazy_support)
+        if support_cache_size is not None:
+            updates["support_cache_size"] = int(support_cache_size)
+        data = config.data.model_copy(update=updates)
+        axis = config.axis.build()
+    else:
+        path = Path(source).expanduser().resolve()
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            config = load_config(path)
+            updates = {}
+            if lazy_support is not None:
+                updates["lazy_support"] = bool(lazy_support)
+            if support_cache_size is not None:
+                updates["support_cache_size"] = int(support_cache_size)
+            data = config.data.model_copy(update=updates)
+            axis = config.axis.build()
+        else:
+            manifest_path = path / "dataset.json" if path.is_dir() else path
+            if manifest_path.name != "dataset.json" or not manifest_path.is_file():
+                raise ValueError(
+                    "Current five-file studies must be opened from a run YAML, dataset.json, "
+                    "or its containing directory."
+                )
+            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, Mapping) or not isinstance(raw.get("axis"), Mapping):
+                raise ValueError("dataset.json must declare an axis object.")
+            axis = Axis(**raw["axis"])
+            directory = manifest_path.parent
+            counts_path = directory / "counts.parquet"
+            data = DataConfig(
+                support=directory / "support.h5ad",
+                latent_key=str(raw.get("latent_key", "")),
+                measure_meta=directory / "measure_meta.parquet",
+                masses=directory / "masses.parquet",
+                counts=counts_path if counts_path.is_file() else None,
+                dataset=manifest_path,
+                lazy_support=True if lazy_support is None else lazy_support,
+                support_cache_size=(256 if support_cache_size is None else support_cache_size),
+            )
+    manifest, manifest_path = _load_dataset_manifest(data, axis)
+    return _ResolvedFiveFile(data, axis, manifest, manifest_path)
+
+
+def _representation_artifact(
+    resolved: _ResolvedFiveFile,
+    *,
+    latent_dim: int,
+    verify_hashes: bool,
+) -> RepresentationArtifact:
+    payload = resolved.manifest.get("representation")
+    if isinstance(payload, Mapping):
+        artifact = RepresentationArtifact.from_dict(payload)
+    else:
+        digest = (
+            _sha256(resolved.data.support)
+            if verify_hashes
+            else hashlib.sha256(str(resolved.data.support).encode("utf-8")).hexdigest()
+        )
+        artifact = RepresentationArtifact(
+            representation_id=f"frozen-latent:{digest[:12]}",
+            backend="frozen_latent",
+            latent_dim=latent_dim,
+            latent_cache_hash=digest,
+            fit_scope="external",
+            producer={"source": "five_file_v1"},
+        )
+    if artifact.latent_dim != latent_dim:
+        raise ValueError("Representation latent dimension disagrees with support.h5ad.")
+    if (
+        verify_hashes
+        and artifact.producer.get("latent_cache_hash_kind") == "support_h5ad_file_sha256"
+        and _sha256(resolved.data.support) != artifact.latent_cache_hash
+    ):
+        raise ValueError("Representation latent-cache hash disagrees with support.h5ad.")
+    return artifact
+
+
+def _read_five_file_study(
+    codec: CurrentFiveFileStudyCodec,
+    source: RunConfig | str | Path,
+    *,
+    verify: VerifyLevel,
+    lazy_support: bool | None,
+    support_cache_size: int | None,
+) -> Study:
+    resolved = _resolved_source(
+        source,
+        lazy_support=lazy_support,
+        support_cache_size=support_cache_size,
+    )
+    rank = {"none": 0, "schema": 1, "manifest": 2, "semantic": 3, "full": 4}[verify]
+    cache_size = resolved.data.support_cache_size
+    eager_support = rank >= 3 and not resolved.data.lazy_support
+    measure_meta = validate_measure_meta(pd.read_parquet(resolved.data.measure_meta))
+    observations, latent, latent_dim = _read_support(
+        resolved.data.support,
+        resolved.data.latent_key,
+        lazy=not eager_support,
+        scan_values=verify == "full",
+    )
+    masses, mass_semantics = _validate_mass_table(pd.read_parquet(resolved.data.masses))
+    declared_semantics = MassSemantics(resolved.manifest["mass_semantics"])
+    if declared_semantics is not mass_semantics:
+        raise ValueError("masses.parquet mass semantics disagree with dataset.json.")
+    counts = (
+        None
+        if resolved.data.counts is None
+        else _normalize_count_table(pd.read_parquet(resolved.data.counts))
+    )
+    input_paths = {
+        "support": resolved.data.support,
+        "measure_meta": resolved.data.measure_meta,
+        "masses": resolved.data.masses,
+        "dataset": resolved.manifest_path,
+    }
+    if resolved.data.counts is not None:
+        input_paths["counts"] = resolved.data.counts
+    input_hashes = {name: _sha256(path) for name, path in input_paths.items()} if rank >= 2 else {}
+    representation = _representation_artifact(
+        resolved,
+        latent_dim=latent_dim,
+        verify_hashes=rank >= 2,
+    )
+    metadata = {
+        "input_paths": {name: str(path) for name, path in input_paths.items()},
+        "input_hashes": input_hashes,
+        "dataset": dict(resolved.manifest),
+        "mass_denominators": sorted(masses["denominator"].unique().tolist()),
+    }
+    if rank >= 3:
+        _validate_denominators(masses, measure_meta, mass_semantics)
+        measures = _build_measures(
+            observations,
+            latent,
+            masses,
+            resolved.axis,
+            support_path=resolved.data.support,
+            latent_key=resolved.data.latent_key,
+            latent_dim=latent_dim,
+            cache_size=cache_size,
+        )
+        count_blocks = _build_count_blocks(
+            counts,
+            measure_meta,
+            tuple(measure_meta["measure_id"].tolist()),
+        )
+        components: TrajectoryData | _LegacyComponents = TrajectoryData(
+            axis=resolved.axis,
+            measures=measures,
+            measure_meta=measure_meta,
+            mass_semantics=mass_semantics,
+            count_blocks=count_blocks,
+            metadata=metadata,
+            representation=representation,
+        )
+    else:
+        measures = H5ADFiniteMeasureStore(
+            resolved.data.support,
+            resolved.data.latent_key,
+            observations,
+            masses,
+            resolved.axis,
+            latent_dim=latent_dim,
+            cache_size=cache_size,
+        )
+        components = _LegacyComponents(
+            axis=resolved.axis,
+            measures=measures,
+            measure_meta=measure_meta,
+            mass_semantics=mass_semantics,
+            count_blocks=(),
+            metadata=metadata,
+            representation=representation,
+        )
+    study = codec.from_trajectory(components, masses=masses, counts=counts)
+    study.validate(level=verify).raise_for_errors()
+    return study
+
+
 class CurrentFiveFileStudyCodec:
     """Read schema-v1/v2 adapter outputs into the semantic Study model."""
 
     codec_id = "credo.current_five_file"
+    readable_schema_versions = frozenset({1, 2})
+    writable_schema_versions: frozenset[int] = frozenset()
+
+    def probe(self, source: Any) -> bool:
+        if isinstance(source, (RunConfig, TrajectoryData)):
+            return True
+        try:
+            path = Path(source).expanduser()
+        except TypeError:
+            return False
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            return path.is_file()
+        manifest = path / "dataset.json" if path.is_dir() else path
+        return manifest.name == "dataset.json" and manifest.is_file()
+
+    def write(self, study: Study, destination: str | Path) -> None:
+        del study, destination
+        raise NotImplementedError("The five-file compatibility codec is read-only.")
 
     def read(
         self,
         source: RunConfig | TrajectoryData | str | Path,
         *,
         verify: VerifyLevel = "semantic",
-        lazy_support: bool = True,
-        support_cache_size: int = 256,
+        lazy_support: bool | None = None,
+        support_cache_size: int | None = None,
     ) -> Study:
         if verify not in {"none", "schema", "manifest", "semantic", "full"}:
             raise ValueError(f"Unknown verification level {verify!r}.")
-        masses = None
-        counts = None
         if isinstance(source, TrajectoryData):
-            data = source
-        elif isinstance(source, RunConfig):
-            data = load_data(source)
-            masses = pd.read_parquet(source.data.masses)
-            counts = pd.read_parquet(source.data.counts) if source.data.counts is not None else None
-        else:
-            path = Path(source).expanduser().resolve()
-            if path.suffix.lower() in {".yaml", ".yml"}:
-                config = load_config(path)
-                data = load_data(config)
-                masses = pd.read_parquet(config.data.masses)
-                counts = (
-                    pd.read_parquet(config.data.counts) if config.data.counts is not None else None
-                )
-            else:
-                manifest_path = path / "dataset.json" if path.is_dir() else path
-                if manifest_path.name != "dataset.json" or not manifest_path.is_file():
-                    raise ValueError(
-                        "Current five-file studies must be opened from a run YAML, dataset.json, "
-                        "or its containing directory."
-                    )
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-                axis = Axis(**manifest["axis"])
-                directory = manifest_path.parent
-                counts_path = directory / "counts.parquet"
-                data_config = DataConfig(
-                    support=directory / "support.h5ad",
-                    latent_key=manifest["latent_key"],
-                    measure_meta=directory / "measure_meta.parquet",
-                    masses=directory / "masses.parquet",
-                    counts=counts_path if counts_path.is_file() else None,
-                    dataset=manifest_path,
-                    lazy_support=lazy_support,
-                    support_cache_size=support_cache_size,
-                )
-                data = _load_canonical_data(data_config, axis)
-                masses = pd.read_parquet(data_config.masses)
-                counts = pd.read_parquet(counts_path) if counts_path.is_file() else None
-        study = self.from_trajectory(data, masses=masses, counts=counts)
-        if verify == "full":
-            study.validate(level="full").raise_for_errors()
-        return study
+            study = self.from_trajectory(source)
+            study.validate(level=verify).raise_for_errors()
+            return study
+        return _read_five_file_study(
+            self,
+            source,
+            verify=verify,
+            lazy_support=lazy_support,
+            support_cache_size=support_cache_size,
+        )
 
     def from_trajectory(
         self,
-        data: TrajectoryData,
+        data: TrajectoryData | _LegacyComponents,
         *,
         masses: pd.DataFrame | None = None,
         counts: pd.DataFrame | None = None,
@@ -354,7 +571,6 @@ class CurrentFiveFileStudyCodec:
                         "geometry_observed": geometry_observed,
                         "context_id": context_id,
                         "composition_block_id": block_id,
-                        "support_key": support_key,
                         "legacy_measure_id": series_id,
                     }
                 )
@@ -456,6 +672,22 @@ class CurrentFiveFileStudyCodec:
             measures=data.measures,
             support_pairs=support_pairs,
         )
+        support_index = SupportIndexTable(
+            pd.DataFrame(
+                [
+                    {
+                        "observation_id": row["observation_id"],
+                        "representation_id": representation.representation_id,
+                        "store_id": store_id if row["geometry_observed"] else None,
+                        "support_key": (
+                            row["observation_id"] if row["geometry_observed"] else None
+                        ),
+                        "available": row["geometry_observed"],
+                    }
+                    for row in observation_rows
+                ]
+            )
+        )
         dataset = data.metadata.get("dataset", {})
         inferred_study_id = study_id or _infer_study_id(input_paths, dataset)
         manifest = StudyManifest(
@@ -472,6 +704,7 @@ class CurrentFiveFileStudyCodec:
             conditions=conditions,
             series=series,
             observations=observations,
+            support_index=support_index,
             abundance=abundance,
             compositions=compositions,
             representations=catalog,
@@ -481,7 +714,9 @@ class CurrentFiveFileStudyCodec:
                 "legacy_dataset": dataset,
                 "legacy_representation": representation.to_dict(),
                 "legacy_included_samples": list(representation.included_samples),
+                "input_paths": dict(input_paths),
                 "input_hashes": dict(input_hashes),
+                "mass_denominators": list(data.metadata.get("mass_denominators", ())),
             },
         )
 
@@ -507,11 +742,13 @@ def open_study(
     source: RunConfig | TrajectoryData | str | Path,
     *,
     verify: VerifyLevel = "semantic",
-    lazy_support: bool = True,
-    support_cache_size: int = 256,
+    lazy_support: bool | None = None,
+    support_cache_size: int | None = None,
 ) -> Study:
-    """Open a current schema-v1/v2 dataset as a storage-independent Study."""
-    return CurrentFiveFileStudyCodec().read(
+    """Compatibility import for the registry-backed public loader."""
+    from .codecs import open_study as open_registered_study
+
+    return open_registered_study(
         source,
         verify=verify,
         lazy_support=lazy_support,

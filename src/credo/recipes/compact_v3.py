@@ -20,7 +20,8 @@ from ..contracts import (
     TrainingPlan,
 )
 from ..model import CREDOModel
-from ..runtime import ObjectiveDescriptor
+from ..runtime import ObjectiveDescriptor, RecipeRequirements
+from .trajectory_compiler import compile_trajectory_view
 
 
 class _StrictConfig(BaseModel):
@@ -139,6 +140,26 @@ class CompactSDEV3Recipe:
 
     def config_schema(self) -> type[CompactV3Config]:
         return CompactV3Config
+
+    def requirements(self, config: Any) -> RecipeRequirements:
+        del config
+        return RecipeRequirements(
+            supported_axis_kinds=frozenset({"physical_time", "effect"}),
+            supported_topologies=frozenset({"chain"}),
+            supported_representation_kinds=frozenset({"latent"}),
+            permitted_abundance_semantics=frozenset(
+                {"absolute", "relative", "capture_count", "unit"}
+            ),
+            requires_reference_binding=True,
+            requires_source_geometry=True,
+            permits_missing_target_geometry=True,
+            supports_compositions=True,
+            supports_replicates=False,
+        )
+
+    def compile_study(self, view: Any, split: SplitSpec, config: Any) -> CREDOStudy:
+        del split, config
+        return compile_trajectory_view(view)
 
     def validate_run_config(self, run_config: Any) -> None:
         config = run_config.recipe_config

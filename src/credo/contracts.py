@@ -552,6 +552,13 @@ MEASURE_META_COLUMNS = (
     "context_group_id",
     "is_control",
 )
+MEASURE_META_REQUIRED_COLUMNS = (
+    "measure_id",
+    "sample_id",
+    "embedding_id",
+    "context_group_id",
+    "is_control",
+)
 
 SupportStore = Mapping[str, Mapping[str, np.ndarray]]
 MassTable = pd.DataFrame
@@ -602,11 +609,12 @@ def _support_sha256(measures: Mapping[str, Mapping[str, FiniteMeasure]]) -> str:
 
 def validate_measure_meta(frame: pd.DataFrame) -> pd.DataFrame:
     """Validate and normalize the one-row-per-measure metadata contract."""
-    missing = set(MEASURE_META_COLUMNS) - set(frame.columns)
+    missing = set(MEASURE_META_REQUIRED_COLUMNS) - set(frame.columns)
     if missing:
         raise ValueError(f"measure_meta is missing columns: {sorted(missing)}")
     out = frame.copy()
-    for column in MEASURE_META_COLUMNS[:-1]:
+    string_columns = tuple(column for column in MEASURE_META_COLUMNS[:-1] if column in out.columns)
+    for column in string_columns:
         if out[column].isna().any():
             raise ValueError(f"measure_meta.{column} contains missing values.")
         out[column] = out[column].astype(str)
@@ -620,8 +628,6 @@ def validate_measure_meta(frame: pd.DataFrame) -> pd.DataFrame:
         if not values.isin({"true", "false", "1", "0"}).all():
             raise ValueError("measure_meta.is_control must be boolean.")
         out["is_control"] = values.isin({"true", "1"})
-    if not out["is_control"].any():
-        raise ValueError("measure_meta must contain at least one control measure.")
     mixed = out.groupby("embedding_id", observed=True)["is_control"].nunique()
     if (mixed > 1).any():
         embedding_id = str(mixed[mixed > 1].index[0])
@@ -843,6 +849,6 @@ class TrajectoryData:
             )
 
 
-# ``TrajectoryData`` remains a compatibility name; all recipes consume this
-# canonical study object through its stable CREDO name.
+# ``CREDOStudy`` remains the numerical compatibility name produced internally
+# by recipe-owned StudyView compilers.
 CREDOStudy = TrajectoryData

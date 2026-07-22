@@ -1,12 +1,11 @@
 # CREDO
 
-CREDO is a compact research-alpha framework for control-referenced
-finite-measure dynamics in longitudinal Perturb-seq. Its storage-independent
-`Study` model separates experimental meaning from support storage and recipe
-execution. Immutable model recipes own model and numerical behavior. The
-default is `credo.compact_sde_v3@3.0`; archived transformer checkpoints use
-`credo.transformer_sde_v2@2.0` without translating their tensors into the
-compact architecture.
+CREDO is a research-alpha runtime for control-referenced finite-measure
+dynamics. Its storage-independent `Study` model separates experimental meaning,
+support storage, and recipe execution. Recipes declare semantic requirements
+and compile a selected `StudyView` into their numerical contract. The default
+is `credo.compact_sde_v3@3.0`; imported transformer checkpoints use
+`credo.transformer_sde_v2@2.0` without translating their tensors.
 
 CREDO estimates regularized effective-generator contrasts from destructive
 snapshots. It does not reconstruct cell genealogies or turn fitted-model
@@ -29,7 +28,7 @@ The semantic API uses explicit condition, longitudinal-series, and observation
 identities. Empirical atom probabilities are normalized independently of named
 abundance channels, observation-level context can vary by checkpoint, stable
 string IDs define composition blocks, and multiple representation variants can
-coexist in one study.
+coexist in one study with representation-specific coverage and support stores.
 
 ```python
 from credo import open_study
@@ -49,7 +48,7 @@ Existing adapters continue to write the schema-v1/v2 five-file codec:
 | File | Contract |
 | --- | --- |
 | `support.h5ad` | `obs.measure_id`, `obs.time_label`, optional `obs.atom_weight`, and one latent `obsm` matrix. |
-| `measure_meta.parquet` | One row per opaque `measure_id` with sample, guide, embedding, target, context group, and control identity. |
+| `measure_meta.parquet` | One row per opaque `measure_id` with sample, embedding, context group, and control identity; perturbation, guide, and target fields are optional compatibility metadata. |
 | `masses.parquet` | One positive mass and denominator per observed measure/checkpoint, with one explicit semantics. |
 | `counts.parquet` | Optional complete context-group/time compositional count blocks. |
 | `dataset.json` | Axis, latent key, mass semantics, representation contract, and source provenance. |
@@ -58,6 +57,12 @@ Existing adapters continue to write the schema-v1/v2 five-file codec:
 atoms or materializing lazy support for abundance access. Dense H5AD latent
 supports remain lazy through a bounded cache. Set `data.lazy_support: false`
 only for small fixtures.
+
+Verification levels are operational: `none` constructs lazy handles, `schema`
+checks local tables, `manifest` verifies declared artifacts, `semantic` checks
+cross-table scientific invariants, and `full` additionally scans support
+values. Native schema-v3 writing and a generic run-bundle loader are not yet
+released; the five-file codec remains the current input format.
 
 The model never parses `measure_id`. `perturbation_id` identifies the
 experimental construct, while `embedding_id` identifies the learned residual;
@@ -71,7 +76,7 @@ abundance information.
 
 ## Run
 
-The synthetic example exercises the complete contract:
+The synthetic example exercises the Study-driven compact training path:
 
 ```bash
 python examples/synthetic/generate.py
@@ -126,7 +131,9 @@ output: runs/example
 
 `target_round_robin` interleaves targets; `target_blocked` keeps all views of a
 target in one optimizer batch. `credo run` remains a compatibility alias for
-`credo train`.
+`credo train`. Both commands open a semantic `Study`, validate the recipe
+requirements, and invoke the recipe-owned compatibility compiler before the
+unchanged compact executor.
 
 Training follows a fixed continuation schedule: state geometry, finite mass
 and optional counts, then ecological context. Before the latter two phases,
@@ -199,11 +206,11 @@ The v2 importer strict-loads raw or embedded EMA dynamics and the preserved VAE,
 records source hashes, and refuses resume when optimizer or RNG state is absent.
 It writes a portable, hash-verified bundle containing canonical model and VAE
 states, representation metadata, latent cache, and source/artifact manifests.
-Its frozen compatibility modules are loaded only when the recipe is requested
-and introduce no dependencies beyond the core runtime. Compact v3 has the
-released training executor; transformer v2 preserves a typed, non-executable
-reconstruction and the complete source run config, but supports imported
-inference and replay only.
+Its frozen compatibility modules are loaded only when the recipe is requested.
+Compact v3 has the released training executor; transformer v2 preserves a
+typed, non-executable reconstruction and the complete source run config, but
+supports imported inference only. Raw-cohort interpretation and archive replay
+belong to external adapters.
 See [runtime and recipes](docs/runtime_and_recipes.md).
 
 ## Examples
@@ -218,8 +225,8 @@ dataset requires no change under `src/credo`.
 ## Verify
 
 ```bash
-ruff check src examples analysis tests
-ruff format --check src examples analysis tests
+ruff check src examples tests
+ruff format --check src examples tests
 pytest -q
 python -m build
 ```

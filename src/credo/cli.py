@@ -9,9 +9,11 @@ from pathlib import Path
 
 import pandas as pd
 
-from .io import load_config, load_data, validate_inputs
+from .contracts import SplitSpec
+from .data import open_study
+from .io import load_config, validate_inputs
 from .registry import get_recipe
-from .runtime import TrainingEngine
+from .runtime import TrainingEngine, validate_view_for_recipe
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -28,10 +30,9 @@ def _parser() -> argparse.ArgumentParser:
         train.add_argument("--device")
         train.add_argument("--seed", type=int)
 
-    evaluate = commands.add_parser("evaluate", help="evaluate a native checkpoint or import bundle")
+    evaluate = commands.add_parser("evaluate", help="evaluate a native checkpoint")
     evaluate.add_argument("checkpoint", type=Path)
-    evaluate.add_argument("--config", type=Path)
-    evaluate.add_argument("--study-source", type=Path)
+    evaluate.add_argument("--config", required=True, type=Path)
     evaluate.add_argument("--output", type=Path)
     evaluate.add_argument("--particles", type=int)
     evaluate.add_argument("--seed", type=int)
@@ -42,8 +43,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     contrast.add_argument("checkpoint", type=Path)
     contrast.add_argument("--measure-id", required=True)
-    contrast.add_argument("--config", type=Path)
-    contrast.add_argument("--study-source", type=Path)
+    contrast.add_argument("--config", required=True, type=Path)
     contrast.add_argument("--output", type=Path)
     contrast.add_argument("--particles", type=int)
     contrast.add_argument("--seed", type=int)
@@ -51,15 +51,6 @@ def _parser() -> argparse.ArgumentParser:
     contrast.add_argument(
         "--context-policy", choices=["self_consistent", "clamped"], default="self_consistent"
     )
-
-    replay = commands.add_parser("replay", help="replay a transformer-v2 OOF archive")
-    replay.add_argument("--bundle-root", required=True, type=Path)
-    replay.add_argument("--study-source", required=True, type=Path)
-    replay.add_argument("--output", required=True, type=Path)
-    replay.add_argument("--particles", type=int, default=640)
-    replay.add_argument("--steps-per-interval", type=int, default=24)
-    replay.add_argument("--noise-seed", type=int, default=0)
-    replay.add_argument("--device")
 
     summarize = commands.add_parser("summarize", help="summarize durable run artifacts")
     summarize.add_argument("run_dir", type=Path)
@@ -97,10 +88,13 @@ def _train(args: argparse.Namespace) -> int:
         changed = True
     if changed:
         config = type(config).model_validate(updates)
-    data = load_data(config)
     recipe = get_recipe(config.recipe)
-    trainer = TrainingEngine().fit(recipe, data, config, device=args.device)
-    output = trainer.save()
+    study = open_study(config, verify="semantic")
+    try:
+        trainer = TrainingEngine().fit(recipe, study.view(), config, device=args.device)
+        output = trainer.save()
+    finally:
+        study.close()
     print(json.dumps({"status": "complete", "output": str(output)}, indent=2))
     return 0
 
@@ -108,36 +102,56 @@ def _train(args: argparse.Namespace) -> int:
 def _load_runtime(args: argparse.Namespace):
     checkpoint = args.checkpoint.expanduser().resolve()
     if checkpoint.is_dir():
-        from .recipes.transformer_v2.importer import load_imported_bundle
-        from .recipes.transformer_v2.replay import load_lps_replay_study
-
-        if args.study_source is None:
-            raise ValueError("Imported transformer-v2 bundles require --study-source.")
-        run = load_imported_bundle(checkpoint, device=args.device)
-        study = load_lps_replay_study(run, args.study_source)
-        run.study = study
-        return run, study
-    if args.config is None:
-        raise ValueError("Native compact checkpoints require --config.")
-    from .training import Trainer
-
+        raise ValueError(
+            "Core CLI evaluation accepts native checkpoints only. Imported transformer-v2 "
+            "bundles require a canonical compiled study through the Python API; cohort replay "
+            "belongs in its external adapter workflow."
+        )
     config = load_config(args.config)
-    study = load_data(config)
-    return Trainer.load(checkpoint, study, config, device=args.device), study
+    recipe = get_recipe(config.recipe)
+    semantic_study = open_study(config, verify="semantic")
+    try:
+        view = semantic_study.view()
+        representation_scope = getattr(
+            getattr(config.recipe_config, "validation", None),
+            "representation_scope",
+            "shared",
+        )
+        split = SplitSpec(
+            strategy="none",
+            representation_scope=representation_scope,
+            split_id=f"study-view:{view.semantic_hash()[:12]}",
+        )
+        validate_view_for_recipe(
+            view,
+            split,
+            recipe.requirements(config.recipe_config),
+        ).raise_for_errors()
+        compiled_study = recipe.compile_study(view, split, config.recipe_config)
+        from .training import Trainer
+
+        run = Trainer.load(checkpoint, compiled_study, config, device=args.device)
+    except Exception:
+        semantic_study.close()
+        raise
+    return run, compiled_study, semantic_study
 
 
 def _evaluate(args: argparse.Namespace) -> int:
     from .evaluation import evaluate
 
-    run, study = _load_runtime(args)
-    options = {"study": study, "particles": args.particles, "seed": args.seed}
-    if getattr(run, "recipe_id", None) == "credo.transformer_sde_v2":
-        options["device"] = args.device
-    metrics = evaluate(run, **options)
-    if args.output is not None:
-        output = args.output.expanduser().resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        metrics.to_parquet(output, index=False)
+    run, study, owner = _load_runtime(args)
+    try:
+        options = {"study": study, "particles": args.particles, "seed": args.seed}
+        if getattr(run, "recipe_id", None) == "credo.transformer_sde_v2":
+            options["device"] = args.device
+        metrics = evaluate(run, **options)
+        if args.output is not None:
+            output = args.output.expanduser().resolve()
+            output.parent.mkdir(parents=True, exist_ok=True)
+            metrics.to_parquet(output, index=False)
+    finally:
+        owner.close()
     print(json.dumps({"status": "evaluated", "rows": len(metrics)}, indent=2))
     return 0
 
@@ -145,36 +159,23 @@ def _evaluate(args: argparse.Namespace) -> int:
 def _counterfactual(args: argparse.Namespace) -> int:
     from .counterfactual import counterfactual
 
-    run, study = _load_runtime(args)
-    options = {
-        "context_policy": args.context_policy,
-        "particles": args.particles,
-        "seed": args.seed,
-        "study": study,
-        "device": args.device,
-    }
-    frame = counterfactual(run, args.measure_id, **options)
-    if args.output is not None:
-        output = args.output.expanduser().resolve()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        frame.to_parquet(output, index=False)
+    run, study, owner = _load_runtime(args)
+    try:
+        options = {
+            "context_policy": args.context_policy,
+            "particles": args.particles,
+            "seed": args.seed,
+            "study": study,
+            "device": args.device,
+        }
+        frame = counterfactual(run, args.measure_id, **options)
+        if args.output is not None:
+            output = args.output.expanduser().resolve()
+            output.parent.mkdir(parents=True, exist_ok=True)
+            frame.to_parquet(output, index=False)
+    finally:
+        owner.close()
     print(json.dumps({"status": "evaluated", "rows": len(frame)}, indent=2))
-    return 0
-
-
-def _replay(args: argparse.Namespace) -> int:
-    from .recipes.transformer_v2.replay import replay_lps_bundle
-
-    summary = replay_lps_bundle(
-        args.bundle_root,
-        args.study_source,
-        args.output,
-        particles=args.particles,
-        steps_per_interval=args.steps_per_interval,
-        noise_seed=args.noise_seed,
-        device=args.device,
-    )
-    print(json.dumps(summary, indent=2))
     return 0
 
 
@@ -244,8 +245,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _evaluate(args)
     if args.command == "counterfactual":
         return _counterfactual(args)
-    if args.command == "replay":
-        return _replay(args)
     if args.command == "summarize":
         return _summarize(args.run_dir)
     if args.command == "import-checkpoint":

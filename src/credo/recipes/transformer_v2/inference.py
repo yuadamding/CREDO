@@ -1,18 +1,14 @@
-"""Deterministic inference replay for imported transformer-v2 runs."""
+"""Deterministic inference for imported transformer-v2 runs."""
 
 from __future__ import annotations
 
-import json
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
 
-import numpy as np
 import pandas as pd
 import torch
 
-from ...contracts import Axis, CREDOStudy, FiniteMeasure, MassSemantics
+from ...contracts import Axis, CREDOStudy
 from ...objective import checkpoint_geometry_mass_loss
 from ...particles import (
     DynamicsStep,
@@ -23,11 +19,7 @@ from ...particles import (
     sample_noise,
     weight_diagnostics,
 )
-from .importer import (
-    ImportedTransformerV2Run,
-    import_legacy_checkpoint,
-    sha256_file,
-)
+from .importer import ImportedTransformerV2Run
 from .model import FullDynamicsModel
 
 
@@ -51,139 +43,6 @@ def historical_axis_grid(
             segment = segment[1:]
         pieces.append(segment)
     return torch.cat(pieces)
-
-
-def load_lps_replay_study(
-    run: ImportedTransformerV2Run,
-    study_source: str | Path,
-) -> CREDOStudy:
-    """Reconstruct held-out finite measures from preserved rows and latent cache."""
-    import anndata as ad
-
-    source_path = Path(study_source).expanduser().resolve()
-    adata = ad.read_h5ad(source_path, backed="r")
-    try:
-        obs = adata.obs.copy().reset_index(drop=True)
-    finally:
-        adata.file.close()
-    latents = np.load(run.latents_path, mmap_mode="r")
-    if len(obs) != len(latents):
-        raise ValueError("Study rows and preserved latent cache are not aligned.")
-    required = {
-        "sample_id",
-        "time_label",
-        "perturbation_id",
-        "embedding_id",
-        "is_control",
-        "mass_value",
-    }
-    missing = required - set(obs)
-    if missing:
-        raise ValueError(f"Replay study is missing obs columns: {sorted(missing)}")
-    for column in ("sample_id", "time_label", "perturbation_id", "embedding_id"):
-        obs[column] = obs[column].astype(str)
-    obs["mass_value"] = pd.to_numeric(obs["mass_value"], errors="raise")
-    axis_payload = run.envelope.study_contract["axis"]
-    axis = Axis(
-        kind="physical",
-        source=str(axis_payload["source"]),
-        labels=tuple(str(value) for value in axis_payload["labels"]),
-        values=tuple(float(value) for value in axis_payload["values"]),
-    )
-    validation_samples = set(run.split.validation_values or ())
-    selected = obs["sample_id"].isin(validation_samples) & obs["time_label"].isin(axis.labels)
-    positions = np.flatnonzero(selected.to_numpy())
-    scoped = obs.iloc[positions].copy()
-    scoped["_position"] = positions
-    grouped = scoped.groupby(
-        ["sample_id", "perturbation_id", "time_label"],
-        observed=True,
-        sort=False,
-    ).indices
-    source_pairs = sorted(
-        {
-            (str(sample_id), str(perturbation_id))
-            for sample_id, perturbation_id, label in grouped
-            if str(label) == axis.source and str(perturbation_id) in set(run.model.perturbation_ids)
-        },
-        key=str,
-    )
-    if not source_pairs:
-        raise ValueError("No held-out source measures match the imported embedding catalog.")
-
-    measures: dict[str, dict[str, FiniteMeasure]] = {label: {} for label in axis.labels}
-    metadata_rows: list[dict[str, Any]] = []
-    for sample_id, perturbation_id in source_pairs:
-        source_rows = scoped.iloc[grouped[(sample_id, perturbation_id, axis.source)]]
-        embedding_values = source_rows["embedding_id"].unique().tolist()
-        if len(embedding_values) != 1:
-            raise ValueError("One replay measure maps to multiple embedding IDs.")
-        embedding_id = str(embedding_values[0])
-        measure_id = str((sample_id, perturbation_id))
-        control_values = source_rows["is_control"]
-        if pd.api.types.is_bool_dtype(control_values.dtype):
-            normalized_controls = control_values.astype(bool)
-        else:
-            normalized = control_values.astype(str).str.lower()
-            if not normalized.isin({"true", "false", "1", "0"}).all():
-                raise ValueError("Replay is_control values must be boolean.")
-            normalized_controls = normalized.isin({"true", "1"})
-        if normalized_controls.nunique() != 1:
-            raise ValueError("One replay measure mixes control and non-control rows.")
-        is_control = bool(normalized_controls.iloc[0])
-        metadata_rows.append(
-            {
-                "measure_id": measure_id,
-                "sample_id": sample_id,
-                "perturbation_id": perturbation_id,
-                "guide_id": perturbation_id,
-                "embedding_id": embedding_id,
-                "target_gene": embedding_id,
-                "context_group_id": run.split.split_id or "legacy-validation",
-                "is_control": is_control,
-            }
-        )
-        for label in axis.labels:
-            key = (sample_id, perturbation_id, label)
-            if key not in grouped:
-                continue
-            rows = scoped.iloc[grouped[key]]
-            row_positions = rows["_position"].to_numpy(dtype=np.int64)
-            total_mass = float(rows["mass_value"].sum())
-            weights = np.full(len(rows), total_mass / len(rows), dtype=np.float64)
-            measures[label][measure_id] = FiniteMeasure(
-                np.asarray(latents[row_positions], dtype=np.float32),
-                weights,
-                total_mass,
-            )
-    representation = run.representation
-    all_samples = tuple(sorted(obs["sample_id"].unique()))
-    if representation.included_samples != all_samples:
-        representation = replace(representation, included_samples=all_samples)
-    study = CREDOStudy(
-        axis=axis,
-        measures=measures,
-        measure_meta=pd.DataFrame(metadata_rows),
-        mass_semantics=MassSemantics.RELATIVE_WITHIN_GROUP,
-        metadata={
-            "input_paths": {
-                "study_source": str(source_path),
-                "latents": str(run.latents_path),
-            },
-            "input_hashes": {
-                "latents": sha256_file(run.latents_path),
-            },
-            "dataset": {"name": "archived_lps_90m_6h_10h"},
-            "mass_denominators": [
-                f"{sample_id}::{label}::all_cell_states"
-                for sample_id in sorted(validation_samples)
-                for label in axis.labels
-            ],
-        },
-        representation=representation,
-    )
-    run.study = study
-    return study
 
 
 @dataclass(frozen=True)
@@ -323,56 +182,6 @@ def evaluate_replay(
     frame["evaluation_seed"] = int(seed)
     frame["noise_seed"] = int(resolved_noise_seed)
     return frame.reset_index(drop=True), particle_rollout
-
-
-def compare_with_archive(
-    metrics: pd.DataFrame,
-    archived_metrics: str | Path,
-) -> dict[str, Any]:
-    archived_path = Path(archived_metrics).expanduser().resolve()
-    archived = pd.read_csv(archived_path, dtype={"sample_id": str})
-    expected = archived[["measure_key", "time_label"]].rename(columns={"measure_key": "measure_id"})
-    observed = metrics[["measure_id", "time_label"]]
-    ordering_match = expected.reset_index(drop=True).equals(observed.reset_index(drop=True))
-    joined = metrics.merge(
-        archived,
-        left_on=["measure_id", "time_label"],
-        right_on=["measure_key", "time_label"],
-        validate="one_to_one",
-    )
-    archived_log_mass = np.log(joined["predicted_mass"].to_numpy(dtype=float))
-    current_log_mass = joined["predicted_log_mass"].to_numpy(dtype=float)
-    difference = current_log_mass - archived_log_mass
-    rank_correlation = float(
-        pd.Series(current_log_mass).rank().corr(pd.Series(archived_log_mass).rank())
-    )
-    max_difference = float(np.max(np.abs(difference))) if len(difference) else float("nan")
-    mean_difference = float(np.mean(np.abs(difference))) if len(difference) else float("nan")
-    if ordering_match and max_difference <= 1e-6:
-        agreement = "exact"
-    elif ordering_match and max_difference <= 0.1:
-        agreement = "tolerance-level"
-    elif rank_correlation >= 0.9:
-        agreement = "rank-level"
-    else:
-        agreement = "qualitative"
-    geometry_by_time = (
-        joined.groupby("time_label", observed=True)
-        .agg(replayed_geometry=("geometry", "mean"), archived_geometry=("geom_loss", "first"))
-        .reset_index()
-    )
-    return {
-        "archived_metrics_sha256": sha256_file(archived_path),
-        "archived_rows": int(len(archived)),
-        "replayed_rows": int(len(metrics)),
-        "row_count_match": len(archived) == len(metrics),
-        "measure_order_match": ordering_match,
-        "predicted_log_mass_max_abs_difference": max_difference,
-        "predicted_log_mass_mean_abs_difference": mean_difference,
-        "predicted_log_mass_rank_correlation": rank_correlation,
-        "geometry_by_time": geometry_by_time.to_dict(orient="records"),
-        "agreement": agreement,
-    }
 
 
 @torch.no_grad()
@@ -525,115 +334,9 @@ def counterfactual_replay(
     return pd.DataFrame(rows)
 
 
-def write_replay(
-    output: str | Path,
-    metrics: pd.DataFrame,
-    comparison: dict[str, Any],
-) -> Path:
-    destination = Path(output).expanduser().resolve()
-    destination.mkdir(parents=True, exist_ok=True)
-    metrics.to_parquet(destination / "metrics.parquet", index=False)
-    (destination / "comparison.json").write_text(
-        json.dumps(comparison, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    return destination
-
-
-def replay_lps_bundle(
-    bundle_root: str | Path,
-    study_source: str | Path,
-    output: str | Path,
-    *,
-    folds: tuple[str, ...] | None = None,
-    particles: int = 640,
-    steps_per_interval: int = 24,
-    noise_seed: int = 0,
-    device: str | torch.device | None = None,
-) -> dict[str, Any]:
-    """Replay selected archived folds and write one standardized OOF table."""
-    bundle = Path(bundle_root).expanduser().resolve()
-    selected = folds or tuple(path.name for path in sorted(bundle.glob("fold*")))
-    if not selected:
-        raise ValueError("No replay folds were selected.")
-    destination = Path(output).expanduser().resolve()
-    resolved_study_source = Path(study_source).expanduser().resolve()
-    study_source_hash = sha256_file(resolved_study_source)
-    all_metrics = []
-    fold_reports: dict[str, Any] = {}
-    for fold_name in selected:
-        fold = bundle / fold_name
-        metadata = json.loads((fold / "metadata.json").read_text(encoding="utf-8"))
-        imported = import_legacy_checkpoint(
-            fold / "checkpoint_best.pt",
-            fold / "run_config.json",
-            fold / "vae_artifact/vae_state_dict.pt",
-            fold / "vae_artifact/latent_all_std.npy",
-            output=destination / fold_name / "imported",
-            model_state="raw",
-        )
-        if set(imported.split.train_values or ()) & set(imported.split.validation_values or ()):
-            raise AssertionError("Held-out samples appear in dynamics training measures.")
-        study = load_lps_replay_study(imported, resolved_study_source)
-        evaluation_seed = 100_000 + int(metadata["selected_epoch"])
-        metrics, _ = evaluate_replay(
-            imported,
-            study,
-            particles=particles,
-            steps_per_interval=steps_per_interval,
-            seed=evaluation_seed,
-            noise_seed=noise_seed,
-            device=device,
-        )
-        metrics.insert(4, "fold", int(metadata["fold"]))
-        comparison = compare_with_archive(metrics, fold / "predicted_metrics_by_key_time.csv")
-        write_replay(destination / fold_name, metrics, comparison)
-        all_metrics.append(metrics)
-        fold_reports[fold_name] = {
-            **comparison,
-            "dynamics_train_samples": list(imported.split.train_values or ()),
-            "held_out_samples": list(imported.split.validation_values or ()),
-            "representation_scope": imported.split.representation_scope,
-            "representation_fit_scope": imported.representation.fit_scope,
-            "evaluation_seed": evaluation_seed,
-            "noise_seed": noise_seed,
-        }
-        imported.model.to("cpu")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    oof = pd.concat(all_metrics, ignore_index=True)
-    oof.to_parquet(destination / "oof_metrics.parquet", index=False)
-    archived_rows = sum(report["archived_rows"] for report in fold_reports.values())
-    summary = {
-        "recipe_id": "credo.transformer_sde_v2",
-        "recipe_version": "2.0",
-        "bundle_root": str(bundle),
-        "study_source": str(resolved_study_source),
-        "study_source_sha256": study_source_hash,
-        "folds": list(selected),
-        "particles": particles,
-        "steps_per_interval": steps_per_interval,
-        "oof_rows": int(len(oof)),
-        "archived_oof_rows": int(archived_rows),
-        "oof_row_count_match": len(oof) == archived_rows,
-        "all_measure_orders_match": all(
-            report["measure_order_match"] for report in fold_reports.values()
-        ),
-        "agreement": {fold: report["agreement"] for fold, report in fold_reports.items()},
-        "fold_reports": fold_reports,
-    }
-    (destination / "replay_manifest.json").write_text(
-        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
-    return summary
-
-
 __all__ = [
-    "compare_with_archive",
     "counterfactual_replay",
     "evaluate_replay",
     "historical_axis_grid",
-    "load_lps_replay_study",
     "rollout_transformer_v2",
-    "replay_lps_bundle",
-    "write_replay",
 ]

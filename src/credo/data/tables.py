@@ -76,9 +76,13 @@ class FrameTable:
     def columns(self) -> tuple[str, ...]:
         return tuple(str(column) for column in self._frame.columns)
 
-    def to_pandas(self, *, copy: bool = True) -> pd.DataFrame:
-        """Return the normalized table, copying by default."""
-        return self._frame.copy() if copy else self._frame
+    def to_pandas(self) -> pd.DataFrame:
+        """Return an owned copy of the normalized table."""
+        return self._frame.copy()
+
+    def _unsafe_view(self) -> pd.DataFrame:
+        """Return the internal frame for trusted package code."""
+        return self._frame
 
 
 class ConditionTable(FrameTable):
@@ -138,7 +142,7 @@ class SeriesTable(FrameTable):
 
 
 class ObservationTable(FrameTable):
-    """One longitudinal series at one checkpoint."""
+    """One assay observation of a longitudinal series at one checkpoint."""
 
     required_columns = (
         "observation_id",
@@ -154,35 +158,67 @@ class ObservationTable(FrameTable):
         frame["geometry_observed"] = _normalize_boolean(
             frame["geometry_observed"], "geometry_observed"
         )
-        if frame.duplicated(["series_id", "checkpoint_id"]).any():
-            raise ValueError(
-                "ObservationTable must have at most one observation per series/checkpoint."
-            )
-        if "support_key" not in frame:
-            frame["support_key"] = pd.Series([None] * len(frame), dtype=object)
-        _normalize_strings(frame, ("support_key",), nullable=frozenset({"support_key"}))
         optional_strings = tuple(
-            column for column in ("context_id", "composition_block_id") if column in frame
+            column
+            for column in (
+                "replicate_id",
+                "assay_id",
+                "context_id",
+                "composition_block_id",
+                "processing_batch_id",
+            )
+            if column in frame
         )
         _normalize_strings(frame, optional_strings, nullable=frozenset(optional_strings))
-        missing_support = frame["geometry_observed"] & frame["support_key"].isna()
-        if missing_support.any():
-            observation_id = frame.loc[missing_support, "observation_id"].iloc[0]
-            raise ValueError(f"Geometry-observed row {observation_id!r} requires a support_key.")
-        hidden_support = ~frame["geometry_observed"] & frame["support_key"].notna()
-        if hidden_support.any():
-            observation_id = frame.loc[hidden_support, "observation_id"].iloc[0]
-            raise ValueError(
-                f"Geometry-missing row {observation_id!r} cannot declare a support_key."
-            )
-        observed_support = frame.loc[frame["geometry_observed"], "support_key"]
-        if observed_support.duplicated().any():
-            support_key = observed_support.loc[observed_support.duplicated()].iloc[0]
-            raise ValueError(f"ObservationTable contains duplicate support_key {support_key!r}.")
 
     @property
     def observation_ids(self) -> tuple[str, ...]:
         return tuple(self._frame["observation_id"].tolist())
+
+
+class SupportIndexTable(FrameTable):
+    """Representation-specific support availability for each observation."""
+
+    required_columns = (
+        "observation_id",
+        "representation_id",
+        "store_id",
+        "support_key",
+        "available",
+    )
+    key_columns = ("observation_id", "representation_id")
+    string_columns = ("observation_id", "representation_id")
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        frame["available"] = _normalize_boolean(frame["available"], "available")
+        _normalize_strings(
+            frame,
+            ("store_id", "support_key"),
+            nullable=frozenset({"store_id", "support_key"}),
+        )
+        incomplete = frame["available"] & (frame["store_id"].isna() | frame["support_key"].isna())
+        if incomplete.any():
+            row = frame.loc[incomplete].iloc[0]
+            raise ValueError(
+                "Available support requires store_id and support_key for "
+                f"{row['observation_id']!r}/{row['representation_id']!r}."
+            )
+        hidden = ~frame["available"] & (frame["store_id"].notna() | frame["support_key"].notna())
+        if hidden.any():
+            row = frame.loc[hidden].iloc[0]
+            raise ValueError(
+                "Unavailable support cannot declare store_id or support_key for "
+                f"{row['observation_id']!r}/{row['representation_id']!r}."
+            )
+        available = frame.loc[frame["available"]]
+        if available.duplicated(["store_id", "representation_id", "support_key"]).any():
+            row = available.loc[
+                available.duplicated(["store_id", "representation_id", "support_key"])
+            ].iloc[0]
+            raise ValueError(
+                "SupportIndexTable contains a duplicate qualified support key "
+                f"{(row['store_id'], row['representation_id'], row['support_key'])!r}."
+            )
 
 
 class AbundanceSemantics(StrEnum):
@@ -197,15 +233,14 @@ class AbundanceSemantics(StrEnum):
 
 @dataclass(frozen=True)
 class AbundanceChannelSpec:
-    """Interpretation, claims, and zero handling for one abundance channel."""
+    """Interpretation, denominator scope, and zero handling for one channel."""
 
     channel_id: str
     semantics: AbundanceSemantics
-    unit: str | None
-    denominator_required: bool
-    permits_absolute_claim: bool
-    permits_relative_claim: bool
-    zero_policy: Literal["allowed", "forbidden", "censored"]
+    unit: str | None = None
+    denominator_scope: Literal["none", "context_checkpoint", "sample_checkpoint", "custom"] = "none"
+    zero_policy: Literal["allowed", "forbidden", "censored"] = "allowed"
+    transform_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "channel_id", str(self.channel_id))
@@ -214,10 +249,43 @@ class AbundanceChannelSpec:
             raise ValueError("AbundanceChannelSpec.channel_id must be nonempty.")
         if self.unit is not None and not str(self.unit):
             raise ValueError("AbundanceChannelSpec.unit must be nonempty when provided.")
+        if self.denominator_scope not in {
+            "none",
+            "context_checkpoint",
+            "sample_checkpoint",
+            "custom",
+        }:
+            raise ValueError(f"Unknown denominator scope {self.denominator_scope!r}.")
         if self.zero_policy not in {"allowed", "forbidden", "censored"}:
             raise ValueError(f"Unknown abundance zero policy {self.zero_policy!r}.")
-        if self.permits_absolute_claim and self.semantics is not AbundanceSemantics.ABSOLUTE:
-            raise ValueError("Only absolute abundance semantics can permit absolute claims.")
+        if self.transform_id is not None:
+            transform_id = str(self.transform_id)
+            if not transform_id:
+                raise ValueError("AbundanceChannelSpec.transform_id must be nonempty when set.")
+            object.__setattr__(self, "transform_id", transform_id)
+        requires_denominator = self.semantics in {
+            AbundanceSemantics.RELATIVE,
+            AbundanceSemantics.CAPTURE_COUNT,
+        }
+        if requires_denominator == (self.denominator_scope == "none"):
+            raise ValueError(
+                f"Abundance semantics {self.semantics.value!r} require a denominator scope."
+            )
+
+    @property
+    def denominator_required(self) -> bool:
+        return self.denominator_scope != "none"
+
+    @property
+    def permits_absolute_claim(self) -> bool:
+        return self.semantics is AbundanceSemantics.ABSOLUTE
+
+    @property
+    def permits_relative_claim(self) -> bool:
+        return self.semantics in {
+            AbundanceSemantics.ABSOLUTE,
+            AbundanceSemantics.RELATIVE,
+        }
 
 
 class AbundanceTable(FrameTable):
@@ -246,10 +314,18 @@ class AbundanceTable(FrameTable):
     def _validate(self, frame: pd.DataFrame) -> None:
         frame["observed"] = _normalize_boolean(frame["observed"], "observed")
         frame["value"] = pd.to_numeric(frame["value"], errors="coerce")
+        optional_strings = tuple(
+            column
+            for column in ("denominator_id", "transform_id", "source_artifact_id")
+            if column in frame
+        )
+        _normalize_strings(frame, optional_strings, nullable=frozenset(optional_strings))
         unknown = set(frame["channel_id"]) - set(self._channels)
         if unknown:
             raise ValueError(f"AbundanceTable references unknown channels: {sorted(unknown)}")
         observed = frame["observed"]
+        if frame.loc[~observed, "value"].notna().any():
+            raise ValueError("Unobserved abundance rows must have a missing value.")
         values = frame.loc[observed, "value"].to_numpy(dtype=np.float64)
         if not np.isfinite(values).all() or np.any(values < 0):
             raise ValueError("Observed abundance values must be finite and nonnegative.")
@@ -264,6 +340,32 @@ class AbundanceTable(FrameTable):
                 if denominator.isna().any() or denominator.astype(str).str.len().eq(0).any():
                     raise ValueError(
                         f"Observed channel {channel_id!r} requires nonempty denominator_id."
+                    )
+            if spec.transform_id is not None:
+                if (
+                    "transform_id" not in rows
+                    or not rows["transform_id"].eq(spec.transform_id).all()
+                ):
+                    raise ValueError(
+                        f"Abundance channel {channel_id!r} requires transform_id "
+                        f"{spec.transform_id!r}."
+                    )
+            if spec.zero_policy == "censored":
+                required = {"lower_bound", "upper_bound"}
+                if not required <= set(rows):
+                    raise ValueError(f"Censored abundance channel {channel_id!r} requires bounds.")
+                lower = pd.to_numeric(rows["lower_bound"], errors="coerce").to_numpy(float)
+                upper = pd.to_numeric(rows["upper_bound"], errors="coerce").to_numpy(float)
+                if (
+                    not np.isfinite(lower).all()
+                    or not np.isfinite(upper).all()
+                    or np.any(lower < 0)
+                    or np.any(upper < lower)
+                    or np.any(rows["value"].to_numpy(float) < lower)
+                    or np.any(rows["value"].to_numpy(float) > upper)
+                ):
+                    raise ValueError(
+                        f"Censored abundance channel {channel_id!r} has invalid bounds."
                     )
 
     @property
@@ -283,16 +385,18 @@ class CompositionTable(FrameTable):
         "checkpoint_id",
         "context_id",
         "series_id",
+        "observation_id",
         "exposure",
         "count",
         "denominator_id",
     )
-    key_columns = ("composition_block_id", "series_id")
+    key_columns = ("composition_block_id", "observation_id")
     string_columns = (
         "composition_block_id",
         "checkpoint_id",
         "context_id",
         "series_id",
+        "observation_id",
         "denominator_id",
     )
 
@@ -335,4 +439,5 @@ __all__ = [
     "FrameTable",
     "ObservationTable",
     "SeriesTable",
+    "SupportIndexTable",
 ]

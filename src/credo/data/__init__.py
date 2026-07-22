@@ -1,9 +1,16 @@
 """Storage-independent study semantics and compatibility codecs."""
 
+from .codecs import (
+    StudyCodec,
+    StudyCodecRegistry,
+    available_study_codecs,
+    open_study,
+    register_study_codec,
+)
 from .design import AxisSpec, Checkpoint, StudyDesign, Transition
-from .legacy import CurrentFiveFileStudyCodec, FiveFileV2Codec, observation_id, open_study
+from .legacy import CurrentFiveFileStudyCodec, FiveFileV2Codec, observation_id
 from .representations import ArtifactRef, RepresentationCatalog, RepresentationSpec
-from .study import SelectionSpec, Study, StudyManifest, StudyView
+from .study import CompositionPolicy, SelectionSpec, Study, StudyManifest, StudyView
 from .support import (
     AbundanceValue,
     EmpiricalLaw,
@@ -11,6 +18,7 @@ from .support import (
     MeasureSnapshot,
     SupportRef,
     SupportStore,
+    SupportStoreRegistry,
 )
 from .tables import (
     AbundanceChannelSpec,
@@ -20,6 +28,7 @@ from .tables import (
     ConditionTable,
     ObservationTable,
     SeriesTable,
+    SupportIndexTable,
 )
 from .validation import ValidationIssue, ValidationReport
 
@@ -32,6 +41,7 @@ __all__ = [
     "AxisSpec",
     "Checkpoint",
     "CompositionTable",
+    "CompositionPolicy",
     "ConditionTable",
     "CurrentFiveFileStudyCodec",
     "EmpiricalLaw",
@@ -44,14 +54,20 @@ __all__ = [
     "SelectionSpec",
     "SeriesTable",
     "Study",
+    "StudyCodec",
+    "StudyCodecRegistry",
     "StudyDesign",
     "StudyManifest",
     "StudyView",
     "SupportRef",
     "SupportStore",
+    "SupportIndexTable",
+    "SupportStoreRegistry",
     "Transition",
     "ValidationIssue",
     "ValidationReport",
+    "available_study_codecs",
     "observation_id",
     "open_study",
+    "register_study_codec",
 ]

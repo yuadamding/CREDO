@@ -88,7 +88,7 @@ def _implementation_hash() -> str:
         credo_root / "runtime.py",
         credo_root / "evaluation.py",
         credo_root / "counterfactual.py",
-        root / "replay.py",
+        root / "inference.py",
         root / "importer.py",
     ]
     for path in files:
@@ -297,7 +297,7 @@ class ImportedTransformerV2Run:
         seed: int | None = None,
         **kwargs: Any,
     ):
-        from .replay import evaluate_replay
+        from .inference import evaluate_replay
 
         selected_study = self.study if study is None else study
         if selected_study is None:
@@ -312,7 +312,7 @@ class ImportedTransformerV2Run:
         return frame
 
     def counterfactual_runtime(self, measure_id: str, *, study: Any = None, **kwargs: Any):
-        from .replay import counterfactual_replay
+        from .inference import counterfactual_replay
 
         selected_study = self.study if study is None else study
         if selected_study is None:

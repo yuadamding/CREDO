@@ -17,6 +17,7 @@ try:
 except (KeyError, ValueError):
     pass
 
+from credo.data import open_study  # noqa: E402
 from credo.io import RunConfig, load_config, load_data  # noqa: E402
 from credo.registry import get_recipe  # noqa: E402
 from credo.runtime import TrainingEngine  # noqa: E402
@@ -65,9 +66,11 @@ def tiny_data(tiny_config: RunConfig):
 
 
 @pytest.fixture(scope="session")
-def trained_run(tiny_config: RunConfig, tiny_data):
+def trained_run(tiny_config: RunConfig):
+    study = open_study(tiny_config)
     trainer = TrainingEngine().fit(
-        get_recipe(tiny_config.recipe), tiny_data, tiny_config, device="cpu"
+        get_recipe(tiny_config.recipe), study.view(), tiny_config, device="cpu"
     )
     trainer.save()
-    return trainer
+    yield trainer
+    study.close()

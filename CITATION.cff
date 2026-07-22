@@ -1,10 +1,10 @@
 cff-version: 1.2.0
 message: "If you use CREDO, please cite this software and the cohort publication relevant to your analysis."
 type: software
-title: "CREDO: versioned finite-measure perturbation dynamics for longitudinal Perturb-seq"
+title: "CREDO: versioned finite-measure perturbation dynamics"
 version: 3.0.0a3
 date-released: 2026-07-21
-license: MIT
+license: AGPL-3.0-only
 authors:
   - family-names: Ding
     given-names: Yu Adam
