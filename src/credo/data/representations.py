@@ -49,9 +49,9 @@ class ArtifactRef:
 class RepresentationSpec:
     """Coordinates, fit scope, and artifacts for one study representation.
 
-    ``included_series`` and ``included_checkpoints`` record the observations used
-    to fit the representation. They do not limit which encoded supports may be
-    present in the associated store.
+    The ``fit_*`` fields record representation-training provenance. Compatibility
+    fields ``included_series`` and ``included_checkpoints`` retain schema-v3
+    provenance and do not limit which encoded supports may be present.
     """
 
     representation_id: str
@@ -61,10 +61,32 @@ class RepresentationSpec:
     support_store_id: str
     support_artifact: ArtifactRef | None = None
     feature_artifact: ArtifactRef | None = None
+    feature_selection_artifact: ArtifactRef | None = None
     encoder_artifact: ArtifactRef | None = None
     decoder_artifact: ArtifactRef | None = None
     normalization_artifact: ArtifactRef | None = None
+    scope_mode: Literal[
+        "external_frozen",
+        "shared_all_observations",
+        "shared_source_only",
+        "nested_by_subject",
+        "nested_by_perturbation",
+        "nested_by_checkpoint",
+        "fully_nested",
+    ] = "shared_all_observations"
     fit_split_id: str | None = None
+    fit_selection_hash: str | None = None
+    fit_subject_ids: tuple[str, ...] = ()
+    fit_perturbation_ids: tuple[str, ...] = ()
+    fit_checkpoint_ids: tuple[str, ...] = ()
+    fit_observation_scope: Literal[
+        "external",
+        "all_observations",
+        "source_only",
+        "training_selection",
+        "custom",
+        "unknown",
+    ] = "all_observations"
     included_series: tuple[str, ...] = ()
     included_checkpoints: tuple[str, ...] = ()
 
@@ -79,12 +101,70 @@ class RepresentationSpec:
         if int(self.dimension) < 1:
             raise ValueError("RepresentationSpec.dimension must be positive.")
         object.__setattr__(self, "dimension", int(self.dimension))
+        if self.scope_mode not in {
+            "external_frozen",
+            "shared_all_observations",
+            "shared_source_only",
+            "nested_by_subject",
+            "nested_by_perturbation",
+            "nested_by_checkpoint",
+            "fully_nested",
+        }:
+            raise ValueError(f"Unsupported representation scope_mode {self.scope_mode!r}.")
+        if (
+            self.scope_mode == "external_frozen"
+            and self.fit_observation_scope == "all_observations"
+        ):
+            object.__setattr__(self, "fit_observation_scope", "external")
+        if (
+            self.scope_mode == "shared_source_only"
+            and self.fit_observation_scope == "all_observations"
+        ):
+            object.__setattr__(self, "fit_observation_scope", "source_only")
+        if self.fit_observation_scope not in {
+            "external",
+            "all_observations",
+            "source_only",
+            "training_selection",
+            "custom",
+            "unknown",
+        }:
+            raise ValueError(
+                f"Unsupported representation fit_observation_scope {self.fit_observation_scope!r}."
+            )
         if self.fit_split_id is not None:
             fit_split_id = str(self.fit_split_id)
             if not fit_split_id:
                 raise ValueError("RepresentationSpec.fit_split_id must be nonempty when set.")
             object.__setattr__(self, "fit_split_id", fit_split_id)
-        for name in ("included_series", "included_checkpoints"):
+            if self.scope_mode == "shared_all_observations":
+                object.__setattr__(self, "scope_mode", "fully_nested")
+                if self.fit_observation_scope == "all_observations":
+                    object.__setattr__(self, "fit_observation_scope", "training_selection")
+        if self.fit_selection_hash is not None:
+            value = str(self.fit_selection_hash)
+            if not value:
+                raise ValueError("RepresentationSpec.fit_selection_hash must be nonempty when set.")
+            object.__setattr__(self, "fit_selection_hash", value)
+        nested = self.scope_mode.startswith("nested_") or self.scope_mode == "fully_nested"
+        if nested and self.fit_split_id is None:
+            raise ValueError("Nested representation scopes require fit_split_id.")
+        if nested and self.fit_observation_scope == "all_observations":
+            object.__setattr__(self, "fit_observation_scope", "training_selection")
+        if self.scope_mode == "external_frozen" and self.fit_observation_scope not in {
+            "external",
+            "unknown",
+        }:
+            raise ValueError(
+                "external_frozen representations require an external or unknown fit scope."
+            )
+        for name in (
+            "fit_subject_ids",
+            "fit_perturbation_ids",
+            "fit_checkpoint_ids",
+            "included_series",
+            "included_checkpoints",
+        ):
             values = tuple(str(value) for value in getattr(self, name))
             if any(not value for value in values) or len(values) != len(set(values)):
                 raise ValueError(f"RepresentationSpec.{name} must contain unique nonempty IDs.")

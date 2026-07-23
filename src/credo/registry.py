@@ -15,7 +15,7 @@ class RecipeUnavailableError(LookupError):
 
 
 _BUILTINS = {
-    "credo.compact_sde_v3@3.0": "credo.recipes.compact_v3:recipe",
+    "credo.compact_sde_v3@3.0": "credo.recipes.compact_sde_v3.recipe:recipe",
     "credo.transformer_sde_v2@2.0": "credo.recipes.transformer_v2.recipe:recipe",
 }
 _ALIASES = {

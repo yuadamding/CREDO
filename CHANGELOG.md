@@ -1,5 +1,36 @@
 # Changelog
 
+## 3.0.0a5 - 2026-07-22
+
+- Replaced the generic public study vocabulary with schema-v4
+  `PerturbSeqStudy`: perturbations, components, intervention timing, contexts,
+  population series, destructive snapshots, population pools, and mandatory
+  continuity semantics are now explicit.
+- Added typed Perturb-seq selection and task-aware split identities for
+  subjects, units, guides, targets, perturbations, contexts, checkpoints,
+  combinations, and series, with exact representation-fit leakage checks.
+- Added split-scoped `FiniteMeasureDynamicsProblem` compilation with separate
+  training and validation outcomes and leakage-safe composition conditioning,
+  plus common unbalanced-flow, state-sequence, and coupling problem contracts.
+- Added native schema-v4 transactional persistence with packed HDF5 support
+  arrays, bounded batch writes, and buffer-based table hashing; conservative
+  schema-v3 conversion records unknown biological semantics rather than
+  inventing them.
+- Made lazy five-file conversion stream categorical H5AD observation codes
+  into a compact CSR-style support index and read atom weights per law,
+  avoiding a full cell-level pandas table during large native conversions.
+- Made compact-v3 and transformer-v2 consume the same study and compiled
+  problem contracts; added typed prediction and same-start counterfactual
+  queries and compiled-problem validation to the recipe protocol.
+- Made compact compilation preserve checkpoint-specific destructive sample
+  identities while using declared context trajectories for numerical and
+  composition grouping.
+- Moved compact model, solver, objectives, and trainer implementations under
+  `credo.recipes.compact_sde_v3`, retaining thin alpha compatibility imports.
+- Tightened cross-table validation for controls, effects, references,
+  representation provenance, abundance denominators, compositions, contexts,
+  pools, event coordinates, and replicate identities.
+
 ## 3.0.0a4 - 2026-07-22
 
 - Added one content-addressed `SplitPlan` used by semantic compilation,

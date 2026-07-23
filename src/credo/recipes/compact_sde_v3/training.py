@@ -10,23 +10,27 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
 import torch
 
-from .contracts import (
+from ...contracts import (
     MEASURE_META_COLUMNS,
     OptimizerSpec,
     Stage,
     TrainingPlan,
     TrajectoryData,
 )
-from .data.splits import SplitPlan, plan_compact_trajectory_split
-from .io import RunConfig, resolved_config, validate_run_data
+from ...data.splits import SplitPlan, plan_compact_trajectory_split
+from ...io import RunConfig, resolved_config, validate_run_data
+from ...problems import FiniteMeasureDynamicsProblem
+from ...runtime import ObjectiveDescriptor
 from .model import CREDOModel
 from .objective import (
+    CountBlock,
     catalog_count_block_loss,
     checkpoint_geometry_mass_loss,
     integrated_fitness_curve,
@@ -43,7 +47,6 @@ from .particles import (
     sample_initial_particles,
     sample_noise,
 )
-from .runtime import ObjectiveDescriptor
 
 
 @dataclass
@@ -244,6 +247,8 @@ class Trainer:
     """Compact-v3 runtime produced only from an immutable recipe plan."""
 
     data: TrajectoryData
+    validation_data: TrajectoryData
+    problem: FiniteMeasureDynamicsProblem | None
     model: CREDOModel
     config: RunConfig
     training_plan: TrainingPlan
@@ -252,6 +257,7 @@ class Trainer:
     dtype: torch.dtype
     log_count_concentration: torch.nn.Parameter
     bank: CatalogBank
+    validation_bank: CatalogBank
     train_measure_ids: tuple[str, ...]
     validation_measure_ids: tuple[str, ...]
     train_time_labels: tuple[str, ...]
@@ -274,7 +280,7 @@ class Trainer:
     @classmethod
     def from_plan(
         cls,
-        data: TrajectoryData,
+        data: TrajectoryData | FiniteMeasureDynamicsProblem,
         model: CREDOModel,
         config: RunConfig,
         plan: TrainingPlan,
@@ -291,38 +297,52 @@ class Trainer:
         np.random.seed(plan.seed)
         if selected_device.type == "cuda":
             torch.cuda.manual_seed_all(plan.seed)
-        validate_run_data(config, data)
-        from .recipes.compact_v3 import recipe as compact_recipe
-        from .runtime import validate_training_contract
+        problem = data if isinstance(data, FiniteMeasureDynamicsProblem) else None
+        training_data = data.training if problem is not None else data
+        validation_data = data.validation if problem is not None else data
+        validate_run_data(config, training_data)
+        validate_run_data(config, validation_data)
+        from ...runtime import validate_training_contract
+        from .recipe import recipe as compact_recipe
 
         validate_training_contract(compact_recipe, objectives, plan)
-        if not _model_matches(model, data, config):
+        if not _model_matches(model, training_data, config):
             raise ValueError("Provided model architecture disagrees with the run data or config.")
         model = model.to(device=selected_device, dtype=dtype)
         model.assert_soft_reference()
-        validate_count_blocks(data)
-        raw_split = data.metadata.get("split_plan")
+        validate_count_blocks(training_data)
+        validate_count_blocks(validation_data)
+        raw_split = training_data.metadata.get("split_plan")
         split = (
             SplitPlan.from_dict(raw_split)
             if isinstance(raw_split, Mapping)
-            else _validation_split(data, config, seed=plan.seed)
+            else _validation_split(training_data, config, seed=plan.seed)
         )
-        representation_scope = _representation_scope(data, split, config)
+        representation_scope = _representation_scope(training_data, split, config)
         grid = axis_grid(
-            data.axis,
+            training_data.axis,
             plan.steps_per_interval,
             device=selected_device,
             dtype=dtype,
         )
         bank = CatalogBank.empty(
-            data,
+            training_data,
+            model,
+            len(grid) - 1,
+            device=selected_device,
+            dtype=dtype,
+        )
+        validation_bank = CatalogBank.empty(
+            validation_data,
             model,
             len(grid) - 1,
             device=selected_device,
             dtype=dtype,
         )
         trainer = cls(
-            data=data,
+            data=training_data,
+            validation_data=validation_data,
+            problem=problem,
             model=model,
             config=config,
             training_plan=plan,
@@ -333,6 +353,7 @@ class Trainer:
                 torch.tensor(np.log(100.0), device=selected_device, dtype=dtype)
             ),
             bank=bank,
+            validation_bank=validation_bank,
             train_measure_ids=split.train_measure_ids,
             validation_measure_ids=split.validation_measure_ids,
             train_time_labels=split.train_time_labels,
@@ -498,10 +519,12 @@ class Trainer:
         seed: int,
         batch_size: int,
         order: Literal["random", "target_round_robin", "target_blocked"] = "random",
+        data: TrajectoryData | None = None,
     ) -> Iterable[tuple[str, ...]]:
         generator = np.random.default_rng(seed)
         if order in {"target_round_robin", "target_blocked"}:
-            metadata = self.data.measure_meta.set_index("measure_id")
+            selected_data = self.data if data is None else data
+            metadata = selected_data.measure_meta.set_index("measure_id")
             grouped: dict[str, list[str]] = {}
             for measure_id in measure_ids:
                 row = metadata.loc[measure_id]
@@ -552,18 +575,18 @@ class Trainer:
     def _validation_count_loss(self, stage: Stage) -> tuple[float, int]:
         if (
             self._objective_weight(stage, "grouped_count_likelihood") == 0
-            or not self.data.count_blocks
+            or not self.validation_data.count_blocks
         ):
             return 0.0, 0
-        metadata = self.data.measure_meta.set_index("measure_id")
+        metadata = self.validation_data.measure_meta.set_index("measure_id")
         groups = {
             str(metadata.loc[measure_id, "context_group_id"])
             for measure_id in self.validation_measure_ids
         }
         value, block_count = catalog_count_block_loss(
-            self.data,
+            self.validation_data,
             log_concentration=self.log_count_concentration,
-            fitness_bank=self.bank,
+            fitness_bank=self.validation_bank,
             context_group_ids=groups,
             time_labels=self.validation_time_labels,
         )
@@ -598,9 +621,11 @@ class Trainer:
         particles: int,
         seed: int,
         provider,
+        data: TrajectoryData | None = None,
     ):
+        selected_data = self.data if data is None else data
         state = sample_initial_particles(
-            self.data,
+            selected_data,
             measure_ids,
             particles,
             device=self.device,
@@ -757,16 +782,26 @@ class Trainer:
     @torch.no_grad()
     def _refresh_bank(self, *, epoch: int) -> None:
         """Initialize every entry using complete context groups before optimization."""
+        self._refresh_bank_for(self.data, self.bank, epoch=epoch)
+
+    @torch.no_grad()
+    def _refresh_bank_for(
+        self,
+        data: TrajectoryData,
+        bank: CatalogBank,
+        *,
+        epoch: int,
+    ) -> None:
         self.model.eval()
-        self.bank.reset_coverage()
-        metadata = self.data.measure_meta.set_index("measure_id")
+        bank.reset_coverage()
+        metadata = data.measure_meta.set_index("measure_id")
         grouped: dict[str, list[str]] = {}
-        for measure_id in self.data.measure_ids:
+        for measure_id in data.measure_ids:
             grouped.setdefault(metadata.loc[measure_id, "context_group_id"], []).append(measure_id)
         particles = max(2, min(16, self.training_plan.particles))
         for group_index, group_ids in enumerate(grouped.values()):
             state = sample_initial_particles(
-                self.data,
+                data,
                 group_ids,
                 particles,
                 device=self.device,
@@ -790,11 +825,9 @@ class Trainer:
                 context_provider=provider,
                 noise=noise,
             )
-            self.bank.update_from_rollout(
-                full_group_rollout, self.model, self.data, full_refresh=True
-            )
-        self.bank.last_full_refresh_epoch = int(epoch)
-        self.bank.assert_complete()
+            bank.update_from_rollout(full_group_rollout, self.model, data, full_refresh=True)
+        bank.last_full_refresh_epoch = int(epoch)
+        bank.assert_complete()
 
     @torch.no_grad()
     def _evaluate_ids(
@@ -816,14 +849,22 @@ class Trainer:
         evaluation_seed = self.training_plan.seed + 9_100_001 if seed is None else int(seed)
         if evaluation_seed < 0:
             raise ValueError("Evaluation seed must be nonnegative.")
-        provider = (
-            CatalogContextProvider(self.bank) if self.model.context_enabled else NoContextProvider()
-        )
+        if self.model.growth_enabled or self.model.context_enabled:
+            self._refresh_bank_for(
+                self.validation_data,
+                self.validation_bank,
+                epoch=self.completed_epochs,
+            )
+        if self.model.context_enabled:
+            provider = CatalogContextProvider(self.validation_bank)
+        else:
+            provider = NoContextProvider()
         for batch_index, batch_ids in enumerate(
             self._batches(
                 measure_ids,
                 seed=self.training_plan.seed + 9_000_001,
                 batch_size=self.settings.evaluation.measures_per_batch,
+                data=self.validation_data,
             )
         ):
             particle_rollout = self._rollout_ids(
@@ -831,10 +872,11 @@ class Trainer:
                 particles=evaluation_particles,
                 seed=evaluation_seed + batch_index,
                 provider=provider,
+                data=self.validation_data,
             )
             checkpoint = checkpoint_geometry_mass_loss(
                 particle_rollout,
-                self.data,
+                self.validation_data,
                 mass_weight=self.settings.loss.mass,
                 include_mass=include_mass,
                 validation_source=validation_source,
@@ -848,13 +890,15 @@ class Trainer:
 
     def evaluate(
         self,
-        data: TrajectoryData | None = None,
+        data: TrajectoryData | FiniteMeasureDynamicsProblem | None = None,
         *,
         particles: int | None = None,
         seed: int | None = None,
     ) -> pd.DataFrame:
         """Evaluate held-out measures, or training measures when no holdout exists."""
-        if data is not None and data is not self.data:
+        if data is not None and all(
+            data is not candidate for candidate in (self.data, self.validation_data, self.problem)
+        ):
             raise ValueError("External evaluation data must be loaded as a separate Trainer run.")
         return self._evaluate_ids(
             self.validation_measure_ids,
@@ -867,7 +911,7 @@ class Trainer:
     def evaluate_runtime(
         self,
         *,
-        study: TrajectoryData | None = None,
+        study: TrajectoryData | FiniteMeasureDynamicsProblem | None = None,
         particles: int | None = None,
         seed: int | None = None,
         **kwargs: Any,
@@ -875,7 +919,7 @@ class Trainer:
         """Adapter from compact-v3 to the stable evaluation facade."""
         if kwargs:
             raise TypeError(f"Unsupported compact-v3 evaluation options: {sorted(kwargs)}")
-        from .evaluation import standardize_compact_metrics
+        from ...evaluation import standardize_compact_metrics
 
         frame = self.evaluate(study, particles=particles, seed=seed)
         return standardize_compact_metrics(
@@ -886,7 +930,7 @@ class Trainer:
         )
 
     def _manifest(self) -> dict[str, Any]:
-        from . import __version__
+        from ... import __version__
 
         git_sha, git_dirty = _git_state()
         distributions = {
@@ -963,6 +1007,16 @@ class Trainer:
                     else {}
                 ),
             },
+            "compiled_problem": (
+                None
+                if self.problem is None
+                else {
+                    "kind": self.problem.problem_kind,
+                    "problem_hash": self.problem.problem_hash,
+                    "study_content_hash": self.problem.study_content_hash,
+                    "selection_hash": self.problem.selection_hash,
+                }
+            ),
             "split_contract": _split_contract(self),
             "checkpoint_mode": "inference_only",
             "checkpoint_sha256": self.checkpoint_sha256,
@@ -1002,6 +1056,10 @@ class Trainer:
                 "schema_version": 2,
                 "envelope": _compact_checkpoint_envelope(self),
                 "run_contract": _checkpoint_contract(self.data, self.config),
+                "validation_run_contract": _checkpoint_contract(self.validation_data, self.config),
+                "compiled_problem_hash": (
+                    None if self.problem is None else self.problem.problem_hash
+                ),
                 "architecture": self.model.architecture(),
                 "model_state": self.model.state_dict(),
                 "log_count_concentration": self.log_count_concentration.detach().cpu(),
@@ -1026,7 +1084,7 @@ class Trainer:
         pd.DataFrame(self.history_rows).to_parquet(
             output_dir / "tables/history.parquet", index=False
         )
-        from .evaluation import evaluation_tables, standardize_compact_metrics
+        from ...evaluation import evaluation_tables, standardize_compact_metrics
 
         wide_metrics = standardize_compact_metrics(
             self,
@@ -1039,12 +1097,12 @@ class Trainer:
         tables.predictions.to_parquet(output_dir / "tables/predictions.parquet", index=False)
         tables.metrics.to_parquet(output_dir / "tables/metrics.parquet", index=False)
         tables.diagnostics.to_parquet(output_dir / "tables/diagnostics.parquet", index=False)
-        from .counterfactual import COUNTERFACTUAL_COLUMNS
+        from ...counterfactual import COUNTERFACTUAL_COLUMNS
 
         pd.DataFrame(self.counterfactual_rows, columns=COUNTERFACTUAL_COLUMNS).to_parquet(
             output_dir / "tables/counterfactuals.parquet", index=False
         )
-        from .artifacts import write_compact_run_json
+        from ...artifacts import write_compact_run_json
 
         write_compact_run_json(self)
         return output_dir
@@ -1059,7 +1117,7 @@ class Trainer:
     def load(
         cls,
         checkpoint: str | Path,
-        data: TrajectoryData,
+        data: TrajectoryData | FiniteMeasureDynamicsProblem,
         config: RunConfig,
         *,
         device: str | torch.device = "cpu",
@@ -1074,22 +1132,44 @@ class Trainer:
             )
             settings = settings.model_copy(update={"evaluation": evaluation})
             config = config.model_copy(update={"recipe_config": settings})
-        validate_run_data(config, data)
+        problem = data if isinstance(data, FiniteMeasureDynamicsProblem) else None
+        training_data = data.training if problem is not None else data
+        validation_data = data.validation if problem is not None else data
         checkpoint_path = Path(checkpoint).expanduser().resolve()
         payload = torch.load(checkpoint_path, map_location=selected_device, weights_only=True)
         if payload.get("schema_version") != 2:
             raise ValueError("Unsupported CREDO checkpoint schema.")
         if "envelope" not in payload:
             raise ValueError("Schema-v2 checkpoint is missing its envelope.")
-        from .artifacts import CheckpointEnvelope, tensor_state_sha256
-        from .recipes.compact_v3 import recipe as compact_recipe
+        compatibility_partitioned = False
+        if (
+            problem is None
+            and payload.get("compiled_problem_hash") is not None
+            and payload.get("split_plan") is not None
+        ):
+            compatibility_split = SplitPlan.from_dict(payload["split_plan"])
+            training_data = _partition_trajectory_data(
+                data,
+                compatibility_split,
+                validation=False,
+            )
+            validation_data = _partition_trajectory_data(
+                data,
+                compatibility_split,
+                validation=True,
+            )
+            compatibility_partitioned = True
+        validate_run_data(config, training_data)
+        validate_run_data(config, validation_data)
+        from ...artifacts import CheckpointEnvelope, tensor_state_sha256
+        from .recipe import recipe as compact_recipe
 
         envelope = CheckpointEnvelope.from_dict(payload["envelope"])
         if envelope.recipe != _compact_recipe_contract():
             raise ValueError("Checkpoint recipe disagrees with compact-v3.")
         if envelope.study_contract != payload.get("run_contract"):
             raise ValueError("Checkpoint envelope disagrees with its run contract.")
-        if envelope.representation_contract != data.representation.to_dict():
+        if envelope.representation_contract != training_data.representation.to_dict():
             raise ValueError("Checkpoint representation contract disagrees with the data.")
         if envelope.capabilities != asdict(_compact_capabilities()):
             raise ValueError("Checkpoint capabilities disagree with compact-v3.")
@@ -1110,10 +1190,11 @@ class Trainer:
             "train_time_labels": list(payload["train_time_labels"]),
             "validation_time_labels": list(payload["validation_time_labels"]),
             "representation_scope": payload.get("representation_scope", "shared"),
-            "representation_fit_scope": data.representation.fit_scope,
+            "representation_fit_scope": training_data.representation.fit_scope,
         }
         if payload.get("split_plan") is not None:
-            split_plan = SplitPlan.from_dict(payload["split_plan"])
+            raw_split_plan = payload["split_plan"]
+            split_plan = SplitPlan.from_dict(raw_split_plan)
             payload_split.update(
                 {
                     "split_id": split_plan.split_id,
@@ -1123,6 +1204,21 @@ class Trainer:
                     "held_out_observations": list(split_plan.held_out_observations),
                 }
             )
+            if "task_kind" in raw_split_plan:
+                payload_split.update(
+                    {
+                        "representation_protocol": split_plan.representation_protocol,
+                        "task_kind": split_plan.task_kind,
+                        "held_out_subject_ids": list(split_plan.held_out_subject_ids),
+                        "held_out_experimental_unit_ids": list(
+                            split_plan.held_out_experimental_unit_ids
+                        ),
+                        "held_out_perturbation_ids": list(split_plan.held_out_perturbation_ids),
+                        "held_out_construct_ids": list(split_plan.held_out_construct_ids),
+                        "held_out_target_ids": list(split_plan.held_out_target_ids),
+                        "held_out_context_ids": list(split_plan.held_out_context_ids),
+                    }
+                )
         if envelope.split_contract != payload_split:
             raise ValueError("Checkpoint split state disagrees with its envelope.")
         for name in ("training_plan", "objective_descriptors", "execution_trace"):
@@ -1132,34 +1228,55 @@ class Trainer:
                 )
         architecture = dict(payload["architecture"])
         model = CREDOModel(**architecture).to(selected_device)
-        if not _model_matches(model, data, config):
+        if not _model_matches(model, training_data, config):
             raise ValueError("Checkpoint architecture disagrees with the run data or config.")
         if not _checkpoint_contract_matches(
-            payload.get("run_contract"), _checkpoint_contract(data, config)
+            payload.get("run_contract"), _checkpoint_contract(training_data, config)
         ):
             raise ValueError("Checkpoint run contract disagrees with the data or config.")
-        plan = compact_recipe.training_plan(data, settings)
-        objectives = compact_recipe.build_objectives(data, settings)
+        if payload.get("validation_run_contract") is not None and not _checkpoint_contract_matches(
+            payload["validation_run_contract"],
+            _checkpoint_contract(validation_data, config),
+        ):
+            raise ValueError("Checkpoint validation contract disagrees with the data or config.")
+        expected_problem_hash = (
+            payload.get("compiled_problem_hash")
+            if compatibility_partitioned
+            else (None if problem is None else problem.problem_hash)
+        )
+        if payload.get("compiled_problem_hash") != expected_problem_hash:
+            raise ValueError("Checkpoint compiled problem hash disagrees with the data.")
+        plan = compact_recipe.training_plan(training_data, settings)
+        objectives = compact_recipe.build_objectives(training_data, settings)
         if payload.get("training_plan") != plan.to_dict():
             raise ValueError("Checkpoint training plan disagrees with the run config.")
         if payload.get("objective_descriptors") != [value.to_dict() for value in objectives]:
             raise ValueError("Checkpoint objectives disagree with the run config.")
         model.load_state_dict(payload["model_state"])
         grid = axis_grid(
-            data.axis,
+            training_data.axis,
             plan.steps_per_interval,
             device=selected_device,
             dtype=torch.float32,
         )
         bank = CatalogBank.empty(
-            data,
+            training_data,
+            model,
+            len(grid) - 1,
+            device=selected_device,
+            dtype=torch.float32,
+        )
+        validation_bank = CatalogBank.empty(
+            validation_data,
             model,
             len(grid) - 1,
             device=selected_device,
             dtype=torch.float32,
         )
         trainer = cls(
-            data=data,
+            data=training_data,
+            validation_data=validation_data,
+            problem=problem,
             model=model,
             config=config,
             training_plan=plan,
@@ -1170,6 +1287,7 @@ class Trainer:
                 payload["log_count_concentration"].to(selected_device)
             ),
             bank=bank,
+            validation_bank=validation_bank,
             train_measure_ids=tuple(payload["train_measure_ids"]),
             validation_measure_ids=tuple(payload["validation_measure_ids"]),
             train_time_labels=tuple(payload["train_time_labels"]),
@@ -1199,6 +1317,109 @@ def _validation_split(
 ) -> SplitPlan:
     """Compatibility entry point backed by the shared pre-compilation planner."""
     return plan_compact_trajectory_split(data, config, seed=seed)
+
+
+class _TrajectorySubset(Mapping[str, Mapping[str, Any]]):
+    """Lazy checkpoint/measure subset used by schema-v2 checkpoint compatibility."""
+
+    is_lazy = True
+
+    def __init__(
+        self,
+        data: TrajectoryData,
+        measure_ids: tuple[str, ...],
+        target_labels: tuple[str, ...],
+    ) -> None:
+        self._data = data
+        selected = set(measure_ids)
+        targets = set(target_labels)
+        self.latent_dim = data.latent_dim
+        self._ids = {
+            label: tuple(
+                measure_id
+                for measure_id in measure_ids
+                if measure_id in data.measures[label]
+                and (label == data.axis.source or label in targets)
+            )
+            for label in data.axis.labels
+        }
+        self._selected = selected
+
+    def __getitem__(self, label: str) -> Mapping[str, Any]:
+        label = str(label)
+        return MappingProxyType(
+            {measure_id: self._data.measures[label][measure_id] for measure_id in self._ids[label]}
+        )
+
+    def __iter__(self):
+        return iter(self._ids)
+
+    def __len__(self) -> int:
+        return len(self._ids)
+
+
+def _partition_trajectory_data(
+    data: TrajectoryData,
+    split: SplitPlan,
+    *,
+    validation: bool,
+) -> TrajectoryData:
+    measure_ids = split.validation_measure_ids if validation else split.train_measure_ids
+    target_labels = split.validation_time_labels if validation else split.train_time_labels
+    metadata = data.measure_meta.loc[data.measure_meta["measure_id"].isin(measure_ids)].copy()
+    order = {measure_id: index for index, measure_id in enumerate(metadata["measure_id"])}
+    full_metadata = data.measure_meta.reset_index(drop=True)
+    selected = set(measure_ids)
+    blocks: list[CountBlock] = []
+    for block in data.count_blocks:
+        if block.time_label not in target_labels:
+            continue
+        original_indices = block.measure_indices.detach().cpu().numpy().astype(int)
+        original_ids = full_metadata.iloc[original_indices]["measure_id"].astype(str).tolist()
+        mask = np.asarray([measure_id in selected for measure_id in original_ids], dtype=bool)
+        if not mask.any():
+            continue
+        if not mask.all() and block.conditioning_policy == "require_complete":
+            raise ValueError(
+                "Compatibility checkpoint split cuts a complete composition denominator."
+            )
+        selected_ids = [value for value, keep in zip(original_ids, mask, strict=True) if keep]
+        exposure = block.exposure.detach().cpu().numpy()[mask]
+        counts = block.counts.detach().cpu().numpy()[mask]
+        modeled_denominator = block.modeled_denominator_id
+        policy = block.conditioning_policy
+        if not mask.all():
+            policy = "condition_on_selection"
+            modeled_denominator = (
+                f"{block.source_denominator_id}|conditioned:{split.split_id[-16:]}"
+            )
+        blocks.append(
+            CountBlock(
+                context_group_id=block.context_group_id,
+                time_label=block.time_label,
+                measure_indices=np.asarray([order[value] for value in selected_ids]),
+                exposure=exposure,
+                counts=counts,
+                background_series_ids=block.background_series_ids,
+                background_fitness=block.background_fitness,
+                background_exposure=block.background_exposure,
+                background_counts=block.background_counts,
+                source_denominator_id=block.source_denominator_id,
+                modeled_denominator_id=modeled_denominator,
+                conditioning_policy=policy,
+            )
+        )
+    runtime_metadata = dict(data.metadata)
+    runtime_metadata["split_plan"] = split.to_dict()
+    return TrajectoryData(
+        axis=data.axis,
+        measures=_TrajectorySubset(data, tuple(measure_ids), tuple(target_labels)),
+        measure_meta=metadata,
+        mass_semantics=data.mass_semantics,
+        count_blocks=tuple(blocks),
+        metadata=runtime_metadata,
+        representation=data.representation,
+    )
 
 
 def _representation_scope(
@@ -1344,27 +1565,27 @@ def _checkpoint_contract_matches(saved: Any, current: Mapping[str, Any]) -> bool
 
 
 def _compact_capabilities():
-    from .recipes.compact_v3 import recipe
+    from .recipe import recipe
 
     return recipe.capabilities
 
 
 def _compact_recipe_contract() -> dict[str, str]:
-    root = Path(__file__).resolve().parent
+    root = Path(__file__).resolve().parents[2]
     digest = hashlib.sha256()
     files = (
         root / "artifacts.py",
         root / "contracts.py",
         root / "counterfactual.py",
         root / "evaluation.py",
-        root / "model.py",
-        root / "objective.py",
-        root / "particles.py",
         root / "runtime.py",
-        root / "training.py",
         root / "data/splits.py",
-        root / "recipes/compact_v3.py",
         root / "recipes/trajectory_compiler.py",
+        root / "recipes/compact_sde_v3/model.py",
+        root / "recipes/compact_sde_v3/objective.py",
+        root / "recipes/compact_sde_v3/particles.py",
+        root / "recipes/compact_sde_v3/recipe.py",
+        root / "recipes/compact_sde_v3/training.py",
     )
     for path in files:
         digest.update(path.relative_to(root).as_posix().encode("utf-8"))
@@ -1399,11 +1620,24 @@ def _split_contract(trainer: Trainer) -> dict[str, Any]:
                 "held_out_observations": list(split.held_out_observations),
             }
         )
+        if "task_kind" in raw_split:
+            contract.update(
+                {
+                    "representation_protocol": split.representation_protocol,
+                    "task_kind": split.task_kind,
+                    "held_out_subject_ids": list(split.held_out_subject_ids),
+                    "held_out_experimental_unit_ids": list(split.held_out_experimental_unit_ids),
+                    "held_out_perturbation_ids": list(split.held_out_perturbation_ids),
+                    "held_out_construct_ids": list(split.held_out_construct_ids),
+                    "held_out_target_ids": list(split.held_out_target_ids),
+                    "held_out_context_ids": list(split.held_out_context_ids),
+                }
+            )
     return contract
 
 
 def _compact_checkpoint_envelope(trainer: Trainer) -> dict[str, Any]:
-    from .artifacts import CheckpointEnvelope, CheckpointMode, tensor_state_sha256
+    from ...artifacts import CheckpointEnvelope, CheckpointMode, tensor_state_sha256
 
     state = trainer.model.state_dict()
     objective_state = {"log_count_concentration": trainer.log_count_concentration.detach().cpu()}
@@ -1454,7 +1688,7 @@ def _file_sha256(path: Path, chunk_size: int = 8 * 1024 * 1024) -> str:
 
 
 def _git_state() -> tuple[str | None, bool | None]:
-    repository = Path(__file__).resolve().parents[2]
+    repository = Path(__file__).resolve().parents[4]
     if not (repository / ".git").exists():
         return None, None
     try:

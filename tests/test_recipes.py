@@ -16,6 +16,7 @@ from credo.particles import (
 )
 from credo.recipes.compact_v3 import CompactSDEV3Recipe
 from credo.registry import RecipeUnavailableError, available_recipes, get_recipe
+from credo.runtime import LongitudinalPerturbSeqRecipe, PredictionQuery
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -51,6 +52,7 @@ def test_compact_recipe_is_registered_and_builds_the_canonical_model(
     assert "credo.compact_sde_v3@3.0" in available_recipes()
     recipe = get_recipe("credo.compact_sde_v3@3.0")
     assert isinstance(recipe, CompactSDEV3Recipe)
+    assert isinstance(recipe, LongitudinalPerturbSeqRecipe)
     model = recipe.build_model(tiny_data, tiny_config.recipe_config)
     assert model.architecture()["latent_dim"] == tiny_data.latent_dim
     assert recipe.build_representation(tiny_data, None, {}) is tiny_data.representation
@@ -68,6 +70,23 @@ def test_compact_recipe_is_registered_and_builds_the_canonical_model(
         default_config.training.measures_per_batch
     )
     assert default_plan.stages[0].optimizer.learning_rate == (default_config.training.learning_rate)
+
+
+def test_compact_recipe_predicts_through_the_typed_query(trained_run) -> None:
+    recipe = get_recipe("credo.compact_sde_v3@3.0")
+    series_id = trained_run.validation_measure_ids[0]
+    checkpoint_id = trained_run.validation_time_labels[0]
+    result = recipe.predict(
+        trained_run,
+        PredictionQuery(
+            series_ids=(series_id,),
+            checkpoint_ids=(checkpoint_id,),
+            particles=4,
+            seed=91,
+        ),
+    )
+    assert set(result.predictions["series_id"]) == {series_id}
+    assert set(result.predictions["checkpoint_id"]) == {checkpoint_id}
 
 
 def test_compact_execution_trace_matches_the_immutable_plan(trained_run) -> None:

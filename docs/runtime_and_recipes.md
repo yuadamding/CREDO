@@ -1,146 +1,148 @@
 # Runtime and recipes
 
-CREDO keeps semantic selection, split planning, compilation, and numerical
-execution as separate contracts.
+CREDO recipes are model implementations over one longitudinal Perturb-seq
+contract. They do not read cohorts or define competing study schemas.
 
-## Recipe boundary
+## Recipe protocol
 
-Each recipe publishes:
+Every `LongitudinalPerturbSeqRecipe` provides:
 
-- a stable ID and version;
-- `RecipeRequirements` for design, representations, abundance, references,
-  context, compositions, and replicates;
-- a split planner and Study compiler;
-- model, objective, training-plan, and checkpoint contracts;
-- explicit capabilities for training, inference, evaluation, resume, and
-  counterfactuals.
+```text
+config_schema
+requirements
+plan_split
+compile
+validate_compiled
+fit
+load
+predict
+counterfactual
+```
 
-`train()` and `TrainingEngine.fit()` accept a `Study` or `StudyView`, plan and
-verify the split, check representation leakage, validate recipe requirements,
-compile through the recipe, and only then construct the model. Unsupported
-semantics fail before tensorization.
+`PredictionQuery` selects stable series and checkpoints. `CounterfactualQuery`
+selects one series and enforces same source, same noise, and an explicit context
+policy. Results use recipe-neutral prediction, metric, diagnostic, and
+counterfactual tables.
 
-The old `TrajectoryData` numerical object remains an internal compiler target
-and a deprecated compatibility input. It is not a competing semantic API.
+The compatibility methods for model construction, objective declaration,
+training plans, and checkpoint codecs remain while alpha checkpoints are still
+supported. The engine validates both biological requirements and compiled
+problem kind before constructing tensors or a model.
 
-## Split contract
+## Requirements
 
-`SplitPlan` is created before compilation and contains:
+`LongitudinalPerturbSeqRequirements` declares checkpoint mode, topologies, axis
+kinds, intervention timing, perturbation kinds, combination and unseen-target
+support, representation kinds and protocols, abundance semantics, composition
+support, control/reference limits, missing geometry, replicate modes,
+continuity, sample scope, and context mode.
 
-- exact train and validation series, checkpoints, and observations;
-- train and validation `SelectionSpec` values;
-- held-out series, checkpoints, and observations;
-- split strategy and evaluation source;
-- shared or nested representation scope;
-- transductive or inductive evaluation label;
-- a SHA-256 ID bound to the selected Study content.
+Context mode is one of none, series-static, observation-varying, or population
+ecology. Population ecology is validated against physical pool evidence; a
+sequencing or capture group is rejected.
 
-Saved plans are structurally revalidated when a run is opened. Generic loading
-uses the saved plan rather than re-inferring a default split, so caller-supplied
-explicit splits remain reproducible.
+Unsupported semantics fail before compilation. Examples include a target-held
+out task for a recipe without unseen-target support, multiple reference pools
+for compact-v3, an all-checkpoint representation presented as inductive, or an
+absolute-growth claim from relative abundance.
 
-For nested checkpoint validation, held-out checkpoints must be absent from the
-representation fit scope. For nested series or context validation, held-out
-series must be absent. Shared representations are accepted but explicitly
-labeled transductive.
+## Split planning
 
-## Shared numerical contract
+`SplitPlan` is content-addressed and stores exact train/validation selections,
+series, checkpoints, observations, task kind, representation protocol, and all
+held-out biological identities. The same immutable plan is used by compilation,
+training, evaluation, checkpoints, and run reload.
 
-Weighted-SDE recipes use `ParticleState` and the common Euler-Maruyama driver.
-Absolute particle weight is always `log_m0 + logw`; conditional stabilization
-never replaces absolute mass. Recipe kernels own coefficient evaluation while
-the driver owns updates, noise consumption, and checkpoint capture.
+Tasks include subject, experimental unit, guide within target, target,
+perturbation, context, checkpoint interpolation/extrapolation, combination,
+series, and train-self evaluation. Legacy `SplitSpec` names remain accepted as
+typed requests and are resolved into the richer plan.
 
-Controls have no residual parameter. A reference counterfactual reuses source
-particles, source masses, and Brownian noise and removes only the selected
-residual.
+Representation checks are task-specific. Nested subject evaluation checks fit
+subjects; checkpoint evaluation checks fit checkpoints; perturbation and target
+tasks check fit perturbations. Fully nested representations must bind the exact
+split and optional training-selection hash.
 
-Composition compilation carries both source and modeled denominator IDs.
-Background-preserving selections retain detached background fitness, exposure,
-and counts. Selection-conditioned blocks receive a new content-derived
-denominator identity.
+## Compiled problems
+
+The framework exposes a small problem family:
+
+- `FiniteMeasureDynamicsProblem` for weighted ODE/SDE and reaction-drift-
+  diffusion recipes.
+- `UnbalancedFlowProblem` for endpoint or adjacent-checkpoint transport with
+  mass variation.
+- `StateSequencePredictionProblem` for source/context/target generators.
+- `CouplingProblem` for probabilistic adjacent-checkpoint maps.
+
+`FiniteMeasureDynamicsProblem` contains independent training and validation
+numerical payloads plus a `CompiledLPSSplit` with permitted source observations,
+training targets, validation targets, and optional denominator background.
+Held-out outcomes cannot be reached through the training payload. When a
+perturbation holdout cuts a composition block, training receives a new
+selection-conditioned denominator rather than validation counts.
+
+`TrajectoryData` is retained only as the compact/transformer numerical payload
+and direct compatibility input. It is not a public biological study.
 
 ## Released recipes
 
-### `credo.compact_sde_v3@3.0`
+### Compact weighted-SDE v3
 
-Compact-v3 supports fresh training on chain designs, one global soft reference,
-optional catalog context, geometry/mass/count objectives, FP32 execution, and a
-state-to-mass-to-context schedule. Context and sample identities must remain
-static within a series. Replicates may be selected or pooled before numerical
-execution.
+`credo.compact_sde_v3@3.0` supports fresh endpoint and multitime chain fitting,
+latent supports, optional abundance and composition likelihood, flat guide- or
+target-level effects, one global soft reference, and optional population catalog
+context. Its model, particle solver, objectives, and trainer are isolated in
+`credo.recipes.compact_sde_v3`.
 
-### `credo.transformer_sde_v2@2.0`
+Training uses the training finite-measure payload and training catalog bank.
+Evaluation uses a separately compiled validation payload and validation bank.
+Validation source states are available only as task inputs; target outcomes do
+not enter fitting.
 
-Transformer-v2 preserves the historical 146-tensor dynamics architecture and
-14-tensor expression VAE. Its importer strict-loads raw or embedded EMA state,
-verifies source and portable-artifact hashes, and records the archived training
-plan. Imported bundles are inference-only because optimizer, scheduler, RNG,
-and terminal training state were not preserved.
+### Archived transformer-SDE v2
 
-Raw cohort interpretation and fold orchestration remain external adapter work.
-Core CI uses generated complete-shape fixtures and contains no private cohort
-paths.
+`credo.transformer_sde_v2@2.0` consumes the same finite-measure problem for
+strict imported inference. It preserves the historical dynamics and expression
+VAE contracts. Fresh training and resume remain unavailable because optimizer,
+scheduler, RNG, and terminal training state were not archived.
 
-## Generic run bundle
+The two recipes share biological contracts and output tables, not architecture,
+objective tensors, or representation assumptions.
 
-Every released runtime is opened through `open_run("run/run.json")`.
-`run.json` records:
+## Same-start counterfactuals
 
-- recipe and checkpoint codec;
-- resolved config and capabilities;
-- Study, selection, split, and compiled-problem identities;
-- state and output paths;
-- size and SHA-256 for every artifact;
-- a run contract hash.
+A reference counterfactual starts from the factual empirical source population,
+retains source abundance, uses the same Brownian noise, and removes only the
+selected perturbation residual while retaining the chosen reference effect.
+Context can be recomputed self-consistently or clamped when the recipe supports
+it. This is a model contrast, not a lineage or causal-effect claim.
 
-The loader verifies artifacts, resolves the recipe registry entry, reopens the
-bound Study, verifies content and selection hashes, validates the persisted
-split, recompiles the problem, and delegates state reconstruction to
-`recipe.load_checkpoint()`.
-
-Imported transformer runs may be created unbound. `bind_run_study()` validates
-a config and Study against the imported representation contract and rewrites
-the run manifest with semantic identities. After binding, compact and
-transformer runs use the same evaluate and counterfactual dispatch.
-
-## Output contract
-
-Outputs are separated by meaning:
+## Run bundles
 
 ```text
-predictions: run, recipe, representation, series, observation, checkpoint,
-             predicted and observed log abundance
-
-metrics:     run, recipe, series, observation, checkpoint,
-             metric_name, value, unit
-
-diagnostics: run, recipe, series, observation, checkpoint,
-             diagnostic_name, value, unit
+run/
+|-- run.json
+|-- state/checkpoint.pt
+`-- tables/
+    |-- history.parquet
+    |-- predictions.parquet
+    |-- metrics.parquet
+    |-- diagnostics.parquet
+    `-- counterfactuals.parquet
 ```
 
-Particle ESS, maximum weight fraction, integration steps, particle counts, and
-seeds are diagnostics rather than required common metrics. Deterministic ODE,
-OT, or decoder recipes can therefore emit the same common tables without
-inventing particle values.
+`run.json` records recipe and codec IDs, resolved config, capabilities, study
+hash, selection hash, exact split, problem hash, state contract, and every
+artifact hash. `open_run()` verifies these identities, reopens the bound study,
+recompiles the saved split, and delegates state loading to the recipe.
 
-## Checkpoint modes
+Predictions are keyed by series, observation, checkpoint, and representation.
+Metrics are long-form; ESS, weight concentration, integration steps, particle
+counts, and seeds are diagnostics. Deterministic future recipes can use the same
+tables without fabricating particle fields.
 
-- `inference_only`: evaluation is supported but continuation is not.
-- `resume_capable`: model, optimizer, scheduler, and RNG state are complete.
-- `training_recipe_only`: a typed design exists without inference state.
+## Repository boundary
 
-Current compact and imported transformer checkpoints are honestly marked
-`inference_only`. Compact supports deterministic fresh fitting, but its saved
-checkpoint is not resumable.
-
-## Claim boundary
-
-Compact-v3 supports fresh fitting and same-study evaluation. Transformer-v2
-supports strict imported inference after binding a compatible same-study
-selection. Neither recipe claims arbitrary cross-dataset evaluation,
-checkpoint resume, or cross-hardware bitwise retraining.
-
-Cross-recipe comparisons may share splits, endpoint metrics, rankings,
-uncertainty, runtime, and memory. Raw objectives, tensors, and coordinates from
-different representations are not directly comparable.
+Raw cohort interpretation, preprocessing, fold orchestration, and replay
+commands remain outside CREDO core. An adapter constructs one native v4 study;
+all recipes then use that study without cohort-name branches.

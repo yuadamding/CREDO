@@ -484,23 +484,24 @@ def test_count_loss_uses_only_active_context_groups(tiny_data) -> None:
     assert torch.equal(original, changed)
 
 
-def test_count_only_batch_uses_complete_bank(tiny_data, trained_run) -> None:
+def test_count_only_validation_batch_uses_validation_bank(trained_run) -> None:
     source_only_id = "D2::GENE2-2"
+    validation_data = trained_run.validation_data
     measures = {
         label: {
             measure_id: measure
             for measure_id, measure in by_measure.items()
-            if measure_id != source_only_id or label == tiny_data.axis.source
+            if measure_id != source_only_id or label == validation_data.axis.source
         }
-        for label, by_measure in tiny_data.measures.items()
+        for label, by_measure in validation_data.measures.items()
     }
-    count_only_data = replace(tiny_data, measures=measures)
+    count_only_data = replace(validation_data, measures=measures)
     state = sample_initial_particles(count_only_data, (source_only_id,), 4, seed=37)
     particle_rollout = rollout(
         trained_run.model,
         state,
         trained_run.grid,
-        context_provider=CatalogContextProvider(trained_run.bank),
+        context_provider=CatalogContextProvider(trained_run.validation_bank),
     )
     result = total_objective(
         particle_rollout,
@@ -509,7 +510,7 @@ def test_count_only_batch_uses_complete_bank(tiny_data, trained_run) -> None:
         count_weight=0.01,
         include_mass=True,
         log_concentration=trained_run.log_count_concentration,
-        fitness_bank=trained_run.bank,
+        fitness_bank=trained_run.validation_bank,
     )
     assert result.checkpoint.observation_count == 0
     assert torch.isfinite(result.count)

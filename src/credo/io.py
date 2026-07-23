@@ -8,6 +8,7 @@ import threading
 from collections import OrderedDict
 from collections.abc import Iterator, Mapping
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -95,7 +96,17 @@ class StudySelectionConfig(_StrictModel):
     representation_id: str | None = None
     abundance_channel: str | None = "__primary__"
     series_ids: tuple[str, ...] | None = None
+    observation_ids: tuple[str, ...] | None = None
     checkpoint_ids: tuple[str, ...] | None = None
+    subject_ids: tuple[str, ...] | None = None
+    experimental_unit_ids: tuple[str, ...] | None = None
+    perturbation_ids: tuple[str, ...] | None = None
+    construct_ids: tuple[str, ...] | None = None
+    target_ids: tuple[str, ...] | None = None
+    context_ids: tuple[str, ...] | None = None
+    control_kinds: tuple[str, ...] | None = None
+    qc_tiers: tuple[str, ...] | None = None
+    perturbation_filter: dict[str, Any] | None = None
     condition_filter: dict[str, Any] | None = None
     observation_filter: dict[str, Any] | None = None
     effect_binding_id: str | None = None
@@ -113,9 +124,23 @@ class StudySelectionConfig(_StrictModel):
 
         return SelectionSpec(
             series_ids=self.series_ids,
+            observation_ids=self.observation_ids,
             checkpoint_ids=self.checkpoint_ids,
+            subject_ids=self.subject_ids,
+            experimental_unit_ids=self.experimental_unit_ids,
+            perturbation_ids=self.perturbation_ids,
+            construct_ids=self.construct_ids,
+            target_ids=self.target_ids,
+            context_ids=self.context_ids,
+            control_kinds=self.control_kinds,
+            qc_tiers=self.qc_tiers,
+            perturbation_filter=self.perturbation_filter,
             condition_filter=self.condition_filter,
             observation_filter=self.observation_filter,
+            representation_id=self.representation_id,
+            abundance_channel_id=(
+                None if self.abundance_channel == "__primary__" else self.abundance_channel
+            ),
             effect_binding_id=self.effect_binding_id,
             reference_binding_id=self.reference_binding_id,
             composition_policy=self.composition_policy,
@@ -255,13 +280,142 @@ def _load_dataset_manifest(config: DataConfig, axis: Axis) -> tuple[dict[str, An
     return manifest, path
 
 
+@dataclass(frozen=True)
+class _H5ADObservationIndex:
+    """CSR-style inverse index over categorical H5AD observation identifiers."""
+
+    pairs: tuple[tuple[str, str], ...]
+    positions: np.ndarray
+    indptr: np.ndarray
+    row_count: int
+    has_atom_weight: bool
+
+
+def _h5_string_categories(node: h5py.Group, column: str) -> tuple[str, ...] | None:
+    if not isinstance(node, h5py.Group) or not {"categories", "codes"} <= set(node):
+        return None
+    categories_node = node["categories"]
+    codes_node = node["codes"]
+    if not isinstance(categories_node, h5py.Dataset) or not isinstance(codes_node, h5py.Dataset):
+        return None
+    categories = tuple(str(value) for value in categories_node.asstr()[:])
+    if (
+        not categories
+        or any(not value for value in categories)
+        or len(categories) != len(set(categories))
+    ):
+        raise ValueError(f"support.h5ad {column} categories must be unique and nonempty.")
+    return categories
+
+
+def _read_h5ad_observation_index(
+    handle: h5py.File,
+    *,
+    row_count: int,
+) -> _H5ADObservationIndex | None:
+    obs = handle.get("obs")
+    if not isinstance(obs, h5py.Group):
+        raise ValueError("support.h5ad is missing its obs table.")
+    missing = {"measure_id", "time_label"} - set(obs)
+    if missing:
+        raise ValueError(f"support.h5ad obs is missing columns: {sorted(missing)}")
+    measure_node = obs["measure_id"]
+    time_node = obs["time_label"]
+    measure_categories = _h5_string_categories(measure_node, "measure_id")
+    time_categories = _h5_string_categories(time_node, "time_label")
+    if measure_categories is None or time_categories is None:
+        return None
+    measure_codes = measure_node["codes"]
+    time_codes = time_node["codes"]
+    if measure_codes.shape != (row_count,) or time_codes.shape != (row_count,):
+        raise ValueError("support.h5ad categorical observation columns are misaligned.")
+    atom_weight = obs.get("atom_weight")
+    if atom_weight is not None and (
+        not isinstance(atom_weight, h5py.Dataset) or atom_weight.shape != (row_count,)
+    ):
+        return None
+
+    pair_codes = np.empty(row_count, dtype=np.int32)
+    rows_per_block = 1_048_576
+    measure_count = len(measure_categories)
+    for start in range(0, row_count, rows_per_block):
+        stop = min(start + rows_per_block, row_count)
+        measure_block = np.asarray(measure_codes[start:stop], dtype=np.int64)
+        time_block = np.asarray(time_codes[start:stop], dtype=np.int64)
+        if (
+            np.any(measure_block < 0)
+            or np.any(measure_block >= measure_count)
+            or np.any(time_block < 0)
+            or np.any(time_block >= len(time_categories))
+        ):
+            raise ValueError("support.h5ad categorical observation codes are invalid.")
+        if atom_weight is not None:
+            weight_block = np.asarray(atom_weight[start:stop], dtype=np.float64)
+            if not np.isfinite(weight_block).all() or np.any(weight_block <= 0):
+                raise ValueError("support.h5ad atom_weight values must be positive and finite.")
+        pair_codes[start:stop] = time_block * measure_count + measure_block
+
+    positions = np.argsort(pair_codes, kind="stable")
+    ordered_codes = pair_codes[positions]
+    starts = np.concatenate(
+        (
+            np.asarray([0], dtype=np.int64),
+            np.flatnonzero(ordered_codes[1:] != ordered_codes[:-1]) + 1,
+        )
+    )
+    indptr = np.concatenate((starts, np.asarray([row_count], dtype=np.int64)))
+    pairs = tuple(
+        (
+            time_categories[int(pair_code) // measure_count],
+            measure_categories[int(pair_code) % measure_count],
+        )
+        for pair_code in ordered_codes[starts]
+    )
+    positions.setflags(write=False)
+    indptr.setflags(write=False)
+    return _H5ADObservationIndex(
+        pairs=pairs,
+        positions=positions,
+        indptr=indptr,
+        row_count=row_count,
+        has_atom_weight=atom_weight is not None,
+    )
+
+
+def _scan_h5_dataset(node: h5py.Dataset) -> None:
+    block_bytes = max(1, node.shape[1] * node.dtype.itemsize)
+    rows_per_block = max(1, (8 * 1024 * 1024) // block_bytes)
+    for start in range(0, node.shape[0], rows_per_block):
+        block = np.asarray(node[start : start + rows_per_block])
+        try:
+            finite = np.isfinite(block).all()
+        except TypeError as exc:
+            raise ValueError("The configured latent representation must be numeric.") from exc
+        if not finite:
+            raise ValueError("The configured latent representation contains non-finite values.")
+
+
 def _read_support(
     path: Path,
     latent_key: str,
     *,
     lazy: bool,
     scan_values: bool = True,
-) -> tuple[pd.DataFrame, np.ndarray | None, int]:
+) -> tuple[pd.DataFrame | _H5ADObservationIndex, np.ndarray | None, int]:
+    if lazy:
+        with h5py.File(path, "r") as handle:
+            node = handle.get(f"obsm/{latent_key}")
+            if not isinstance(node, h5py.Dataset) or len(node.shape) != 2:
+                raise ValueError("Lazy support requires a dense two-dimensional HDF5 obsm dataset.")
+            shape = tuple(int(value) for value in node.shape)
+            if shape[0] < 1 or shape[1] < 1:
+                raise ValueError("The configured latent representation is empty.")
+            compact_index = _read_h5ad_observation_index(handle, row_count=shape[0])
+            if compact_index is not None:
+                if scan_values:
+                    _scan_h5_dataset(node)
+                return compact_index, None, shape[1]
+
     adata = ad.read_h5ad(path, backed="r" if lazy else None)
     try:
         required = {"measure_id", "time_label"}
@@ -296,20 +450,7 @@ def _read_support(
         if shape[0] != len(obs) or shape[1] < 1:
             raise ValueError("The configured latent representation is not aligned to obs.")
         if scan_values:
-            block_bytes = max(1, shape[1] * node.dtype.itemsize)
-            rows_per_block = max(1, (8 * 1024 * 1024) // block_bytes)
-            for start in range(0, shape[0], rows_per_block):
-                block = np.asarray(node[start : start + rows_per_block])
-                try:
-                    finite = np.isfinite(block).all()
-                except TypeError as exc:
-                    raise ValueError(
-                        "The configured latent representation must be numeric."
-                    ) from exc
-                if not finite:
-                    raise ValueError(
-                        "The configured latent representation contains non-finite values."
-                    )
+            _scan_h5_dataset(node)
     return obs, None, shape[1]
 
 
@@ -328,6 +469,16 @@ class _H5ADCheckpointMeasures(Mapping[str, FiniteMeasure]):
         return len(self._store.measure_ids_by_label[self._label])
 
 
+def _position_ranges(raw_positions: Any) -> tuple[tuple[int, int], ...]:
+    positions = np.sort(np.asarray(raw_positions, dtype=np.int64))
+    if not len(positions):
+        raise ValueError("One H5AD support law has no atoms.")
+    boundaries = np.flatnonzero(np.diff(positions) != 1) + 1
+    starts = np.concatenate((positions[:1], positions[boundaries]))
+    stops = np.concatenate((positions[boundaries - 1] + 1, positions[-1:] + 1))
+    return tuple((int(start), int(stop)) for start, stop in zip(starts, stops, strict=True))
+
+
 class H5ADFiniteMeasureStore(Mapping[str, Mapping[str, FiniteMeasure]]):
     """Bounded, lazy finite-measure view over a dense H5AD latent cache."""
 
@@ -337,7 +488,7 @@ class H5ADFiniteMeasureStore(Mapping[str, Mapping[str, FiniteMeasure]]):
         self,
         path: Path,
         latent_key: str,
-        obs: pd.DataFrame,
+        obs: pd.DataFrame | _H5ADObservationIndex,
         masses: pd.DataFrame,
         axis: Axis,
         *,
@@ -352,24 +503,36 @@ class H5ADFiniteMeasureStore(Mapping[str, Mapping[str, FiniteMeasure]]):
         self._handle: h5py.File | None = None
         self._cache: OrderedDict[tuple[str, str], FiniteMeasure] = OrderedDict()
         self._mass = masses.set_index(["measure_id", "time_label"])["mass"].to_dict()
-        self._atom_weight = (
-            pd.to_numeric(obs["atom_weight"], errors="raise").to_numpy(dtype=np.float64)
-            if "atom_weight" in obs
-            else np.ones(len(obs), dtype=np.float64)
-        )
-        if not np.isfinite(self._atom_weight).all() or np.any(self._atom_weight <= 0):
-            raise ValueError("support.h5ad atom_weight values must be positive and finite.")
-        grouped = obs.groupby(["time_label", "measure_id"], observed=True, sort=False).indices
-        self._positions: dict[tuple[str, str], tuple[int, int] | np.ndarray] = {}
         ids_by_label: dict[str, list[str]] = {label: [] for label in axis.labels}
-        for (label, measure_id), raw_positions in grouped.items():
-            label = str(label)
-            measure_id = str(measure_id)
-            positions = np.sort(np.asarray(raw_positions, dtype=np.int64))
-            contiguous = bool(len(positions) and positions[-1] - positions[0] + 1 == len(positions))
-            self._positions[(label, measure_id)] = (
-                (int(positions[0]), int(positions[-1]) + 1) if contiguous else positions
+        if isinstance(obs, _H5ADObservationIndex):
+            self._pair_index = {pair: index for index, pair in enumerate(obs.pairs)}
+            self._packed_positions = obs.positions
+            self._packed_indptr = obs.indptr
+            self._positions: dict[tuple[str, str], tuple[tuple[int, int], ...]] = {}
+            self._atom_weight: np.ndarray | None = None
+            self._atom_weight_on_disk = obs.has_atom_weight
+            pairs = obs.pairs
+        else:
+            self._pair_index: dict[tuple[str, str], int] = {}
+            self._packed_positions = np.empty(0, dtype=np.int64)
+            self._packed_indptr = np.asarray([0], dtype=np.int64)
+            self._atom_weight = (
+                pd.to_numeric(obs["atom_weight"], errors="raise").to_numpy(dtype=np.float64)
+                if "atom_weight" in obs
+                else None
             )
+            if self._atom_weight is not None and (
+                not np.isfinite(self._atom_weight).all() or np.any(self._atom_weight <= 0)
+            ):
+                raise ValueError("support.h5ad atom_weight values must be positive and finite.")
+            self._atom_weight_on_disk = False
+            grouped = obs.groupby(["time_label", "measure_id"], observed=True, sort=False).indices
+            self._positions = {
+                (str(label), str(measure_id)): _position_ranges(raw_positions)
+                for (label, measure_id), raw_positions in grouped.items()
+            }
+            pairs = tuple(self._positions)
+        for label, measure_id in pairs:
             ids_by_label[label].append(measure_id)
         self.measure_ids_by_label = {label: tuple(ids_by_label[label]) for label in axis.labels}
         self._views = {label: _H5ADCheckpointMeasures(self, label) for label in axis.labels}
@@ -383,13 +546,46 @@ class H5ADFiniteMeasureStore(Mapping[str, Mapping[str, FiniteMeasure]]):
     def __len__(self) -> int:
         return len(self._views)
 
-    def _dataset(self) -> h5py.Dataset:
+    def _file(self) -> h5py.File:
         if self._handle is None:
             self._handle = h5py.File(self.path, "r")
-        node = self._handle[f"obsm/{self.latent_key}"]
+        return self._handle
+
+    def _dataset(self) -> h5py.Dataset:
+        node = self._file()[f"obsm/{self.latent_key}"]
         if not isinstance(node, h5py.Dataset):  # pragma: no cover - checked at construction.
             raise TypeError("Configured latent cache is not a dense HDF5 dataset.")
         return node
+
+    def _read_ranges(
+        self,
+        dataset: h5py.Dataset,
+        ranges: tuple[tuple[int, int], ...],
+        *,
+        dtype: Any,
+    ) -> np.ndarray:
+        blocks = [np.asarray(dataset[start:stop], dtype=dtype) for start, stop in ranges]
+        return blocks[0] if len(blocks) == 1 else np.concatenate(blocks, axis=0)
+
+    def _row_positions(self, key: tuple[str, str]) -> np.ndarray:
+        if key in self._pair_index:
+            law_index = self._pair_index[key]
+            start = int(self._packed_indptr[law_index])
+            stop = int(self._packed_indptr[law_index + 1])
+            return self._packed_positions[start:stop]
+        ranges = self._positions[key]
+        return np.concatenate([np.arange(start, stop, dtype=np.int64) for start, stop in ranges])
+
+    def _read_law(
+        self,
+        dataset: h5py.Dataset,
+        key: tuple[str, str],
+        *,
+        dtype: Any,
+    ) -> np.ndarray:
+        if key in self._pair_index:
+            return np.asarray(dataset[self._row_positions(key)], dtype=dtype)
+        return self._read_ranges(dataset, self._positions[key], dtype=dtype)
 
     def measure(self, label: str, measure_id: str) -> FiniteMeasure:
         key = (str(label), str(measure_id))
@@ -398,17 +594,19 @@ class H5ADFiniteMeasureStore(Mapping[str, Mapping[str, FiniteMeasure]]):
             if cached is not None:
                 self._cache.move_to_end(key)
                 return cached
-            if key not in self._positions:
+            if key not in self._pair_index and key not in self._positions:
                 raise KeyError(measure_id)
-            selection = self._positions[key]
-            if isinstance(selection, tuple):
-                positions = np.arange(selection[0], selection[1], dtype=np.int64)
-                support = np.asarray(self._dataset()[selection[0] : selection[1]], dtype=np.float32)
+            support = self._read_law(self._dataset(), key, dtype=np.float32)
+            if self._atom_weight is not None:
+                local = self._atom_weight[self._row_positions(key)]
+            elif self._atom_weight_on_disk:
+                node = self._file()["obs/atom_weight"]
+                if not isinstance(node, h5py.Dataset):  # pragma: no cover - indexed at load.
+                    raise TypeError("Configured atom weights are not a dense HDF5 dataset.")
+                local = self._read_law(node, key, dtype=np.float64)
             else:
-                positions = selection
-                support = np.asarray(self._dataset()[positions], dtype=np.float32)
+                local = np.ones(len(support), dtype=np.float64)
             total_mass = float(self._mass[(measure_id, label)])
-            local = self._atom_weight[positions]
             measure = FiniteMeasure(support, total_mass * local / local.sum(), total_mass)
             if self.cache_size > 0:
                 self._cache[key] = measure
@@ -499,7 +697,7 @@ def _validate_denominators(
 
 
 def _build_measures(
-    obs: pd.DataFrame,
+    obs: pd.DataFrame | _H5ADObservationIndex,
     latent: np.ndarray | None,
     masses: pd.DataFrame,
     axis: Axis,
@@ -509,13 +707,18 @@ def _build_measures(
     latent_dim: int,
     cache_size: int,
 ) -> Mapping[str, Mapping[str, FiniteMeasure]]:
-    observed_pairs = set(zip(obs["measure_id"], obs["time_label"], strict=False))
+    if isinstance(obs, _H5ADObservationIndex):
+        observed_pairs = {(measure_id, time_label) for time_label, measure_id in obs.pairs}
+        observed_labels = {time_label for time_label, _ in obs.pairs}
+    else:
+        observed_pairs = set(zip(obs["measure_id"], obs["time_label"], strict=False))
+        observed_labels = set(obs["time_label"])
     mass_pairs = set(zip(masses["measure_id"], masses["time_label"], strict=False))
     if observed_pairs != mass_pairs:
         missing = sorted(observed_pairs - mass_pairs)[:5]
         extra = sorted(mass_pairs - observed_pairs)[:5]
         raise ValueError(f"Support and mass rows disagree; missing={missing}, extra={extra}.")
-    unknown_labels = set(obs["time_label"]) - set(axis.labels)
+    unknown_labels = observed_labels - set(axis.labels)
     if unknown_labels:
         raise ValueError(
             f"Support contains labels outside the configured axis: {sorted(unknown_labels)}"
@@ -530,6 +733,8 @@ def _build_measures(
             latent_dim=latent_dim,
             cache_size=cache_size,
         )
+    if not isinstance(obs, pd.DataFrame):  # pragma: no cover - compact index is lazy-only.
+        raise TypeError("Eager support construction requires materialized observations.")
     mass_lookup = masses.set_index(["measure_id", "time_label"])["mass"].to_dict()
     atom_weight = (
         pd.to_numeric(obs["atom_weight"], errors="raise").to_numpy(dtype=np.float64)
@@ -556,7 +761,7 @@ def _build_count_blocks(
 ) -> tuple[Any, ...]:
     if frame is None:
         return ()
-    from .objective import CountBlock
+    from .recipes.compact_sde_v3.objective import CountBlock
 
     index = {measure_id: idx for idx, measure_id in enumerate(measure_ids)}
     unknown = set(frame["measure_id"]) - set(index)
@@ -895,14 +1100,20 @@ def validate_inputs(config: RunConfig | str | Path) -> dict[str, Any]:
         validate_view_for_recipe(
             view, split, recipe.requirements(run_config.recipe_config)
         ).raise_for_errors()
-        data = recipe.compile_study(view, split, run_config.recipe_config)
+        problem = recipe.compile_study(view, split, run_config.recipe_config)
+        selected_measure_count = len(view.series_ids)
     finally:
         owner.close()
+    data = getattr(problem, "training", problem)
+    validation_data = getattr(problem, "validation", data)
     validate_run_data(run_config, data)
+    validate_run_data(run_config, validation_data)
     source = data.metadata.get("dataset", {}).get("source", {})
     return {
         "recipe": run_config.recipe,
-        "measure_count": len(data.measure_ids),
+        "measure_count": selected_measure_count,
+        "training_measure_count": len(data.measure_ids),
+        "validation_measure_count": len(validation_data.measure_ids),
         "embedding_count": len(data.embedding_ids),
         "control_measure_count": int(data.measure_meta["is_control"].sum()),
         "latent_dim": data.latent_dim,

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Literal
 import pandas as pd
 import torch
 
-from .particles import (
+from .recipes.compact_sde_v3.particles import (
     ClampedContextProvider,
     NoContextProvider,
     SelfConsistentContextProvider,
@@ -21,7 +21,7 @@ from .particles import (
 )
 
 if TYPE_CHECKING:
-    from .training import Trainer
+    from .recipes.compact_sde_v3.training import Trainer
 
 
 COMMON_COUNTERFACTUAL_COLUMNS = (
@@ -139,20 +139,30 @@ def counterfactual(
         )
     if device is not None and torch.device(device) != run.device:
         raise ValueError("Compact counterfactual device must match the loaded runtime device.")
-    if study is not None and study is not run.data:
+    if study is not None and all(
+        study is not candidate
+        for candidate in (
+            run.data,
+            getattr(run, "validation_data", None),
+            getattr(run, "problem", None),
+        )
+    ):
         raise ValueError("External counterfactual data must be loaded as a separate run.")
     if context_policy not in {"self_consistent", "clamped"}:
         raise ValueError("context_policy must be 'self_consistent' or 'clamped'.")
     if not same_noise:
         raise ValueError("CREDO reference counterfactuals require same_noise=True.")
-    metadata = run.data.measure_meta.set_index("measure_id")
+    counterfactual_data = run.data
+    if measure_id not in set(counterfactual_data.measure_ids):
+        counterfactual_data = getattr(run, "validation_data", run.data)
+    metadata = counterfactual_data.measure_meta.set_index("measure_id")
     if measure_id not in metadata.index:
         raise KeyError(f"Unknown measure_id {measure_id!r}.")
     group_id = metadata.loc[measure_id, "context_group_id"]
     if run.model.context_enabled:
         group_ids = tuple(
             value
-            for value in run.data.measure_ids
+            for value in counterfactual_data.measure_ids
             if metadata.loc[value, "context_group_id"] == group_id
         )
     else:
@@ -169,7 +179,7 @@ def counterfactual(
     if seed < 0:
         raise ValueError("seed must be nonnegative.")
     source = sample_initial_particles(
-        run.data,
+        counterfactual_data,
         group_ids,
         particle_count,
         device=run.device,
@@ -220,16 +230,16 @@ def counterfactual(
         noise=noise,
     )
 
-    checkpoint = checkpoint_indices(run.data.axis, run.grid)
+    checkpoint = checkpoint_indices(counterfactual_data.axis, run.grid)
     factual_diagnostics = weight_diagnostics(factual_rollout.logw_steps)
     reference_diagnostics = weight_diagnostics(reference_rollout.logw_steps)
     evaluator = _evaluator_provenance(run)
     from .evaluation import compact_split_id
-    from .training import _compact_recipe_contract
+    from .recipes.compact_sde_v3.training import _compact_recipe_contract
 
     recipe_contract = _compact_recipe_contract()
     rows = []
-    for label in run.data.axis.labels[1:]:
+    for label in counterfactual_data.axis.labels[1:]:
         step = checkpoint[label]
         factual_support = factual_rollout.z_steps[step, local_index]
         reference_support = reference_rollout.z_steps[step, local_index]
@@ -287,7 +297,7 @@ def counterfactual(
 
 def _evaluator_provenance(run: Trainer) -> dict[str, str | None]:
     from . import __version__
-    from .training import _git_state
+    from .recipes.compact_sde_v3.training import _git_state
 
     git_sha, _ = _git_state()
     return {

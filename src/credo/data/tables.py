@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -211,6 +212,394 @@ class ObservationTable(FrameTable):
     @property
     def observation_ids(self) -> tuple[str, ...]:
         return tuple(self._frame["observation_id"].tolist())
+
+
+class PerturbationTable(FrameTable):
+    """Experimentally assigned perturbations, distinct from targets and effects."""
+
+    required_columns = (
+        "perturbation_id",
+        "perturbation_kind",
+        "is_control",
+        "control_kind",
+    )
+    key_columns = ("perturbation_id",)
+    string_columns = ("perturbation_id", "perturbation_kind", "control_kind")
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        frame["is_control"] = _normalize_boolean(frame["is_control"], "is_control")
+        perturbation_kinds = {
+            "crispr_ko",
+            "crispr_i",
+            "crispr_a",
+            "base_edit",
+            "prime_edit",
+            "chemical",
+            "cytokine",
+            "receptor_blockade",
+            "combination",
+            "other",
+        }
+        control_kinds = {
+            "non_targeting",
+            "safe_targeting",
+            "untreated",
+            "vehicle",
+            "mock",
+            "positive_control",
+            "other",
+            "none",
+        }
+        unknown_perturbations = set(frame["perturbation_kind"]) - perturbation_kinds
+        unknown_controls = set(frame["control_kind"]) - control_kinds
+        if unknown_perturbations:
+            raise ValueError(
+                "PerturbationTable contains unknown perturbation kinds: "
+                f"{sorted(unknown_perturbations)}"
+            )
+        if unknown_controls:
+            raise ValueError(
+                f"PerturbationTable contains unknown control kinds: {sorted(unknown_controls)}"
+            )
+        invalid_controls = frame["is_control"] & frame["control_kind"].eq("none")
+        invalid_interventions = ~frame["is_control"] & ~frame["control_kind"].eq("none")
+        if invalid_controls.any() or invalid_interventions.any():
+            raise ValueError("control_kind must be non-'none' exactly when is_control is true.")
+        optional = tuple(
+            column for column in ("library_id", "modality", "description") if column in frame
+        )
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
+
+    @property
+    def perturbation_ids(self) -> tuple[str, ...]:
+        return tuple(self._frame["perturbation_id"].tolist())
+
+
+class PerturbationComponentTable(FrameTable):
+    """Normalized guide, reagent, target, and combination components."""
+
+    required_columns = (
+        "perturbation_id",
+        "component_id",
+        "construct_id",
+        "target_id",
+        "component_kind",
+        "dose",
+        "dose_unit",
+        "component_order",
+    )
+    key_columns = ("perturbation_id", "component_id")
+    string_columns = (
+        "perturbation_id",
+        "component_id",
+        "construct_id",
+        "target_id",
+        "component_kind",
+    )
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        _normalize_strings(frame, ("dose_unit",), nullable=frozenset({"dose_unit"}))
+        frame["dose"] = pd.to_numeric(frame["dose"], errors="coerce")
+        present_dose = frame["dose"].notna()
+        if present_dose.any():
+            values = frame.loc[present_dose, "dose"].to_numpy(float)
+            if not np.isfinite(values).all() or np.any(values < 0):
+                raise ValueError("Perturbation component doses must be finite and nonnegative.")
+        if (present_dose != frame["dose_unit"].notna()).any():
+            raise ValueError("Perturbation component dose and dose_unit must be declared together.")
+        order = pd.to_numeric(frame["component_order"], errors="raise").to_numpy(float)
+        if (
+            not np.isfinite(order).all()
+            or np.any(order < 0)
+            or not np.allclose(order, np.round(order))
+        ):
+            raise ValueError("component_order must contain nonnegative integers.")
+        frame["component_order"] = np.round(order).astype(np.int64)
+        if frame.duplicated(["perturbation_id", "component_order"]).any():
+            raise ValueError("component_order must be unique within each perturbation.")
+
+
+class InterventionEventTable(FrameTable):
+    """Timed interventions and environmental events along population series."""
+
+    required_columns = (
+        "event_id",
+        "series_id",
+        "agent_id",
+        "event_kind",
+        "modeled_role",
+        "start_coordinate",
+        "end_coordinate",
+        "start_relation",
+        "persistent",
+        "dose",
+        "dose_unit",
+    )
+    key_columns = ("event_id",)
+    string_columns = (
+        "event_id",
+        "series_id",
+        "agent_id",
+        "event_kind",
+        "modeled_role",
+        "start_relation",
+    )
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        roles = {
+            "primary_perturbation",
+            "background_stimulus",
+            "culture_change",
+            "drug_washout",
+            "selection_event",
+            "other_context",
+        }
+        relations = {
+            "before_source",
+            "at_source",
+            "between_checkpoints",
+            "after_last_observation",
+            "unknown",
+        }
+        unknown_roles = set(frame["modeled_role"]) - roles
+        unknown_relations = set(frame["start_relation"]) - relations
+        if unknown_roles:
+            raise ValueError(f"Unknown intervention modeled roles: {sorted(unknown_roles)}")
+        if unknown_relations:
+            raise ValueError(f"Unknown intervention start relations: {sorted(unknown_relations)}")
+        frame["persistent"] = _normalize_boolean(frame["persistent"], "persistent")
+        for column in ("start_coordinate", "end_coordinate", "dose"):
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+            values = frame.loc[frame[column].notna(), column].to_numpy(float)
+            if not np.isfinite(values).all():
+                raise ValueError(f"{column} must be finite when observed.")
+        if (frame["dose"].dropna() < 0).any():
+            raise ValueError("Intervention doses must be nonnegative.")
+        _normalize_strings(frame, ("dose_unit",), nullable=frozenset({"dose_unit"}))
+        if (frame["dose"].notna() != frame["dose_unit"].notna()).any():
+            raise ValueError("Intervention dose and dose_unit must be declared together.")
+        observed = frame["start_coordinate"].notna() & frame["end_coordinate"].notna()
+        if (frame.loc[observed, "end_coordinate"] < frame.loc[observed, "start_coordinate"]).any():
+            raise ValueError("Intervention end_coordinate cannot precede start_coordinate.")
+
+
+class ContextTable(FrameTable):
+    """Biological and technical covariate contexts, independent of perturbations."""
+
+    required_columns = ("context_id", "context_kind")
+    key_columns = ("context_id",)
+    string_columns = required_columns
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        optional = tuple(
+            column
+            for column in (
+                "subject_id",
+                "tissue",
+                "cell_system",
+                "stimulation",
+                "disease_state",
+                "covariates_json",
+            )
+            if column in frame
+        )
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
+        if "covariates_json" in frame:
+            for index, value in frame["covariates_json"].dropna().items():
+                try:
+                    parsed = json.loads(str(value))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(
+                        f"Context covariates_json at row {index} is invalid JSON."
+                    ) from exc
+                if not isinstance(parsed, dict):
+                    raise ValueError("Context covariates_json must encode a JSON object.")
+
+
+class PopulationSeriesTable(FrameTable):
+    """Matched population-level series; never an implicit single-cell lineage."""
+
+    required_columns = (
+        "series_id",
+        "subject_id",
+        "experimental_unit_id",
+        "perturbation_id",
+        "context_trajectory_id",
+        "biological_replicate_id",
+        "continuity_kind",
+    )
+    key_columns = ("series_id",)
+    string_columns = required_columns
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        allowed = {
+            "same_experimental_unit",
+            "matched_subject_parallel",
+            "cross_sectional_population",
+            "independent_replicate",
+            "lineage_linked",
+            "exact_lineage_traced",
+            "unknown",
+        }
+        unknown = set(frame["continuity_kind"]) - allowed
+        if unknown:
+            raise ValueError(f"Unknown population continuity kinds: {sorted(unknown)}")
+
+    @property
+    def series_ids(self) -> tuple[str, ...]:
+        return tuple(self._frame["series_id"].tolist())
+
+
+class SnapshotObservationTable(FrameTable):
+    """One destructive population observation at one experimental checkpoint."""
+
+    required_columns = (
+        "observation_id",
+        "series_id",
+        "checkpoint_id",
+        "sample_id",
+        "geometry_observed",
+        "abundance_observed",
+    )
+    key_columns = ("observation_id",)
+    string_columns = ("observation_id", "series_id", "checkpoint_id", "sample_id")
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        for column in ("geometry_observed", "abundance_observed"):
+            frame[column] = _normalize_boolean(frame[column], column)
+        optional = tuple(
+            column
+            for column in (
+                "assay_id",
+                "technical_replicate_id",
+                "context_id",
+                "population_pool_id",
+                "assignment_qc",
+                "processing_batch_id",
+                "composition_block_id",
+            )
+            if column in frame
+        )
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
+
+    @property
+    def observation_ids(self) -> tuple[str, ...]:
+        return tuple(self._frame["observation_id"].tolist())
+
+
+class PopulationPoolTable(FrameTable):
+    """Physical or computational population groupings with explicit evidence."""
+
+    required_columns = (
+        "population_pool_id",
+        "pool_kind",
+        "checkpoint_id",
+        "experimental_unit_id",
+        "evidence_level",
+        "description",
+    )
+    key_columns = ("population_pool_id",)
+    string_columns = required_columns
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        allowed = {
+            "shared_living_culture",
+            "shared_tissue",
+            "shared_animal",
+            "competition_pool",
+            "sequencing_library",
+            "capture_batch",
+            "computational_group",
+        }
+        unknown = set(frame["pool_kind"]) - allowed
+        if unknown:
+            raise ValueError(f"Unknown population pool kinds: {sorted(unknown)}")
+
+
+class PerturbationEffectBindingTable(FrameTable):
+    """Run-selectable perturbation-to-model-effect parameterization."""
+
+    required_columns = (
+        "binding_id",
+        "perturbation_id",
+        "effect_id",
+        "parameterization_kind",
+    )
+    key_columns = ("binding_id", "perturbation_id")
+    string_columns = required_columns
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        optional = tuple(
+            column for column in ("parent_effect_id", "shrinkage_group_id") if column in frame
+        )
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
+
+    @property
+    def binding_ids(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(self._frame["binding_id"].tolist()))
+
+
+class PerturbationReferenceBindingTable(FrameTable):
+    """Observed control matching and model counterfactual reference bindings."""
+
+    required_columns = (
+        "binding_id",
+        "perturbation_id",
+        "reference_pool_id",
+        "scope_kind",
+        "match_keys",
+        "counterfactual_effect_id",
+    )
+    key_columns = ("binding_id", "perturbation_id")
+    string_columns = (
+        "binding_id",
+        "perturbation_id",
+        "reference_pool_id",
+        "scope_kind",
+        "counterfactual_effect_id",
+    )
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        scopes = {
+            "global",
+            "subject",
+            "experimental_unit",
+            "context",
+            "checkpoint",
+            "processing_batch",
+        }
+        unknown = set(frame["scope_kind"]) - scopes
+        if unknown:
+            raise ValueError(f"Unknown reference binding scopes: {sorted(unknown)}")
+        _normalize_strings(frame, ("match_keys",), nullable=frozenset())
+        required_key = {
+            "global": None,
+            "subject": "subject_id",
+            "experimental_unit": "experimental_unit_id",
+            "context": "context_id",
+            "checkpoint": "checkpoint_id",
+            "processing_batch": "processing_batch_id",
+        }
+        for row in frame.itertuples(index=False):
+            try:
+                keys = json.loads(str(row.match_keys))
+            except json.JSONDecodeError as exc:
+                raise ValueError("Reference match_keys must be a JSON string array.") from exc
+            if (
+                not isinstance(keys, list)
+                or any(not isinstance(value, str) or not value for value in keys)
+                or len(keys) != len(set(keys))
+            ):
+                raise ValueError("Reference match_keys must encode unique, nonempty string keys.")
+            expected = required_key[str(row.scope_kind)]
+            if expected is not None and expected not in keys:
+                raise ValueError(
+                    f"Reference scope {row.scope_kind!r} requires match key {expected!r}."
+                )
+
+    @property
+    def binding_ids(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(self._frame["binding_id"].tolist()))
 
 
 class SupportIndexTable(FrameTable):
@@ -491,16 +880,50 @@ class CompositionTable(FrameTable):
         return tuple(dict.fromkeys(self._frame["composition_block_id"].tolist()))
 
 
+class LPSCompositionTable(CompositionTable):
+    """Composition observations whose denominator kind is scientifically explicit."""
+
+    required_columns = (*CompositionTable.required_columns, "block_kind")
+    string_columns = (*CompositionTable.string_columns, "block_kind")
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        super()._validate(frame)
+        allowed = {
+            "sequencing_library",
+            "competition_pool",
+            "culture_pool",
+            "capture_stratum",
+            "sampling_stratum",
+        }
+        unknown = set(frame["block_kind"]) - allowed
+        if unknown:
+            raise ValueError(f"Unknown composition block kinds: {sorted(unknown)}")
+        kinds = frame.groupby("composition_block_id", observed=True)["block_kind"].nunique()
+        if kinds.ne(1).any():
+            block_id = str(kinds[kinds.ne(1)].index[0])
+            raise ValueError(f"Composition block {block_id!r} has multiple block kinds.")
+
+
 __all__ = [
     "AbundanceChannelSpec",
     "AbundanceSemantics",
     "AbundanceTable",
     "CompositionTable",
     "ConditionTable",
+    "ContextTable",
     "EffectBindingTable",
     "FrameTable",
+    "InterventionEventTable",
+    "LPSCompositionTable",
     "ObservationTable",
+    "PerturbationComponentTable",
+    "PerturbationEffectBindingTable",
+    "PerturbationReferenceBindingTable",
+    "PerturbationTable",
+    "PopulationPoolTable",
+    "PopulationSeriesTable",
     "ReferenceBindingTable",
     "SeriesTable",
+    "SnapshotObservationTable",
     "SupportIndexTable",
 ]

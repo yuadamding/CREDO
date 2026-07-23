@@ -1,163 +1,190 @@
-# Study model
+# Longitudinal Perturb-seq study contract
 
-CREDO separates biological semantics from support storage and numerical
-execution:
+`PerturbSeqStudy` is the canonical biological object. It represents
+perturbation-indexed populations sampled destructively at ordered checkpoints;
+it is independent of storage and model architecture.
 
 ```text
-Study -> StudyView -> SplitPlan -> recipe compiler
+PerturbSeqStudy -> PerturbSeqView -> SplitPlan -> CompiledLPSProblem
 ```
 
-`Study` is immutable at its public boundary. Table access returns copies, while
-support laws remain lazy and are shared by zero-copy views.
+## Longitudinal design
 
-## Identities and design
+`LongitudinalDesign` has one `ProgressionAxis`, at least two checkpoints,
+allowed transitions, and a chain, star, or DAG topology. Supported progression
+kinds are physical time, ordered stage, developmental stage, disease stage,
+pseudotime, and the compatibility effect axis. Donor, dose, cell type, and
+stimulation are contexts or intervention events, not extra time axes.
 
-| Identity | Meaning |
-| --- | --- |
-| `condition_id` | Experimental intervention or control condition |
-| `series_id` | Longitudinal unit advanced through checkpoints |
-| `observation_id` | One assay or replicate of a series at one checkpoint |
+Every `PopulationSeriesTable` row includes subject, experimental unit,
+perturbation, context trajectory, biological replicate, and mandatory
+`continuity_kind`. Continuity is one of:
 
-Conditions do not require CRISPR fields. Guide, target, compound, dose,
-genotype, and modality are optional metadata. Replicates retain distinct
-observation IDs rather than becoming artificial longitudinal series.
+```text
+same_experimental_unit
+matched_subject_parallel
+cross_sectional_population
+independent_replicate
+lineage_linked
+exact_lineage_traced
+unknown
+```
 
-`StudyDesign` validates chain, star, and DAG reachability, source and target
-roles, transition direction, and monotone coordinates on ordered axes. Recipes
-declare the axis kinds and topologies they can compile.
+This field limits permissible claims. `series_id` never implies that individual
+cells survived from one checkpoint to the next.
+
+## Perturbations and events
+
+`PerturbationTable` records an experimentally assigned condition and whether it
+is a control. `PerturbationComponentTable` separately normalizes constructs,
+targets, doses, ordering, and combinations. Therefore a guide, perturbation,
+target, and model effect may have different identities.
+
+`InterventionEventTable` records every series-level primary perturbation and
+optional background events. Coordinates are explicit nullable columns;
+`start_relation` states whether an event occurred before source, at source,
+between checkpoints, after the last observation, or at an unknown time. Every
+series requires exactly one primary perturbation event whose agent matches its
+perturbation.
+
+## Destructive observations
+
+`SnapshotObservationTable` separates observation existence from observed
+modalities. `geometry_observed` and `abundance_observed` are independent. The
+support index declares every `(observation_id, representation_id)` pair as
+available or unavailable, allowing missing geometry in one representation and
+available geometry in another. Replicate snapshots retain distinct IDs and
+require distinct technical-replicate identities.
+
+`sample_id` and `context_id` name the actual destructive sample and its
+checkpoint-specific context, so either may vary across a population series.
+Recipes that need a stable numerical group use the series'
+`context_trajectory_id`; they do not reinterpret a sequencing sample as a
+continuous culture.
+
+No core logic parses biological semantics from `series_id`, `observation_id`,
+or `perturbation_id`; all joins use declared foreign keys.
+
+## Representations
+
+Each `RepresentationSpec` binds a coordinate space to one support store and
+records feature selection, normalization, encoder, decoder, and support
+artifacts. Fit provenance includes:
+
+```text
+scope_mode
+fit_split_id
+fit_selection_hash
+fit_subject_ids
+fit_perturbation_ids
+fit_checkpoint_ids
+fit_observation_scope
+```
+
+Encoded supports may cover observations outside the fitting set. The fit fields
+describe representation training, while support availability describes encoded
+output. This distinction lets CREDO label shared representations transductive
+and exact nested representations inductive for a particular task.
 
 ## Geometry and abundance
 
-An `EmpiricalLaw` contains support coordinates and probabilities summing to
-one. `SupportIndexTable` declares coverage for each
-`(observation_id, representation_id)` pair and resolves available laws through
-`(store_id, representation_id, support_key)`. A `SupportStoreRegistry` can route
-different representations to different lazy backends.
+An `EmpiricalLaw` contains finite coordinates and nonnegative probabilities
+summing to one. Abundance is a separate table of named channels. Each
+`AbundanceChannelSpec` declares absolute, relative, capture-count, unit, or
+unknown semantics; denominator scope; zero policy; and optional transform input,
+identity, and immutable parameters.
 
-Abundance is independent of geometry. Each channel declares semantics, unit,
-denominator scope, zero policy, and optional transform identity, input channel,
-and immutable transform parameters. The output channel is the channel's own ID. Calling
-`study.view()` selects the primary channel; calling
-`study.view(abundance_channel=None)` explicitly disables abundance. Raw zeros
-remain valid semantic observations, while positive-mass recipes require an
-explicit positive modeling channel.
+The study may retain raw zero counts while exposing a positive transformed
+modeling channel. A transformed row must have its observed input row. Relative
+and captured channels require denominator IDs whose declared scope agrees with
+observation metadata.
 
-## Bindings
-
-Biological conditions are immutable, but model parameter sharing is a run
-choice:
+`LPSCompositionTable` records count denominators and a mandatory `block_kind`:
 
 ```text
-EffectBindingTable
-binding_id, condition_id, effect_id, parameterization_kind,
-parent_effect_id?, shrinkage_group_id?
-
-ReferenceBindingTable
-binding_id, condition_id, reference_pool_id, scope_kind, scope_key?
+sequencing_library
+competition_pool
+culture_pool
+capture_stratum
+sampling_stratum
 ```
 
-A recipe that implements the corresponding parameterization can therefore
-compare guide-specific, target-shared, hierarchical, or pathway-shared effects
-without creating another Study. The released trajectory recipes currently use
-flat bindings. The five-file codec synthesizes compatibility bindings from
-legacy embeddings and controls. Legacy embedding, reference-group, and
-reference-role columns may round-trip as metadata but are not compiler inputs.
+`PopulationPoolTable` independently records physical or computational grouping
+and evidence. Only shared living culture, shared tissue, and competition pools
+constitute ecological evidence. A sequencing library can be a valid count
+denominator without being a living interaction pool.
 
-## Selection transforms
+## Effects and controls
 
-`SelectionSpec` binds IDs, metadata filters, representation, abundance,
-bindings, composition policy, and replicate policy. A recipe must advertise
-support for the selected policies before compilation.
+`PerturbationEffectBindingTable` maps perturbations to run-selectable effect IDs.
+Separate bindings can express guide-specific, target-shared, residual, pathway,
+or compositional parameterizations over one immutable study.
+
+`PerturbationReferenceBindingTable` maps every perturbation to an observed
+control pool and model counterfactual effect. Reference scopes are global,
+subject, experimental unit, context, checkpoint, or processing batch.
+`match_keys` is parsed as a JSON string array; non-global scopes must include
+their identifying key. Every reference pool must contain an observed control,
+and counterfactual effects must resolve in the effect catalog.
+
+## Typed selection
+
+`PerturbSeqSelection` selects stable subjects, units, perturbations, constructs,
+targets, control kinds, contexts, checkpoints, observations, QC tiers,
+representation, abundance channel, effect binding, and reference binding.
+Unknown IDs fail immediately.
 
 Composition policies are:
 
-- `require_complete`: reject a selection cutting through a denominator.
-- `preserve_background`: retain unselected members as detached background.
-- `condition_on_selection`: retain selected rows and mint a denominator suffixed
-  by the selection hash.
-- `drop`: omit composition blocks.
+- `require_complete`: reject a partial denominator.
+- `preserve_background`: retain unselected non-validation denominator members.
+- `condition_on_selection`: mint a denominator bound to the selected subset.
+- `drop`: omit count likelihoods.
 
-Replicate modes are `reject`, `select`, `pool`, `keep_separate`, and
-`hierarchical`. Compact-v3 currently executes `reject`, `select`, and `pool`.
-Pooling produces a stable pooled observation ID and source-observation
-provenance. Its released geometry rule is concatenation; abundance may use
-sum, mean, or exposure-weighted pooling.
+Replicate policies are reject, select, pool, keep-separate, or hierarchical.
+The released compact recipe executes reject, select, and explicit pooling.
 
 ## Content identity
 
-Scientific provenance is content-addressed in layers:
-
 ```text
-semantic table hashes + representation artifact hashes + support identities
+semantic tables + design + representation/support identities
     -> study_content_hash
+biological view + selected contracts
     -> selection_hash
+biological split basis + task + representation protocol
     -> split_id
-    -> compiled_problem_hash
-    -> run_contract_hash
+split-specific compilation
+    -> problem_hash
+recipe + config + artifacts
+    -> run contract hash
 ```
 
-Artifact locations are excluded from semantic identity; artifact content
-hashes remain included. In-memory stores are materialized into a deterministic
-support digest when necessary. Native stores persist this digest and recompute
-it during full verification.
+Artifact locations are excluded from semantic identity; artifact content hashes
+are included. Split identity deliberately excludes fitted encoder artifacts and
+`fit_split_id`, preventing a circular hash while retaining all biological
+partition inputs and support availability.
 
-## Native schema v3
+## Native schema v4
 
-`write_study()` creates a transactional directory:
+Schema v4 persists perturbations, components, events, contexts, population
+series, observations, support coverage, abundance, compositions, pools,
+bindings, representations, and provenance. Supports use packed HDF5 arrays with
+a Parquet law index. Writes are transactional and existing destinations are
+never overwritten.
 
-```text
-study/
-|-- conditions.parquet
-|-- series.parquet
-|-- observations.parquet
-|-- support_index.parquet
-|-- abundance.parquet              # when present
-|-- compositions.parquet           # when present
-|-- effect_bindings.parquet        # when present
-|-- reference_bindings.parquet     # when present
-|-- stores/
-|   |-- store-0000.h5
-|   `-- store-0000.parquet
-|-- representations/                 # embedded local artifacts, when present
-|-- provenance.json
-`-- study.json
-```
-
-All files except `study.json` are written into a sibling temporary directory.
-Their size and SHA-256 identities are recorded, the manifest is written last,
-and the directory is atomically renamed. Existing destinations are never
-overwritten.
-
-Verification costs are explicit:
+Verification levels are:
 
 | Level | Work |
 | --- | --- |
-| `none` | Parse metadata and construct lazy handles |
-| `schema` | Construct typed local tables and stores |
-| `manifest` | Recompute artifact sizes and SHA-256 hashes |
-| `semantic` | Check foreign keys, coverage, bindings, denominators, and design |
-| `full` | Scan every support law and recompute support semantic digests |
+| `none` | Parse and construct lazy handles |
+| `schema` | Construct typed tables and stores |
+| `manifest` | Verify artifact sizes and SHA-256 hashes |
+| `semantic` | Verify cross-table biological contracts |
+| `full` | Scan every support and recompute semantic digests |
 
-```python
-from credo import open_study, write_study
-
-study = open_study("study/study.json", verify="semantic")
-try:
-    report = study.validate(level="semantic")
-    report.raise_for_errors()
-    view = study.view(
-        representation_id="latent-all",
-        abundance_channel="modeled_frequency",
-        effect_binding_id="target_gene_shared",
-        reference_binding_id="donor_matched_ntc",
-    )
-finally:
-    study.close()
-```
-
-## Codec extension
-
-The built-in codecs are `credo.native_study` and the read-only
-`credo.current_five_file`. Third-party distributions register a complete codec
-through the `credo.study_codecs` entry-point group. Probes must inspect an
-actual schema marker and must not claim arbitrary YAML or directories.
+Schema-v3 and five-file codecs are read compatibility layers. Conversion emits
+schema v4, records unknown continuity and intervention timing explicitly, and
+labels legacy composition groups as sampling strata. It never silently
+reinterprets old manifests. Lazy five-file conversion streams categorical H5AD
+observation codes into a compact CSR-style law index and reads support
+coordinates and atom weights on demand.

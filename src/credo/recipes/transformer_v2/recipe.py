@@ -19,8 +19,17 @@ from ...contracts import (
     Stage,
     TrainingPlan,
 )
-from ...runtime import ObjectiveDescriptor, RecipeRequirements
-from ..trajectory_compiler import compile_trajectory_view
+from ...data.validation import ValidationIssue, ValidationReport
+from ...problems import FiniteMeasureDynamicsProblem
+from ...runtime import (
+    CounterfactualQuery,
+    CounterfactualResult,
+    ObjectiveDescriptor,
+    PredictionQuery,
+    PredictionResult,
+    RecipeRequirements,
+)
+from ..trajectory_compiler import compile_finite_measure_problem, compile_trajectory_view
 from .model import FullDynamicsModel
 
 
@@ -193,8 +202,74 @@ class TransformerSDEV2Recipe:
         raise RuntimeError("transformer-v2 does not support fresh split planning or training.")
 
     def compile_study(self, view: Any, split: SplitSpec, config: Any) -> CREDOStudy:
-        del split, config
+        del config
+        from ...data.splits import SplitPlan
+
+        if isinstance(split, SplitPlan):
+            return compile_finite_measure_problem(view, split)
         return compile_trajectory_view(view)
+
+    compile = compile_study
+
+    def validate_compiled(self, problem: Any, config: Any) -> ValidationReport:
+        del config
+        if isinstance(problem, (FiniteMeasureDynamicsProblem, CREDOStudy)):
+            return ValidationReport()
+        return ValidationReport(
+            (
+                ValidationIssue(
+                    "error",
+                    "recipe.problem_kind",
+                    "transformer-v2 requires a FiniteMeasureDynamicsProblem.",
+                    ("compiled_problem",),
+                ),
+            )
+        )
+
+    def fit(self, problem: Any, config: Any, **runtime_options: Any):
+        del problem, config, runtime_options
+        raise RuntimeError("transformer-v2 is inference-only in this release.")
+
+    def load(self, state: Any, problem: Any, config: Any, **runtime_options: Any):
+        return self.load_checkpoint(state, problem, config, **runtime_options)
+
+    def predict(self, run: Any, query: PredictionQuery) -> PredictionResult:
+        from ...evaluation import evaluation_tables
+
+        metrics = run.evaluate_runtime(particles=query.particles, seed=query.seed)
+        tables = evaluation_tables(run, metrics, run_id="imported-transformer-v2")
+
+        def selected(frame):
+            selected = frame
+            if query.series_ids:
+                selected = selected.loc[selected["series_id"].isin(query.series_ids)]
+            if query.checkpoint_ids:
+                selected = selected.loc[selected["checkpoint_id"].isin(query.checkpoint_ids)]
+            return selected.reset_index(drop=True)
+
+        return PredictionResult(
+            selected(tables.predictions),
+            selected(tables.metrics),
+            selected(tables.diagnostics),
+        )
+
+    def counterfactual(
+        self,
+        run: Any,
+        query: CounterfactualQuery,
+    ) -> CounterfactualResult:
+        from ...counterfactual import counterfactual
+
+        return CounterfactualResult(
+            counterfactual(
+                run,
+                query.series_id,
+                context_policy=query.context_policy,
+                same_noise=query.same_noise,
+                particles=query.particles,
+                seed=query.seed,
+            )
+        )
 
     def build_representation(
         self,

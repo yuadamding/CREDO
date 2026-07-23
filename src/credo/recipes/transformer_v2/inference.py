@@ -9,8 +9,8 @@ import pandas as pd
 import torch
 
 from ...contracts import Axis, CREDOStudy
-from ...objective import checkpoint_geometry_mass_loss
-from ...particles import (
+from ..compact_sde_v3.objective import checkpoint_geometry_mass_loss
+from ..compact_sde_v3.particles import (
     DynamicsStep,
     ParticleRollout,
     ParticleState,
@@ -200,7 +200,7 @@ def counterfactual_replay(
     """Exact full-group, same-start, same-noise v2 reference contrast."""
     from ... import __version__
     from ...counterfactual import _energy_distance, _weighted_mean
-    from ...training import _git_state
+    from ..compact_sde_v3.training import _git_state
 
     run.require("counterfactual")
     if context_policy != "self_consistent":
@@ -268,7 +268,7 @@ def counterfactual_replay(
     if not torch.equal(factual.noise_steps, reference.noise_steps):
         raise AssertionError("Counterfactual branches did not use identical Brownian noise.")
 
-    from ...particles import checkpoint_indices
+    from ..compact_sde_v3.particles import checkpoint_indices
 
     checkpoints = checkpoint_indices(study.axis, factual.axis_grid)
     factual_diagnostics = weight_diagnostics(factual.logw_steps)

@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 
 from .design import StudyDesign
 from .representations import ArtifactRef, RepresentationCatalog, RepresentationSpec
@@ -92,14 +93,98 @@ def _semantic_digest(payload: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _frame_digest(frame: pd.DataFrame) -> str:
-    columns = sorted(str(column) for column in frame.columns)
-    records = [
-        {column: _canonical_value(row[column]) for column in columns}
-        for _, row in frame.loc[:, columns].iterrows()
-    ]
-    records.sort(key=lambda row: json.dumps(row, sort_keys=True, separators=(",", ":")))
-    return _semantic_digest({"columns": columns, "records": records})
+def _frame_key(columns: tuple[str, ...]) -> tuple[str, ...]:
+    available = set(columns)
+    for candidate in (
+        ("observation_id", "channel_id"),
+        ("composition_block_id", "observation_id"),
+        ("binding_id", "perturbation_id"),
+        ("observation_id", "representation_id"),
+        ("perturbation_id", "component_id"),
+        ("event_id",),
+        ("observation_id",),
+        ("series_id",),
+        ("perturbation_id",),
+        ("context_id",),
+        ("population_pool_id",),
+    ):
+        if set(candidate) <= available:
+            return candidate
+    return columns
+
+
+def _digest_bytes(digest: Any, value: bytes) -> None:
+    digest.update(len(value).to_bytes(8, "little"))
+    digest.update(value)
+
+
+def _frame_digest(
+    frame: pd.DataFrame,
+    *,
+    key_columns: tuple[str, ...] | None = None,
+) -> str:
+    """Hash a table canonically without materializing row dictionaries."""
+    columns = tuple(sorted(str(column) for column in frame.columns))
+    keys = _frame_key(columns) if key_columns is None else tuple(key_columns)
+    missing_keys = set(keys) - set(columns)
+    if missing_keys:
+        raise KeyError(f"Frame digest keys are absent: {sorted(missing_keys)}")
+    ordered = frame.loc[:, columns]
+    if len(ordered):
+        ordered = ordered.sort_values(list(keys), kind="stable", na_position="first")
+
+    digest = hashlib.sha256()
+    digest.update(b"credo.frame.v2\0")
+    _digest_bytes(digest, json.dumps(columns, separators=(",", ":")).encode())
+    digest.update(len(ordered).to_bytes(8, "little"))
+    for column in columns:
+        series = ordered[column]
+        missing = series.isna().to_numpy(dtype=np.uint8)
+        _digest_bytes(digest, column.encode())
+        _digest_bytes(digest, missing.tobytes(order="C"))
+        if pd.api.types.is_bool_dtype(series.dtype):
+            kind = b"bool"
+            values = series.to_numpy(dtype=np.bool_, na_value=False).astype(np.uint8)
+            payloads = (values.tobytes(order="C"),)
+        elif pd.api.types.is_integer_dtype(series.dtype):
+            kind = b"integer"
+            values = series.to_numpy(dtype="<i8", na_value=0)
+            payloads = (values.tobytes(order="C"),)
+        elif pd.api.types.is_float_dtype(series.dtype):
+            kind = b"float"
+            values = series.to_numpy(dtype="<f8", na_value=0.0)
+            payloads = (values.tobytes(order="C"),)
+        elif pd.api.types.is_datetime64_any_dtype(series.dtype):
+            kind = b"datetime_ns"
+            values = series.astype("datetime64[ns]").view("int64").to_numpy(dtype="<i8")
+            values[missing.astype(bool)] = 0
+            payloads = (values.tobytes(order="C"),)
+        else:
+            present = series.loc[~series.isna()]
+            if present.map(lambda value: isinstance(value, str)).all():
+                kind = b"string"
+                normalized = series.astype("string").fillna("")
+            else:
+                kind = b"canonical_json"
+                normalized = series.map(
+                    lambda value: (
+                        ""
+                        if pd.isna(value)
+                        else json.dumps(
+                            _canonical_value(value),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                    )
+                ).astype("string")
+            array = pa.array(normalized, type=pa.string(), from_pandas=False)
+            payloads = tuple(
+                b"" if buffer is None else bytes(buffer) for buffer in array.buffers()[1:]
+            )
+        _digest_bytes(digest, kind)
+        for payload in payloads:
+            _digest_bytes(digest, payload)
+    return digest.hexdigest()
 
 
 def _artifact_identity(artifact: ArtifactRef | None) -> dict[str, Any] | None:
@@ -124,10 +209,17 @@ def _representation_identity(spec: RepresentationSpec) -> dict[str, Any]:
         "support_store_id": spec.support_store_id,
         "support_artifact": _artifact_identity(spec.support_artifact),
         "feature_artifact": _artifact_identity(spec.feature_artifact),
+        "feature_selection_artifact": _artifact_identity(spec.feature_selection_artifact),
         "encoder_artifact": _artifact_identity(spec.encoder_artifact),
         "decoder_artifact": _artifact_identity(spec.decoder_artifact),
         "normalization_artifact": _artifact_identity(spec.normalization_artifact),
+        "scope_mode": spec.scope_mode,
         "fit_split_id": spec.fit_split_id,
+        "fit_selection_hash": spec.fit_selection_hash,
+        "fit_subject_ids": spec.fit_subject_ids,
+        "fit_perturbation_ids": spec.fit_perturbation_ids,
+        "fit_checkpoint_ids": spec.fit_checkpoint_ids,
+        "fit_observation_scope": spec.fit_observation_scope,
         "included_series": spec.included_series,
         "included_checkpoints": spec.included_checkpoints,
     }
@@ -219,16 +311,40 @@ class SelectionSpec:
     """Stable-ID and metadata filters for a zero-copy study view."""
 
     series_ids: tuple[str, ...] | None = None
+    observation_ids: tuple[str, ...] | None = None
     checkpoint_ids: tuple[str, ...] | None = None
+    subject_ids: tuple[str, ...] | None = None
+    experimental_unit_ids: tuple[str, ...] | None = None
+    perturbation_ids: tuple[str, ...] | None = None
+    construct_ids: tuple[str, ...] | None = None
+    target_ids: tuple[str, ...] | None = None
+    context_ids: tuple[str, ...] | None = None
+    control_kinds: tuple[str, ...] | None = None
+    qc_tiers: tuple[str, ...] | None = None
+    perturbation_filter: Mapping[str, Any] | None = None
     condition_filter: Mapping[str, Any] | None = None
     observation_filter: Mapping[str, Any] | None = None
+    representation_id: str | None = None
+    abundance_channel_id: str | None = None
     effect_binding_id: str | None = None
     reference_binding_id: str | None = None
     composition_policy: CompositionPolicy = "require_complete"
     replicate_policy: ReplicatePolicy = field(default_factory=ReplicatePolicy)
 
     def __post_init__(self) -> None:
-        for name in ("series_ids", "checkpoint_ids"):
+        for name in (
+            "series_ids",
+            "observation_ids",
+            "checkpoint_ids",
+            "subject_ids",
+            "experimental_unit_ids",
+            "perturbation_ids",
+            "construct_ids",
+            "target_ids",
+            "context_ids",
+            "control_kinds",
+            "qc_tiers",
+        ):
             values = getattr(self, name)
             if values is None:
                 continue
@@ -236,11 +352,16 @@ class SelectionSpec:
             if any(not value for value in normalized) or len(normalized) != len(set(normalized)):
                 raise ValueError(f"SelectionSpec.{name} must contain unique nonempty IDs.")
             object.__setattr__(self, name, normalized)
-        for name in ("condition_filter", "observation_filter"):
+        for name in ("perturbation_filter", "condition_filter", "observation_filter"):
             values = getattr(self, name)
             if values is not None:
                 object.__setattr__(self, name, MappingProxyType(dict(values)))
-        for name in ("effect_binding_id", "reference_binding_id"):
+        for name in (
+            "representation_id",
+            "abundance_channel_id",
+            "effect_binding_id",
+            "reference_binding_id",
+        ):
             value = getattr(self, name)
             if value is not None:
                 normalized = str(value)
@@ -642,29 +763,23 @@ class Study:
         """Hash the complete scientific content used to construct a selected problem."""
         if self._content_hash_cache is not None:
             return self._content_hash_cache
+        tables = {
+            "conditions": self.conditions,
+            "series": self.series,
+            "observations": self.observations,
+            "support_index": self.support_index,
+            "abundance": self.abundance,
+            "compositions": self.compositions,
+            "effect_bindings": self.effect_bindings,
+            "reference_bindings": self.reference_bindings,
+        }
         table_hashes = {
-            "conditions": _frame_digest(self.conditions._unsafe_view()),
-            "series": _frame_digest(self.series._unsafe_view()),
-            "observations": _frame_digest(self.observations._unsafe_view()),
-            "support_index": _frame_digest(self.support_index._unsafe_view()),
-            "abundance": (
-                None if self.abundance is None else _frame_digest(self.abundance._unsafe_view())
-            ),
-            "compositions": (
+            name: (
                 None
-                if self.compositions is None
-                else _frame_digest(self.compositions._unsafe_view())
-            ),
-            "effect_bindings": (
-                None
-                if self.effect_bindings is None
-                else _frame_digest(self.effect_bindings._unsafe_view())
-            ),
-            "reference_bindings": (
-                None
-                if self.reference_bindings is None
-                else _frame_digest(self.reference_bindings._unsafe_view())
-            ),
+                if table is None
+                else _frame_digest(table._unsafe_view(), key_columns=table.key_columns)
+            )
+            for name, table in tables.items()
         }
         representation_payload: dict[str, Any] = {}
         support_payload: dict[str, Any] = {}
@@ -1151,6 +1266,8 @@ class StudyView:
         frame = frame.loc[frame["series_id"].isin(series_ids)]
         if self.selection.checkpoint_ids is not None:
             frame = frame.loc[frame["checkpoint_id"].isin(self.selection.checkpoint_ids)]
+        if self.selection.observation_ids is not None:
+            frame = frame.loc[frame["observation_id"].isin(self.selection.observation_ids)]
         frame = _apply_filter(frame, self.selection.observation_filter)
         policy = self.selection.replicate_policy
         if policy.mode == "select":

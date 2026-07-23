@@ -25,9 +25,9 @@ class StudyCodec(Protocol):
         *,
         verify: VerificationLevel = "semantic",
         **kwargs: Any,
-    ) -> Study: ...
+    ) -> Any: ...
 
-    def write(self, study: Study, destination: str | Path) -> Any: ...
+    def write(self, study: Any, destination: str | Path) -> Any: ...
 
 
 class StudyCodecRegistry(Mapping[str, StudyCodec]):
@@ -78,11 +78,14 @@ _entry_points_discovered = False
 def _register_builtins() -> None:
     from .legacy import CurrentFiveFileStudyCodec
     from .native import NativeStudyV3Codec
+    from .native_v4 import NativePerturbSeqStudyV4Codec
 
     if "credo.current_five_file" not in study_codecs:
         study_codecs.register(CurrentFiveFileStudyCodec())
     if "credo.native_study" not in study_codecs:
         study_codecs.register(NativeStudyV3Codec())
+    if "credo.native_perturb_seq_study" not in study_codecs:
+        study_codecs.register(NativePerturbSeqStudyV4Codec())
     _discover_entry_points()
 
 
@@ -111,10 +114,18 @@ def open_study(
     *,
     verify: VerificationLevel = "semantic",
     **kwargs: Any,
-) -> Study:
-    """Probe registered codecs and open one semantic Study."""
+) -> Any:
+    """Open one canonical PerturbSeqStudy, converting compatibility schemas explicitly."""
     codec = study_codecs.resolve(source)
-    return codec.read(source, verify=verify, **kwargs)
+    study = codec.read(source, verify=verify, **kwargs)
+    if isinstance(study, Study):
+        from ..lps.study import from_schema_v3
+
+        converted = from_schema_v3(study)
+        if verify in {"manifest", "semantic", "full"}:
+            converted.validate(level="full" if verify == "full" else "semantic").raise_for_errors()
+        return converted
+    return study
 
 
 __all__ = [

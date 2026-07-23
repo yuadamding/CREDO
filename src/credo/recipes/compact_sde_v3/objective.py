@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from .contracts import TrajectoryData
+from ...contracts import TrajectoryData
 from .particles import ParticleRollout, checkpoint_indices, weight_diagnostics
 
 

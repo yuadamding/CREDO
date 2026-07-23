@@ -8,8 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from ..artifacts import NativeCheckpointCodec
-from ..contracts import (
+from ...artifacts import NativeCheckpointCodec
+from ...contracts import (
     BatchingSpec,
     CapabilitySet,
     CREDOStudy,
@@ -19,10 +19,19 @@ from ..contracts import (
     Stage,
     TrainingPlan,
 )
-from ..data.splits import SplitPlan, plan_compact_split
-from ..model import CREDOModel
-from ..runtime import ObjectiveDescriptor, RecipeRequirements
-from .trajectory_compiler import compile_trajectory_view
+from ...data.splits import SplitPlan, plan_compact_split
+from ...data.validation import ValidationIssue, ValidationReport
+from ...problems import FiniteMeasureDynamicsProblem
+from ...runtime import (
+    CounterfactualQuery,
+    CounterfactualResult,
+    ObjectiveDescriptor,
+    PredictionQuery,
+    PredictionResult,
+    RecipeRequirements,
+)
+from ..trajectory_compiler import compile_finite_measure_problem
+from .model import CREDOModel
 
 
 class _StrictConfig(BaseModel):
@@ -143,7 +152,7 @@ class CompactSDEV3Recipe:
         return CompactV3Config
 
     def requirements(self, config: Any) -> RecipeRequirements:
-        del config
+        context_mode = config.model.context
         return RecipeRequirements(
             supported_axis_kinds=frozenset({"physical_time", "effect"}),
             supported_topologies=frozenset({"chain"}),
@@ -161,8 +170,8 @@ class CompactSDEV3Recipe:
             implicit_no_channel_semantics="unit",
             reference_mode="single_global_soft_reference",
             maximum_reference_pools=1,
-            context_scope="series_static",
-            sample_scope="series_static",
+            context_scope=("none" if context_mode == "none" else "population_ecology"),
+            sample_scope="observation_varying",
             composition_policies=frozenset(
                 {"require_complete", "preserve_background", "condition_on_selection", "drop"}
             ),
@@ -184,9 +193,88 @@ class CompactSDEV3Recipe:
         config: Any,
     ) -> CREDOStudy:
         del config
-        return compile_trajectory_view(
-            view,
-            split_plan=split if isinstance(split, SplitPlan) else None,
+        if not isinstance(split, SplitPlan):
+            raise TypeError("compact-v3 requires a content-addressed SplitPlan.")
+        return compile_finite_measure_problem(view, split)
+
+    compile = compile_study
+
+    def validate_compiled(
+        self,
+        problem: Any,
+        config: Any,
+    ) -> ValidationReport:
+        del config
+        if isinstance(problem, (FiniteMeasureDynamicsProblem, CREDOStudy)):
+            return ValidationReport()
+        return ValidationReport(
+            (
+                ValidationIssue(
+                    "error",
+                    "recipe.problem_kind",
+                    "compact-v3 requires a FiniteMeasureDynamicsProblem.",
+                    ("compiled_problem",),
+                ),
+            )
+        )
+
+    def fit(self, problem: Any, config: Any, **runtime_options: Any):
+        from ...runtime import TrainingEngine
+
+        return TrainingEngine().fit(self, problem, config, **runtime_options)
+
+    def load(self, state: Any, problem: Any, config: Any, **runtime_options: Any):
+        return self.load_checkpoint(state, problem, config, **runtime_options)
+
+    def predict(self, run: Any, query: PredictionQuery) -> PredictionResult:
+        from ...evaluation import evaluation_tables, standardize_compact_metrics
+
+        particles = (
+            run.settings.evaluation.particles if query.particles is None else query.particles
+        )
+        seed = run.training_plan.seed + 9_100_001 if query.seed is None else query.seed
+        metrics = standardize_compact_metrics(
+            run,
+            run.evaluate(particles=particles, seed=seed),
+            particles=particles,
+            seed=seed,
+        )
+        tables = evaluation_tables(
+            run,
+            metrics,
+            run_id=str(getattr(run, "checkpoint_sha256", "in-memory")),
+        )
+
+        def selected(frame):
+            selected = frame
+            if query.series_ids:
+                selected = selected.loc[selected["series_id"].isin(query.series_ids)]
+            if query.checkpoint_ids:
+                selected = selected.loc[selected["checkpoint_id"].isin(query.checkpoint_ids)]
+            return selected.reset_index(drop=True)
+
+        return PredictionResult(
+            selected(tables.predictions),
+            selected(tables.metrics),
+            selected(tables.diagnostics),
+        )
+
+    def counterfactual(
+        self,
+        run: Any,
+        query: CounterfactualQuery,
+    ) -> CounterfactualResult:
+        from ...counterfactual import counterfactual
+
+        return CounterfactualResult(
+            counterfactual(
+                run,
+                query.series_id,
+                context_policy=query.context_policy,
+                same_noise=query.same_noise,
+                particles=query.particles,
+                seed=query.seed,
+            )
         )
 
     def validate_run_config(self, run_config: Any) -> None:
@@ -397,7 +485,7 @@ class CompactSDEV3Recipe:
         config: Any,
         **kwargs: Any,
     ):
-        from ..training import Trainer
+        from .training import Trainer
 
         return Trainer.load(checkpoint, study, config, **kwargs)
 
@@ -411,7 +499,7 @@ class CompactSDEV3Recipe:
         run_config: Any,
         **kwargs: Any,
     ):
-        from ..training import Trainer
+        from .training import Trainer
 
         return Trainer.from_plan(
             study,

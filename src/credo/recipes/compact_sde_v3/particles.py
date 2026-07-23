@@ -9,7 +9,7 @@ from typing import Any, Protocol
 import numpy as np
 import torch
 
-from .contracts import Axis, TrajectoryData
+from ...contracts import Axis, TrajectoryData
 from .model import CREDOModel
 
 

@@ -10,7 +10,10 @@ from typing import Literal
 
 AxisKind = Literal[
     "physical_time",
+    "ordered_stage",
     "developmental_stage",
+    "disease_stage",
+    "pseudotime",
     "effect",
     "dose",
     "ordered_condition",
@@ -39,7 +42,10 @@ class AxisSpec:
         object.__setattr__(self, "axis_id", _identifier(self.axis_id, "axis_id"))
         if self.kind not in {
             "physical_time",
+            "ordered_stage",
             "developmental_stage",
+            "disease_stage",
+            "pseudotime",
             "effect",
             "dose",
             "ordered_condition",
@@ -249,7 +255,15 @@ class StudyDesign:
                     f"Ordered axis {axis.axis_id!r} requires unique checkpoint coordinates."
                 )
             numeric = all(isinstance(value, (int, float)) for value in values)
-            if axis.kind in {"physical_time", "developmental_stage", "effect", "dose"}:
+            if axis.kind in {
+                "physical_time",
+                "ordered_stage",
+                "developmental_stage",
+                "disease_stage",
+                "pseudotime",
+                "effect",
+                "dose",
+            }:
                 if not numeric or not all(math.isfinite(float(value)) for value in values):
                     raise ValueError(
                         f"Ordered axis {axis.axis_id!r} requires finite numeric coordinates."
@@ -309,4 +323,124 @@ class StudyDesign:
             raise KeyError(f"Unknown checkpoint_id {checkpoint_id!r}.") from exc
 
 
-__all__ = ["AxisSpec", "Checkpoint", "StudyDesign", "Transition"]
+@dataclass(frozen=True)
+class ProgressionAxis:
+    """The single ordered biological progression axis of an LPS study."""
+
+    axis_id: str
+    kind: Literal[
+        "physical_time",
+        "ordered_stage",
+        "developmental_stage",
+        "disease_stage",
+        "pseudotime",
+        "effect",
+    ]
+    unit: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "axis_id", _identifier(self.axis_id, "axis_id"))
+        if self.kind not in {
+            "physical_time",
+            "ordered_stage",
+            "developmental_stage",
+            "disease_stage",
+            "pseudotime",
+            "effect",
+        }:
+            raise ValueError(f"Unsupported progression axis kind {self.kind!r}.")
+        if self.unit is not None:
+            object.__setattr__(self, "unit", _identifier(self.unit, "axis unit"))
+
+    def as_axis_spec(self) -> AxisSpec:
+        """Return the schema-v3-compatible representation of this axis."""
+        return AxisSpec(axis_id=self.axis_id, kind=self.kind, unit=self.unit, ordered=True)
+
+
+@dataclass(frozen=True)
+class LongitudinalDesign:
+    """One primary progression axis and its permissible checkpoint transitions."""
+
+    axis: ProgressionAxis
+    checkpoints: tuple[Checkpoint, ...]
+    transitions: tuple[Transition, ...]
+    topology: Topology = "chain"
+    _legacy: StudyDesign = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.axis, ProgressionAxis):
+            if isinstance(self.axis, AxisSpec):
+                object.__setattr__(
+                    self,
+                    "axis",
+                    ProgressionAxis(
+                        axis_id=self.axis.axis_id,
+                        kind=self.axis.kind,  # type: ignore[arg-type]
+                        unit=self.axis.unit,
+                    ),
+                )
+            else:
+                raise TypeError("LongitudinalDesign.axis must be a ProgressionAxis.")
+        legacy = StudyDesign(
+            axes=(self.axis.as_axis_spec(),),
+            checkpoints=tuple(self.checkpoints),
+            transitions=tuple(self.transitions),
+            topology=self.topology,
+        )
+        object.__setattr__(self, "checkpoints", legacy.checkpoints)
+        object.__setattr__(self, "transitions", legacy.transitions)
+        object.__setattr__(self, "_legacy", legacy)
+
+    @classmethod
+    def from_study_design(cls, design: StudyDesign) -> LongitudinalDesign:
+        """Convert an unambiguous schema-v3 design without changing semantics."""
+        if len(design.axes) != 1:
+            raise ValueError(
+                "Longitudinal Perturb-seq requires one primary progression axis; "
+                f"schema-v3 design declares {len(design.axes)}."
+            )
+        axis = design.axes[0]
+        if axis.kind in {"dose", "ordered_condition"}:
+            raise ValueError(
+                f"Schema-v3 axis kind {axis.kind!r} cannot be silently treated as progression."
+            )
+        return cls(
+            axis=ProgressionAxis(axis.axis_id, axis.kind, axis.unit),  # type: ignore[arg-type]
+            checkpoints=design.checkpoints,
+            transitions=design.transitions,
+            topology=design.topology,
+        )
+
+    @property
+    def axes(self) -> tuple[AxisSpec, ...]:
+        """Compatibility view for numerical recipes written against schema v3."""
+        return (self.axis.as_axis_spec(),)
+
+    @property
+    def checkpoint_ids(self) -> tuple[str, ...]:
+        return self._legacy.checkpoint_ids
+
+    @property
+    def source_checkpoint_id(self) -> str:
+        return self._legacy.source_checkpoint_id
+
+    @property
+    def ordered_checkpoint_ids(self) -> tuple[str, ...]:
+        return self._legacy.ordered_checkpoint_ids
+
+    def checkpoint(self, checkpoint_id: str) -> Checkpoint:
+        return self._legacy.checkpoint(checkpoint_id)
+
+    def as_study_design(self) -> StudyDesign:
+        """Return a compatibility design for schema-v3 readers and executors."""
+        return self._legacy
+
+
+__all__ = [
+    "AxisSpec",
+    "Checkpoint",
+    "LongitudinalDesign",
+    "ProgressionAxis",
+    "StudyDesign",
+    "Transition",
+]

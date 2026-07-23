@@ -6,6 +6,7 @@ import math
 import random
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
@@ -23,6 +24,8 @@ from .contracts import (
 from .data.splits import SplitPlan, validate_representation_scope, validate_split_plan
 from .data.study import Study, StudyView
 from .data.validation import ValidationIssue, ValidationReport
+from .lps import PerturbSeqStudy, PerturbSeqView
+from .problems import CompiledLPSProblem
 
 
 @dataclass(frozen=True)
@@ -37,6 +40,71 @@ class RuntimeState:
     stage: str
     epoch: int = 0
     values: dict[str, Any] = field(default_factory=dict)
+
+
+def _stable_ids(values: tuple[str, ...], field_name: str) -> tuple[str, ...]:
+    normalized = tuple(str(value) for value in values)
+    if any(not value for value in normalized) or len(normalized) != len(set(normalized)):
+        raise ValueError(f"{field_name} must contain unique nonempty IDs.")
+    return normalized
+
+
+@dataclass(frozen=True)
+class PredictionQuery:
+    """Stable-ID query for fitted longitudinal Perturb-seq predictions."""
+
+    series_ids: tuple[str, ...] = ()
+    checkpoint_ids: tuple[str, ...] = ()
+    particles: int | None = None
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "series_ids", _stable_ids(self.series_ids, "series_ids"))
+        object.__setattr__(
+            self,
+            "checkpoint_ids",
+            _stable_ids(self.checkpoint_ids, "checkpoint_ids"),
+        )
+        if self.particles is not None and self.particles < 2:
+            raise ValueError("PredictionQuery.particles must be at least two.")
+        if self.seed is not None and self.seed < 0:
+            raise ValueError("PredictionQuery.seed must be nonnegative.")
+
+
+@dataclass(frozen=True)
+class PredictionResult:
+    predictions: pd.DataFrame
+    metrics: pd.DataFrame
+    diagnostics: pd.DataFrame
+
+
+@dataclass(frozen=True)
+class CounterfactualQuery:
+    """Same-start reference query for one perturbation-indexed population series."""
+
+    series_id: str
+    context_policy: str = "self_consistent"
+    same_noise: bool = True
+    particles: int | None = None
+    seed: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "series_id", str(self.series_id))
+        if not self.series_id:
+            raise ValueError("CounterfactualQuery.series_id must be nonempty.")
+        if self.context_policy not in {"self_consistent", "clamped"}:
+            raise ValueError("Unknown counterfactual context policy.")
+        if not self.same_noise:
+            raise ValueError("CREDO same-start counterfactuals require same_noise=True.")
+        if self.particles is not None and self.particles < 2:
+            raise ValueError("CounterfactualQuery.particles must be at least two.")
+        if self.seed is not None and self.seed < 0:
+            raise ValueError("CounterfactualQuery.seed must be nonnegative.")
+
+
+@dataclass(frozen=True)
+class CounterfactualResult:
+    counterfactuals: pd.DataFrame
 
 
 @runtime_checkable
@@ -86,8 +154,8 @@ class CheckpointCodec(Protocol):
 
 
 @dataclass(frozen=True)
-class RecipeRequirements:
-    """Semantic study capabilities required before recipe compilation."""
+class LongitudinalPerturbSeqRequirements:
+    """Biological capabilities required before an LPS recipe is compiled."""
 
     supported_axis_kinds: frozenset[str]
     supported_topologies: frozenset[str]
@@ -109,6 +177,52 @@ class RecipeRequirements:
         {"require_complete", "preserve_background", "condition_on_selection", "drop"}
     )
     replicate_modes: frozenset[str] = frozenset({"reject"})
+    checkpoint_mode: str = "any"
+    supported_intervention_timings: frozenset[str] = frozenset(
+        {"before_source", "at_source", "between_checkpoints", "unknown"}
+    )
+    supported_perturbation_kinds: frozenset[str] = frozenset(
+        {
+            "crispr_ko",
+            "crispr_i",
+            "crispr_a",
+            "base_edit",
+            "prime_edit",
+            "chemical",
+            "cytokine",
+            "receptor_blockade",
+            "combination",
+            "other",
+        }
+    )
+    supports_combinations: bool = True
+    supports_unseen_targets: bool = False
+    representation_scope_modes: frozenset[str] = frozenset(
+        {
+            "external_frozen",
+            "shared_all_observations",
+            "shared_source_only",
+            "nested_by_subject",
+            "nested_by_perturbation",
+            "nested_by_checkpoint",
+            "fully_nested",
+        }
+    )
+    requires_controls: bool = True
+    supported_reference_scopes: frozenset[str] = frozenset(
+        {"global", "subject", "experimental_unit", "context", "checkpoint", "processing_batch"}
+    )
+    supported_continuity_kinds: frozenset[str] = frozenset(
+        {
+            "same_experimental_unit",
+            "matched_subject_parallel",
+            "cross_sectional_population",
+            "independent_replicate",
+            "lineage_linked",
+            "exact_lineage_traced",
+            "unknown",
+        }
+    )
 
     def __post_init__(self) -> None:
         for name in (
@@ -119,15 +233,21 @@ class RecipeRequirements:
         ):
             values = frozenset(str(value) for value in getattr(self, name))
             if not values:
-                raise ValueError(f"RecipeRequirements.{name} must be nonempty.")
+                raise ValueError(f"LongitudinalPerturbSeqRequirements.{name} must be nonempty.")
             object.__setattr__(self, name, values)
+
         if self.abundance_requirement not in {"required", "optional", "forbidden"}:
             raise ValueError("Unknown abundance requirement.")
         if self.implicit_no_channel_semantics not in {"unit", "none"}:
             raise ValueError("Unknown implicit no-channel abundance semantics.")
         if self.maximum_reference_pools is not None and self.maximum_reference_pools < 1:
             raise ValueError("maximum_reference_pools must be positive when provided.")
-        if self.context_scope not in {"none", "series_static", "observation_varying"}:
+        if self.context_scope not in {
+            "none",
+            "series_static",
+            "observation_varying",
+            "population_ecology",
+        }:
             raise ValueError("Unknown context scope.")
         if self.sample_scope not in {"series_static", "observation_varying"}:
             raise ValueError("Unknown sample scope.")
@@ -147,27 +267,96 @@ class RecipeRequirements:
             "hierarchical",
         }
         if unknown_compositions or unknown_replicates:
-            raise ValueError("RecipeRequirements contains unknown selection policies.")
+            raise ValueError(
+                "LongitudinalPerturbSeqRequirements contains unknown selection policies."
+            )
         object.__setattr__(self, "composition_policies", composition_policies)
         object.__setattr__(self, "replicate_modes", replicate_modes)
+        if self.checkpoint_mode not in {"endpoint", "multitime", "any"}:
+            raise ValueError("Unknown checkpoint mode.")
+        for name in (
+            "supported_intervention_timings",
+            "supported_perturbation_kinds",
+            "representation_scope_modes",
+            "supported_reference_scopes",
+            "supported_continuity_kinds",
+        ):
+            values = frozenset(str(value) for value in getattr(self, name))
+            if not values:
+                raise ValueError(f"LongitudinalPerturbSeqRequirements.{name} must be nonempty.")
+            object.__setattr__(self, name, values)
+
+    @property
+    def context_mode(self) -> str:
+        return self.context_scope
+
+    @property
+    def supports_missing_target_geometry(self) -> bool:
+        return self.permits_missing_target_geometry
+
+    @property
+    def supported_replicate_modes(self) -> frozenset[str]:
+        return self.replicate_modes
+
+
+RecipeRequirements = LongitudinalPerturbSeqRequirements
 
 
 @runtime_checkable
-class CREDORecipe(Protocol):
+class LongitudinalPerturbSeqRecipe(Protocol):
+    """Public recipe contract over one compiled Perturb-seq problem."""
+
     recipe_id: str
     recipe_version: str
-    capabilities: CapabilitySet
 
     def config_schema(self) -> type[Any]: ...
 
-    def requirements(self, config: Any) -> RecipeRequirements: ...
+    def requirements(self, config: Any) -> LongitudinalPerturbSeqRequirements: ...
 
     def plan_split(
         self,
-        view: StudyView,
+        view: PerturbSeqView,
         config: Any,
         requested: SplitSpec | None = None,
     ) -> SplitPlan: ...
+
+    def compile(
+        self,
+        view: PerturbSeqView,
+        split: SplitPlan,
+        config: Any,
+    ) -> CompiledLPSProblem: ...
+
+    def validate_compiled(
+        self,
+        problem: CompiledLPSProblem,
+        config: Any,
+    ) -> ValidationReport: ...
+
+    def fit(self, problem: CompiledLPSProblem, config: Any, **runtime_options: Any) -> Any: ...
+
+    def load(
+        self,
+        state: Path,
+        problem: CompiledLPSProblem,
+        config: Any,
+        **runtime_options: Any,
+    ) -> Any: ...
+
+    def predict(self, run: Any, query: PredictionQuery) -> PredictionResult: ...
+
+    def counterfactual(
+        self,
+        run: Any,
+        query: CounterfactualQuery,
+    ) -> CounterfactualResult: ...
+
+
+@runtime_checkable
+class CREDORecipe(LongitudinalPerturbSeqRecipe, Protocol):
+    """Released executor extension retained for alpha-cycle compatibility."""
+
+    capabilities: CapabilitySet
 
     def compile_study(
         self,
@@ -208,7 +397,7 @@ class CREDORecipe(Protocol):
     ) -> Any: ...
 
 
-ModelRecipe = CREDORecipe
+ModelRecipe = LongitudinalPerturbSeqRecipe
 
 
 @dataclass
@@ -266,13 +455,15 @@ def validate_recipe_study(recipe: CREDORecipe, study: CREDOStudy) -> None:
 
 
 def validate_view_for_recipe(
-    view: StudyView,
+    view: StudyView | PerturbSeqView,
     split: SplitSpec | SplitPlan,
     requirements: RecipeRequirements,
 ) -> ValidationReport:
     """Validate a semantic view before any recipe-owned tensorization."""
     issues: list[ValidationIssue] = []
     design = view.study.design
+    is_lps = isinstance(view, PerturbSeqView)
+    native_lps_semantics = is_lps and "schema_v3_conversion" not in view.study.provenance
     axis_kinds = {axis.kind for axis in design.axes}
     unsupported_axes = axis_kinds - requirements.supported_axis_kinds
     if unsupported_axes:
@@ -293,6 +484,26 @@ def validate_view_for_recipe(
                 ("design", "topology"),
             )
         )
+    checkpoint_count = len(design.checkpoint_ids)
+    if requirements.checkpoint_mode == "endpoint" and checkpoint_count != 2:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.checkpoint_mode",
+                "Recipe requires an endpoint design; selected design has "
+                f"{checkpoint_count} checkpoints.",
+                ("design", "checkpoints"),
+            )
+        )
+    if requirements.checkpoint_mode == "multitime" and checkpoint_count < 3:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.checkpoint_mode",
+                "Recipe requires at least three ordered checkpoints.",
+                ("design", "checkpoints"),
+            )
+        )
     if view.representation.space_kind not in requirements.supported_representation_kinds:
         issues.append(
             ValidationIssue(
@@ -302,6 +513,91 @@ def validate_view_for_recipe(
                 ("representations", view.representation_id, "space_kind"),
             )
         )
+    if is_lps and view.representation.scope_mode not in requirements.representation_scope_modes:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.representation_scope",
+                f"Recipe does not support representation scope {view.representation.scope_mode!r}.",
+                ("representations", view.representation_id, "scope_mode"),
+            )
+        )
+    if is_lps:
+        perturbations = view.perturbations()
+        unsupported_perturbations = set(perturbations["perturbation_kind"]) - set(
+            requirements.supported_perturbation_kinds
+        )
+        if unsupported_perturbations:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.perturbation_kind",
+                    "Recipe does not support perturbation kinds "
+                    f"{sorted(unsupported_perturbations)}.",
+                    ("perturbations", "perturbation_kind"),
+                )
+            )
+        if requirements.requires_controls and not perturbations["is_control"].any():
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.controls",
+                    "Recipe requires at least one selected experimental control.",
+                    ("perturbations", "is_control"),
+                )
+            )
+        if (
+            not requirements.supports_combinations
+            and perturbations["perturbation_kind"].eq("combination").any()
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.combinations",
+                    "Recipe does not support combination perturbations.",
+                    ("perturbations", "perturbation_kind"),
+                )
+            )
+        selected_series = view.series()
+        unsupported_continuity = set(selected_series["continuity_kind"]) - set(
+            requirements.supported_continuity_kinds
+        )
+        if unsupported_continuity:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.continuity_kind",
+                    f"Recipe does not support continuity kinds {sorted(unsupported_continuity)}.",
+                    ("series", "continuity_kind"),
+                )
+            )
+        events = view.study.intervention_events._unsafe_view()
+        events = events.loc[events["series_id"].isin(view.series_ids)]
+        unsupported_timings = set(events["start_relation"]) - set(
+            requirements.supported_intervention_timings
+        )
+        if unsupported_timings:
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.intervention_timing",
+                    f"Recipe does not support intervention timings {sorted(unsupported_timings)}.",
+                    ("intervention_events", "start_relation"),
+                )
+            )
+        if (
+            isinstance(split, SplitPlan)
+            and split.task_kind == "target_generalization"
+            and not requirements.supports_unseen_targets
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.unseen_targets",
+                    "Recipe does not support unseen-target generalization.",
+                    ("split", "task_kind"),
+                )
+            )
     if view.abundance_channel is None or view.study.abundance is None:
         abundance_semantics = requirements.implicit_no_channel_semantics
         if requirements.abundance_requirement == "required":
@@ -408,6 +704,34 @@ def validate_view_for_recipe(
                     ("observations", series_id, "context_id"),
                 )
             )
+    if requirements.context_scope == "population_ecology":
+        if native_lps_semantics and (
+            "population_pool_id" not in observations
+            or observations["population_pool_id"].isna().any()
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.population_ecology",
+                    "Population-ecology context requires a pool for every selected observation.",
+                    ("observations", "population_pool_id"),
+                )
+            )
+        elif native_lps_semantics:
+            ecological = view.ecological_pools()
+            selected_pool_ids = set(observations["population_pool_id"].astype(str))
+            ecological_ids = set(ecological.get("population_pool_id", pd.Series(dtype=str)))
+            invalid = selected_pool_ids - ecological_ids
+            if invalid:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "recipe.population_ecology",
+                        "Sequencing, capture, or computational groups cannot supply ecological "
+                        f"context; invalid pools={sorted(invalid)[:5]}.",
+                        ("population_pools", "pool_kind"),
+                    )
+                )
     if requirements.sample_scope == "series_static":
         varying = observations.groupby("series_id", observed=True)["sample_id"].nunique(
             dropna=False
@@ -435,9 +759,15 @@ def validate_view_for_recipe(
     if requirements.requires_reference_binding:
         selected_series = view.study.series._unsafe_view()
         selected_series = selected_series.loc[selected_series["series_id"].isin(view.series_ids)]
-        selected_conditions = view.study.conditions._unsafe_view()
+        perturbation_key = "perturbation_id" if is_lps else "condition_id"
+        control_column = "is_control" if is_lps else "is_reference"
+        selected_conditions = (
+            view.study.perturbations._unsafe_view()
+            if is_lps
+            else view.study.conditions._unsafe_view()
+        )
         selected_conditions = selected_conditions.loc[
-            selected_conditions["condition_id"].isin(selected_series["condition_id"])
+            selected_conditions[perturbation_key].isin(selected_series[perturbation_key])
         ]
         selected_binding = view.reference_binding()
         if selected_binding.empty:
@@ -451,10 +781,10 @@ def validate_view_for_recipe(
                 )
             )
         else:
-            pool_by_condition = selected_binding.set_index("condition_id")[
+            pool_by_condition = selected_binding.set_index(perturbation_key)[
                 "reference_pool_id"
             ].astype(str)
-            missing_binding = set(selected_conditions["condition_id"]) - set(
+            missing_binding = set(selected_conditions[perturbation_key]) - set(
                 pool_by_condition.index
             )
             if missing_binding:
@@ -468,10 +798,10 @@ def validate_view_for_recipe(
                     )
                 )
         reference_condition_ids = set(
-            selected_conditions.loc[selected_conditions["is_reference"], "condition_id"]
+            selected_conditions.loc[selected_conditions[control_column], perturbation_key]
         )
         intervention_condition_ids = set(
-            selected_conditions.loc[~selected_conditions["is_reference"], "condition_id"]
+            selected_conditions.loc[~selected_conditions[control_column], perturbation_key]
         )
         reference_groups = set(
             pool_by_condition.loc[list(reference_condition_ids & set(pool_by_condition.index))]
@@ -496,9 +826,22 @@ def validate_view_for_recipe(
                     "error",
                     "recipe.reference_binding",
                     "Recipe requires at least one selected reference condition.",
-                    ("conditions", "is_reference"),
+                    ("perturbations" if is_lps else "conditions", control_column),
                 )
             )
+        if is_lps and not selected_binding.empty:
+            unsupported_scopes = set(selected_binding["scope_kind"]) - set(
+                requirements.supported_reference_scopes
+            )
+            if unsupported_scopes:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "recipe.reference_scope",
+                        f"Recipe does not support reference scopes {sorted(unsupported_scopes)}.",
+                        ("reference_bindings", "scope_kind"),
+                    )
+                )
         if (
             requirements.maximum_reference_pools is not None
             and len(reference_groups) > requirements.maximum_reference_pools
@@ -583,7 +926,7 @@ class TrainingEngine:
     def fit(
         self,
         recipe: CREDORecipe,
-        study: Study | StudyView | CREDOStudy,
+        study: PerturbSeqStudy | PerturbSeqView | Study | StudyView | CREDOStudy,
         config: Any,
         split: SplitSpec | None = None,
         **kwargs: Any,
@@ -594,17 +937,23 @@ class TrainingEngine:
             else config
         )
         recipe.capabilities.require("train")
-        if isinstance(study, Study):
+        if isinstance(study, (PerturbSeqStudy, Study)):
             study = config.view(study) if callable(getattr(config, "view", None)) else study.view()
-        if isinstance(study, StudyView):
+        if isinstance(study, (PerturbSeqView, StudyView)):
             split = recipe.plan_split(study, recipe_config, split)
             validate_split_plan(study, split)
             validate_representation_scope(study, split)
             requirements = recipe.requirements(recipe_config)
             validate_view_for_recipe(study, split, requirements).raise_for_errors()
-            compiled_study = recipe.compile_study(study, split, recipe_config)
+            compiler = getattr(recipe, "compile", None)
+            compiled_study = (
+                compiler(study, split, recipe_config)
+                if callable(compiler)
+                else recipe.compile_study(study, split, recipe_config)
+            )
         else:
             compiled_study = study
+        recipe.validate_compiled(compiled_study, recipe_config).raise_for_errors()
         validate_recipe_study(recipe, compiled_study)
         plan = recipe.training_plan(compiled_study, recipe_config)
         objectives = recipe.build_objectives(compiled_study, recipe_config)
@@ -640,7 +989,7 @@ class TrainingEngine:
 
 
 def train(
-    study: Study | StudyView | CREDOStudy,
+    study: PerturbSeqStudy | PerturbSeqView | Study | StudyView | CREDOStudy,
     config: Any,
     *,
     recipe: CREDORecipe | None = None,
@@ -652,7 +1001,7 @@ def train(
         from .registry import get_recipe
 
         recipe = get_recipe(config.recipe)
-    selected = config.view(study) if isinstance(study, Study) else study
+    selected = config.view(study) if isinstance(study, (PerturbSeqStudy, Study)) else study
     return TrainingEngine().fit(recipe, selected, config, split=split, **kwargs)
 
 
@@ -660,10 +1009,16 @@ __all__ = [
     "CREDORecipe",
     "CREDORun",
     "CheckpointCodec",
+    "CounterfactualQuery",
+    "CounterfactualResult",
     "LossReport",
+    "LongitudinalPerturbSeqRecipe",
+    "LongitudinalPerturbSeqRequirements",
     "ModelRecipe",
     "ObjectiveDescriptor",
     "ObjectiveTerm",
+    "PredictionQuery",
+    "PredictionResult",
     "RecipeRequirements",
     "RuntimeState",
     "TrainingEngine",

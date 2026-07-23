@@ -104,7 +104,8 @@ def standardize_compact_metrics(
     frame.insert(3, "split_id", compact_split_id(run))
     frame["series_id"] = frame["measure_id"].astype(str)
     frame["checkpoint_id"] = frame["time_label"].astype(str)
-    observation_map = run.data.metadata.get("observation_id_by_series_checkpoint", {})
+    result_data = getattr(run, "validation_data", run.data)
+    observation_map = result_data.metadata.get("observation_id_by_series_checkpoint", {})
     frame["observation_id"] = [
         observation_map.get(f"{series_id}\0{checkpoint_id}", f"{series_id}@{checkpoint_id}")
         for series_id, checkpoint_id in zip(frame["series_id"], frame["checkpoint_id"], strict=True)
@@ -128,7 +129,7 @@ def evaluation_tables(
     if "checkpoint_id" not in frame:
         frame["checkpoint_id"] = frame["time_label"].astype(str)
     if "observation_id" not in frame:
-        observation_map = getattr(run, "data", None)
+        observation_map = getattr(run, "validation_data", getattr(run, "data", None))
         observation_map = (
             {}
             if observation_map is None

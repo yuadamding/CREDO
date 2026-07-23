@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Iterator, Mapping
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
@@ -14,7 +16,12 @@ from ..data.splits import SplitPlan
 from ..data.study import StudyView
 from ..data.support import SupportRef
 from ..data.tables import AbundanceSemantics
-from ..objective import CountBlock
+from ..problems import (
+    CompiledLPSSplit,
+    CompiledObservationSet,
+    FiniteMeasureDynamicsProblem,
+)
+from .compact_sde_v3.objective import CountBlock
 
 
 def _pooled_observation_id(
@@ -214,18 +221,11 @@ class _CompiledMeasures(Mapping[str, Mapping[str, FiniteMeasure]]):
 
 
 def _validate_static_trajectory_semantics(view: StudyView) -> None:
-    observations = view.observations()
-    for column, label in (("context_id", "context"), ("sample_id", "sample identity")):
-        if column not in observations:
-            continue
-        varying = observations.groupby("series_id", observed=True)[column].nunique(dropna=False)
-        if varying.gt(1).any():
-            series_id = str(varying[varying.gt(1)].index[0])
-            raise ValueError(
-                f"Compact trajectory compilation requires series-static {label}; "
-                f"series {series_id!r} changes {column}."
-            )
-    conditions = view.study.conditions._unsafe_view()
+    is_lps = hasattr(view.study, "perturbations")
+    perturbation_key = "perturbation_id" if is_lps else "condition_id"
+    perturbations = (
+        view.study.perturbations._unsafe_view() if is_lps else view.study.conditions._unsafe_view()
+    )
     series = view.study.series._unsafe_view()
     effect_binding = view.effect_binding()
     if effect_binding.empty:
@@ -240,11 +240,12 @@ def _validate_static_trajectory_semantics(view: StudyView) -> None:
             "Released trajectory recipes support flat effect bindings only; "
             f"hierarchical columns are populated: {hierarchical_columns}."
         )
-    selected_conditions = set(
-        series.loc[series["series_id"].isin(view.series_ids), "condition_id"].astype(str)
+    selected_perturbations = set(
+        series.loc[series["series_id"].isin(view.series_ids), perturbation_key].astype(str)
     )
-    references = conditions.loc[
-        conditions["condition_id"].isin(selected_conditions) & conditions["is_reference"]
+    control_column = "is_control" if is_lps else "is_reference"
+    references = perturbations.loc[
+        perturbations[perturbation_key].isin(selected_perturbations) & perturbations[control_column]
     ]
     binding = view.reference_binding()
     if binding.empty:
@@ -253,7 +254,7 @@ def _validate_static_trajectory_semantics(view: StudyView) -> None:
         )
     pools = set(
         binding.loc[
-            binding["condition_id"].isin(references["condition_id"]),
+            binding[perturbation_key].isin(references[perturbation_key]),
             "reference_pool_id",
         ].astype(str)
     )
@@ -267,7 +268,13 @@ def _validate_static_trajectory_semantics(view: StudyView) -> None:
 def _measure_meta(view: StudyView, axis: Axis) -> pd.DataFrame:
     series = view.study.series._unsafe_view()
     series = series.loc[series["series_id"].isin(view.series_ids)].copy()
-    conditions = view.study.conditions._unsafe_view().set_index("condition_id")
+    is_lps = hasattr(view.study, "perturbations")
+    perturbation_key = "perturbation_id" if is_lps else "condition_id"
+    perturbations = (
+        view.study.perturbations._unsafe_view().set_index("perturbation_id")
+        if is_lps
+        else view.study.conditions._unsafe_view().set_index("condition_id")
+    )
     observations = view.observations()
     source = observations.loc[observations["checkpoint_id"].eq(axis.source)]
     if source.duplicated("series_id").any():
@@ -282,39 +289,74 @@ def _measure_meta(view: StudyView, axis: Axis) -> pd.DataFrame:
     effect_binding = view.effect_binding()
     if effect_binding.empty:
         raise ValueError("Trajectory compilation requires a selected effect binding catalog.")
-    effect_by_condition = (
-        effect_binding.set_index("condition_id")["effect_id"].astype(str).to_dict()
+    effect_by_perturbation = (
+        effect_binding.set_index(perturbation_key)["effect_id"].astype(str).to_dict()
     )
     rows: list[dict[str, Any]] = []
     legacy_binding = view.study.provenance.get("codec") == "credo.current_five_file"
+    native_lps = is_lps and "schema_v3_conversion" not in view.study.provenance
     semantic_columns = {
         "series_id",
         "condition_id",
+        "perturbation_id",
         "subject_id",
+        "experimental_unit_id",
+        "context_trajectory_id",
+        "biological_replicate_id",
+        "continuity_kind",
         "embedding_id",
         "reference_role",
     }
     for row in series.itertuples(index=False):
         values = row._asdict()
-        condition = conditions.loc[row.condition_id]
+        perturbation_id = str(values[perturbation_key])
+        perturbation = perturbations.loc[perturbation_id]
         source_observation = source.loc[row.series_id]
         raw_context = source_observation.get("context_id")
-        context_id = str(row.subject_id) if pd.isna(raw_context) else str(raw_context)
+        context_id = (
+            str(values["context_trajectory_id"])
+            if native_lps
+            else (str(row.subject_id) if pd.isna(raw_context) else str(raw_context))
+        )
         compiled = {key: value for key, value in values.items() if key not in semantic_columns}
         compiled.update(
             {
                 "measure_id": str(row.series_id),
                 "sample_id": str(row.subject_id),
-                "embedding_id": effect_by_condition[str(row.condition_id)],
+                "perturbation_id": perturbation_id,
+                "embedding_id": effect_by_perturbation[perturbation_id],
                 "context_group_id": context_id,
-                "is_control": bool(condition["is_reference"]),
+                "is_control": bool(
+                    perturbation["is_control"] if is_lps else perturbation["is_reference"]
+                ),
             }
         )
-        if "perturbation_id" not in compiled and legacy_binding:
-            compiled["perturbation_id"] = str(row.condition_id)
+        if is_lps:
+            compiled["experimental_unit_id"] = str(values["experimental_unit_id"])
+            compiled["continuity_kind"] = str(values["continuity_kind"])
+        elif "perturbation_id" not in compiled and legacy_binding:
+            compiled["perturbation_id"] = perturbation_id
         for column in ("guide_id", "target_gene"):
-            if column not in compiled and column in condition.index and pd.notna(condition[column]):
-                compiled[column] = str(condition[column])
+            if (
+                column not in compiled
+                and column in perturbation.index
+                and pd.notna(perturbation[column])
+            ):
+                compiled[column] = str(perturbation[column])
+        components = getattr(view.study, "perturbation_components", None)
+        if is_lps and components is not None:
+            component_rows = components._unsafe_view()
+            component_rows = component_rows.loc[
+                component_rows["perturbation_id"].eq(perturbation_id)
+            ]
+            constructs = tuple(dict.fromkeys(component_rows["construct_id"].astype(str)))
+            targets = tuple(dict.fromkeys(component_rows["target_id"].astype(str)))
+            if len(constructs) == 1:
+                compiled.setdefault("guide_id", constructs[0])
+                compiled["construct_id"] = constructs[0]
+            if len(targets) == 1:
+                compiled.setdefault("target_gene", targets[0])
+                compiled["target_id"] = targets[0]
         rows.append(compiled)
     frame = pd.DataFrame(rows)
     preferred = [
@@ -339,6 +381,7 @@ def _count_blocks(view: StudyView, measure_meta: pd.DataFrame) -> tuple[CountBlo
     if frame.empty:
         return ()
     index = {measure_id: position for position, measure_id in enumerate(measure_meta["measure_id"])}
+    context_by_series = measure_meta.set_index("measure_id")["context_group_id"].astype(str)
     blocks: list[CountBlock] = []
     for _block_id, rows in frame.groupby("composition_block_id", observed=True, sort=False):
         rows = rows.sort_values(["series_id", "observation_id"])
@@ -346,6 +389,13 @@ def _count_blocks(view: StudyView, measure_meta: pd.DataFrame) -> tuple[CountBlo
         background = rows.loc[~rows["series_id"].isin(index)].copy()
         if active.empty:
             continue
+        context_groups = set(active["series_id"].map(context_by_series).astype(str))
+        if len(context_groups) != 1:
+            raise ValueError(
+                "One composition block must map to one population-series context trajectory; "
+                f"block={_block_id!r}, contexts={sorted(context_groups)}."
+            )
+        context_group_id = next(iter(context_groups))
         if active["series_id"].duplicated().any():
             active = (
                 active.groupby("series_id", observed=True, sort=False)
@@ -385,7 +435,7 @@ def _count_blocks(view: StudyView, measure_meta: pd.DataFrame) -> tuple[CountBlo
         )
         blocks.append(
             CountBlock(
-                context_group_id=str(active["context_id"].iloc[0]),
+                context_group_id=context_group_id,
                 time_label=str(active["checkpoint_id"].iloc[0]),
                 measure_indices=np.asarray([index[value] for value in active["series_id"]]),
                 exposure=active["exposure"].to_numpy(),
@@ -410,7 +460,9 @@ def _representation(view: StudyView) -> RepresentationArtifact:
     support_hash = (
         spec.support_artifact.sha256
         if spec.support_artifact is not None
-        else hashlib.sha256(f"{view.semantic_hash()}:{spec.support_store_id}".encode()).hexdigest()
+        else hashlib.sha256(
+            f"{view.study.content_hash()}:{spec.support_store_id}:{spec.representation_id}".encode()
+        ).hexdigest()
     )
     series = view.study.series._unsafe_view().set_index("series_id")
     included_samples = tuple(
@@ -420,12 +472,21 @@ def _representation(view: StudyView) -> RepresentationArtifact:
             if series_id in series.index
         )
     )
+    fit_scope = {
+        "external_frozen": "external",
+        "shared_source_only": "all_source_samples",
+        "shared_all_observations": "all_checkpoints",
+        "nested_by_subject": "training_split",
+        "nested_by_perturbation": "training_split",
+        "nested_by_checkpoint": "training_fold_source",
+        "fully_nested": "training_split",
+    }[spec.scope_mode]
     return RepresentationArtifact(
         representation_id=spec.representation_id,
         backend=spec.backend,
         latent_dim=spec.dimension,
         latent_cache_hash=support_hash,
-        fit_scope="training_split" if spec.fit_split_id else "external",
+        fit_scope=fit_scope,
         gene_names_hash=(None if spec.feature_artifact is None else spec.feature_artifact.sha256),
         encoder_state_hash=(
             None if spec.encoder_artifact is None else spec.encoder_artifact.sha256
@@ -438,7 +499,14 @@ def _representation(view: StudyView) -> RepresentationArtifact:
         ),
         included_samples=included_samples,
         included_time_labels=spec.included_checkpoints,
-        producer={"source": "StudyView", "study_hash": view.semantic_hash()},
+        producer={
+            "source": "PerturbSeqStudy",
+            "study_content_hash": view.study.content_hash(),
+            "scope_mode": spec.scope_mode,
+            "fit_split_id": spec.fit_split_id,
+            "fit_selection_hash": spec.fit_selection_hash,
+            "fit_observation_scope": spec.fit_observation_scope,
+        },
     )
 
 
@@ -449,8 +517,6 @@ def compile_trajectory_view(
 ) -> TrajectoryData:
     """Compile one semantically validated view for the legacy trajectory executor."""
     axis = _axis(view)
-    if tuple(view.checkpoint_ids) != tuple(axis.labels):
-        raise ValueError("Trajectory compilation currently requires the complete chain design.")
     mass_semantics = _mass_semantics(view)
     if view.abundance_channel is not None:
         support_index = view.study.support_index._unsafe_view()
@@ -547,4 +613,147 @@ def compile_trajectory_view(
     )
 
 
-__all__ = ["compile_trajectory_view"]
+def _observation_set(
+    observations: pd.DataFrame,
+    observation_ids: tuple[str, ...],
+) -> CompiledObservationSet:
+    selected = observations.loc[observations["observation_id"].isin(observation_ids)]
+    selected_ids = set(selected["observation_id"].astype(str))
+    ordered_ids = tuple(value for value in observation_ids if value in selected_ids)
+    return CompiledObservationSet(
+        observation_ids=ordered_ids,
+        series_ids=tuple(dict.fromkeys(selected["series_id"].astype(str))),
+        checkpoint_ids=tuple(dict.fromkeys(selected["checkpoint_id"].astype(str))),
+    )
+
+
+def compile_finite_measure_problem(
+    view: StudyView,
+    split_plan: SplitPlan,
+) -> FiniteMeasureDynamicsProblem:
+    """Compile target-outcome-separated train and validation finite measures."""
+    observations = view.observations()
+    source_checkpoint = view.study.design.source_checkpoint_id
+    source_ids = tuple(
+        observations.loc[
+            observations["checkpoint_id"].eq(source_checkpoint), "observation_id"
+        ].astype(str)
+    )
+    source_id_set = set(source_ids)
+    training_target_ids = tuple(
+        value for value in split_plan.train_observation_ids if value not in source_id_set
+    )
+    validation_target_ids = tuple(
+        value for value in split_plan.validation_observation_ids if value not in source_id_set
+    )
+    training_observation_ids = tuple(
+        value
+        for value in split_plan.train_observation_ids
+        if value in source_id_set or value in set(training_target_ids)
+    )
+    validation_observation_ids = tuple(
+        value
+        for value in split_plan.validation_observation_ids
+        if value in source_id_set or value in set(validation_target_ids)
+    )
+
+    def partition_selection(
+        selection: Any,
+        observation_ids: tuple[str, ...],
+    ) -> Any:
+        compiled = replace(selection, observation_ids=observation_ids)
+        compositions = getattr(view.study, "compositions", None)
+        if (
+            compositions is None
+            or split_plan.source != "held_out"
+            or compiled.composition_policy == "drop"
+        ):
+            return compiled
+        frame = compositions._unsafe_view()
+        selected_ids = set(observation_ids)
+        touched = set(frame.loc[frame["observation_id"].isin(selected_ids), "composition_block_id"])
+        denominator_ids = set(
+            frame.loc[frame["composition_block_id"].isin(touched), "observation_id"].astype(str)
+        )
+        if denominator_ids - selected_ids:
+            # A held-out outcome may never enter fitting as denominator background.
+            return replace(compiled, composition_policy="condition_on_selection")
+        return compiled
+
+    training_selection = partition_selection(
+        split_plan.train_selection,
+        training_observation_ids,
+    )
+    validation_selection = partition_selection(
+        split_plan.validation_selection,
+        validation_observation_ids,
+    )
+    training_view = view.study.view(
+        training_selection,
+        representation_id=view.representation_id,
+        abundance_channel=view.abundance_channel,
+    )
+    validation_view = view.study.view(
+        validation_selection,
+        representation_id=view.representation_id,
+        abundance_channel=view.abundance_channel,
+    )
+    training = compile_trajectory_view(training_view, split_plan=split_plan)
+    validation = compile_trajectory_view(validation_view, split_plan=split_plan)
+
+    background = None
+    if getattr(view.study, "compositions", None) is not None:
+        composition = view.study.compositions._unsafe_view()
+        active_ids = set(training_observation_ids) | set(validation_observation_ids)
+        touched_blocks = set(
+            composition.loc[composition["observation_id"].isin(active_ids), "composition_block_id"]
+        )
+        detached = composition.loc[
+            composition["composition_block_id"].isin(touched_blocks)
+            & ~composition["observation_id"].isin(active_ids)
+        ]
+        if len(detached):
+            background = CompiledObservationSet(
+                observation_ids=tuple(detached["observation_id"].astype(str)),
+                series_ids=tuple(dict.fromkeys(detached["series_id"].astype(str))),
+                checkpoint_ids=tuple(dict.fromkeys(detached["checkpoint_id"].astype(str))),
+            )
+    partition = CompiledLPSSplit(
+        plan=split_plan,
+        source=_observation_set(observations, source_ids),
+        training_targets=_observation_set(observations, training_target_ids),
+        validation_targets=_observation_set(observations, validation_target_ids),
+        composition_background=background,
+    )
+    payload = {
+        "problem_kind": "finite_measure_dynamics",
+        "study_content_hash": view.study.content_hash(),
+        "selection_hash": view.semantic_hash(),
+        "split_id": split_plan.split_id,
+        "source_observation_ids": list(partition.source.observation_ids),
+        "training_target_observation_ids": list(training_target_ids),
+        "validation_target_observation_ids": list(validation_target_ids),
+        "training_composition_policy": training_selection.composition_policy,
+        "validation_composition_policy": validation_selection.composition_policy,
+        "compiler": "finite_measure_lps_v1",
+    }
+    problem_hash = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return FiniteMeasureDynamicsProblem(
+        problem_kind="finite_measure_dynamics",
+        partition=partition,
+        study_content_hash=view.study.content_hash(),
+        selection_hash=view.semantic_hash(),
+        problem_hash=problem_hash,
+        problem_metadata={
+            "compiler": "finite_measure_lps_v1",
+            "training_composition_policy": training_selection.composition_policy,
+            "validation_composition_policy": validation_selection.composition_policy,
+        },
+        training=training,
+        validation=validation,
+    )
+
+
+__all__ = ["compile_finite_measure_problem", "compile_trajectory_view"]

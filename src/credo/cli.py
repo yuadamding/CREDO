@@ -128,7 +128,7 @@ def _load_runtime(args: argparse.Namespace):
             recipe.requirements(config.recipe_config),
         ).raise_for_errors()
         compiled_study = recipe.compile_study(view, split, config.recipe_config)
-        from .training import Trainer
+        from .recipes.compact_sde_v3.training import Trainer
 
         run = Trainer.load(checkpoint, compiled_study, config, device=args.device)
     except Exception:

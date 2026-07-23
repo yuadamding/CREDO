@@ -13,6 +13,9 @@ sufficient biological evidence.
 | Physical axis and captured-count mass | Capture-scale abundance diagnostics only. |
 | Effect axis | Static control-referenced effect path; no physical interpolation, growth, or count likelihood. |
 | Unit mass | State geometry only; no abundance interpretation. |
+| Source after perturbation | Response of an already perturbed population; not the effect of initiating the perturbation. |
+| Matched/cross-sectional continuity | Population-level transition only; no lineage reconstruction. |
+| Sequencing-library composition | Relative representation in that library; no ecological interaction claim. |
 
 The run manifest records the axis, mass semantics, validation source, input
 hashes, and bank completeness needed to enforce these boundaries.
@@ -23,7 +26,7 @@ Before a cohort-level claim, predeclare and record:
 
 1. Simple baselines such as persistence, matched controls, and linear latent transitions.
 2. Dynamic baselines under the same splits, support, and metrics.
-3. Leakage-free guide, donor, and checkpoint holdouts where scientifically applicable.
+3. Leakage-free guide, target, donor, unit, and checkpoint holdouts where applicable.
 4. Control and ineffective-guide calibration by checkpoint.
 5. Particle, time-step, seed, and support-subsampling sensitivity.
 6. Donor- and guide-aware uncertainty intervals.
@@ -36,6 +39,10 @@ Use explicit `validation.strategy: context_group` for frozen donor folds and
 `validation.strategy: checkpoint` for checkpoint masking. A strict held-out
 checkpoint claim also requires a representation whose fitting excluded that
 checkpoint; objective masking alone cannot remove encoder leakage.
+
+Review intervention timing and `continuity_kind` before describing a source as
+baseline or a series as longitudinal. Review `block_kind` and population-pool
+evidence before interpreting count competition as biological ecology.
 
 Evidence should point to immutable manifests and tables with acceptance
 criteria. Biology-specific aggregation belongs under `analysis/`, outside the

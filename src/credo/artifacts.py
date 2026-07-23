@@ -213,12 +213,25 @@ def write_compact_run_json(run: Any) -> Path:
     root = Path(run.config.output).expanduser().resolve()
     legacy = run._manifest()
     resolved = legacy["resolved_config"]
+    problem = getattr(run, "problem", None)
     source = {
         "kind": "native_study" if resolved.get("study") is not None else "run_config",
         "uri": resolved.get("study"),
-        "study_content_hash": run.data.metadata.get("study_content_hash"),
-        "selection_hash": run.data.metadata.get("selection_hash"),
-        "compiled_problem_hash": run.data.metadata.get("compiled_problem_hash"),
+        "study_content_hash": (
+            problem.study_content_hash
+            if problem is not None
+            else run.data.metadata.get("study_content_hash")
+        ),
+        "selection_hash": (
+            problem.selection_hash
+            if problem is not None
+            else run.data.metadata.get("selection_hash")
+        ),
+        "compiled_problem_hash": (
+            problem.problem_hash
+            if problem is not None
+            else run.data.metadata.get("compiled_problem_hash")
+        ),
     }
     payload = {
         **legacy,
@@ -410,9 +423,12 @@ def open_run(
                 ).raise_for_errors()
                 compiled = recipe.compile_study(view, split, config.recipe_config)
                 _validate_imported_study_contract(payload, compiled)
-                if compiled.metadata.get("compiled_problem_hash") != binding.get(
-                    "compiled_problem_hash"
-                ):
+                compiled_hash = getattr(
+                    compiled,
+                    "problem_hash",
+                    compiled.metadata.get("compiled_problem_hash"),
+                )
+                if compiled_hash != binding.get("compiled_problem_hash"):
                     raise ValueError("Run compiled problem hash disagrees with the bound study.")
             except Exception:
                 owner.close()
@@ -446,9 +462,14 @@ def open_run(
             view, split, recipe.requirements(config.recipe_config)
         ).raise_for_errors()
         compiled = recipe.compile_study(view, split, config.recipe_config)
+        compiled_hash = getattr(
+            compiled,
+            "problem_hash",
+            compiled.metadata.get("compiled_problem_hash"),
+        )
         if binding.get("compiled_problem_hash") not in {
             None,
-            compiled.metadata.get("compiled_problem_hash"),
+            compiled_hash,
         }:
             raise ValueError("Run compiled problem hash disagrees with the bound study.")
         run = recipe.load_checkpoint(
@@ -499,7 +520,11 @@ def bind_run_study(run_path: str | Path, config_source: Any) -> Path:
             "uri": None if config.study is None else str(config.study),
             "study_content_hash": owner.content_hash(),
             "selection_hash": view.semantic_hash(),
-            "compiled_problem_hash": compiled.metadata.get("compiled_problem_hash"),
+            "compiled_problem_hash": getattr(
+                compiled,
+                "problem_hash",
+                compiled.metadata.get("compiled_problem_hash"),
+            ),
         }
     finally:
         owner.close()

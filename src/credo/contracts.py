@@ -227,8 +227,15 @@ class SplitSpec:
     strategy: Literal[
         "none",
         "sample",
+        "subject",
+        "experimental_unit",
         "context_group",
+        "context",
         "guide",
+        "construct",
+        "target",
+        "perturbation",
+        "combination",
         "measure",
         "embedding",
         "checkpoint",
@@ -252,8 +259,15 @@ class SplitSpec:
         if self.strategy not in {
             "none",
             "sample",
+            "subject",
+            "experimental_unit",
             "context_group",
+            "context",
             "guide",
+            "construct",
+            "target",
+            "perturbation",
+            "combination",
             "measure",
             "embedding",
             "checkpoint",
@@ -637,7 +651,7 @@ def validate_measure_meta(frame: pd.DataFrame) -> pd.DataFrame:
 
 @dataclass(frozen=True)
 class TrajectoryData:
-    """One canonical longitudinal object for endpoint, multitime, and effect data."""
+    """Deprecated numerical payload compiled from a split-scoped PerturbSeqView."""
 
     axis: Axis
     measures: Mapping[str, Mapping[str, FiniteMeasure]]
