@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "credo"
-version = "3.0.0a3"
+version = "3.0.0a4"
 description = "Versioned finite-measure perturbation dynamics"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -56,6 +56,10 @@ credo = "credo.cli:main"
 [project.entry-points."credo.recipes"]
 "credo.compact_sde_v3__3.0" = "credo.recipes.compact_v3:recipe"
 "credo.transformer_sde_v2__2.0" = "credo.recipes.transformer_v2.recipe:recipe"
+
+[project.entry-points."credo.study_codecs"]
+native_v3 = "credo.data.native:codec"
+five_file_v2 = "credo.data.legacy:codec"
 
 [tool.setuptools]
 include-package-data = false

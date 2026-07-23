@@ -82,12 +82,14 @@ def _implementation_hash() -> str:
     files = [
         *(root / name for name in ("model.py", "recipe.py", "vae.py", "weak_form.py")),
         credo_root / "contracts.py",
+        credo_root / "data/splits.py",
         credo_root / "particles.py",
         credo_root / "objective.py",
         credo_root / "artifacts.py",
         credo_root / "runtime.py",
         credo_root / "evaluation.py",
         credo_root / "counterfactual.py",
+        credo_root / "recipes/trajectory_compiler.py",
         root / "inference.py",
         root / "importer.py",
     ]
@@ -273,6 +275,7 @@ class ImportedTransformerV2Run:
     model_state: Literal["raw", "ema"]
     study: Any = None
     bundle_path: Path | None = None
+    run_manifest: Mapping[str, Any] | None = None
 
     @property
     def recipe_id(self) -> str:
@@ -324,6 +327,12 @@ class ImportedTransformerV2Run:
             **kwargs,
         )
 
+    def close(self) -> None:
+        owner = getattr(self, "_semantic_owner", None)
+        if owner is not None:
+            owner.close()
+            self._semantic_owner = None
+
 
 def _cpu_state(state: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     return {name: value.detach().cpu() for name, value in state.items()}
@@ -355,6 +364,7 @@ def _write_portable_bundle(
         "latents.npy",
         "source_manifest.json",
         "artifact_manifest.json",
+        "run.json",
     }
     if gene_names is not None:
         expected_names.add("gene_names.txt")
@@ -468,6 +478,9 @@ def _write_portable_bundle(
         + "\n",
         encoding="utf-8",
     )
+    from ...artifacts import write_imported_run_json
+
+    write_imported_run_json(destination, envelope)
     return destination
 
 
@@ -485,7 +498,7 @@ def load_imported_bundle(
     if not isinstance(artifacts, dict):
         raise ValueError("Portable bundle artifact_manifest.json is invalid.")
     actual_names = {path.name for path in destination.iterdir()}
-    unknown_files = actual_names - set(artifacts) - {"artifact_manifest.json"}
+    unknown_files = actual_names - set(artifacts) - {"artifact_manifest.json", "run.json"}
     if unknown_files:
         raise ValueError(f"Portable bundle contains unmanifested files: {sorted(unknown_files)}")
     required_artifacts = {

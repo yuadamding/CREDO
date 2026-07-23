@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from .contracts import SplitSpec
 from .data import open_study
+from .data.splits import validate_representation_scope, validate_split_plan
 from .io import load_config, validate_inputs
 from .registry import get_recipe
 from .runtime import TrainingEngine, validate_view_for_recipe
@@ -30,9 +30,9 @@ def _parser() -> argparse.ArgumentParser:
         train.add_argument("--device")
         train.add_argument("--seed", type=int)
 
-    evaluate = commands.add_parser("evaluate", help="evaluate a native checkpoint")
+    evaluate = commands.add_parser("evaluate", help="evaluate a run manifest or checkpoint")
     evaluate.add_argument("checkpoint", type=Path)
-    evaluate.add_argument("--config", required=True, type=Path)
+    evaluate.add_argument("--config", type=Path)
     evaluate.add_argument("--output", type=Path)
     evaluate.add_argument("--particles", type=int)
     evaluate.add_argument("--seed", type=int)
@@ -42,8 +42,8 @@ def _parser() -> argparse.ArgumentParser:
         "counterfactual", help="run a same-start, same-noise reference contrast"
     )
     contrast.add_argument("checkpoint", type=Path)
-    contrast.add_argument("--measure-id", required=True)
-    contrast.add_argument("--config", required=True, type=Path)
+    contrast.add_argument("--measure-id", "--series-id", dest="measure_id", required=True)
+    contrast.add_argument("--config", type=Path)
     contrast.add_argument("--output", type=Path)
     contrast.add_argument("--particles", type=int)
     contrast.add_argument("--seed", type=int)
@@ -68,6 +68,7 @@ def _parser() -> argparse.ArgumentParser:
     importer.add_argument("--catalog", type=Path)
     importer.add_argument("--control-id", action="append")
     importer.add_argument("--study-source", type=Path)
+    importer.add_argument("--bind-config", type=Path)
     importer.add_argument("--state", choices=["raw", "ema"], default="raw")
     importer.add_argument("--device", default="cpu")
     return parser
@@ -89,9 +90,9 @@ def _train(args: argparse.Namespace) -> int:
     if changed:
         config = type(config).model_validate(updates)
     recipe = get_recipe(config.recipe)
-    study = open_study(config, verify="semantic")
+    study = open_study(config if config.study is None else config.study, verify="semantic")
     try:
-        trainer = TrainingEngine().fit(recipe, study.view(), config, device=args.device)
+        trainer = TrainingEngine().fit(recipe, config.view(study), config, device=args.device)
         output = trainer.save()
     finally:
         study.close()
@@ -101,27 +102,26 @@ def _train(args: argparse.Namespace) -> int:
 
 def _load_runtime(args: argparse.Namespace):
     checkpoint = args.checkpoint.expanduser().resolve()
-    if checkpoint.is_dir():
-        raise ValueError(
-            "Core CLI evaluation accepts native checkpoints only. Imported transformer-v2 "
-            "bundles require a canonical compiled study through the Python API; cohort replay "
-            "belongs in its external adapter workflow."
-        )
+    run_manifest = checkpoint / "run.json" if checkpoint.is_dir() else checkpoint
+    if run_manifest.name == "run.json" and run_manifest.is_file():
+        from .artifacts import open_run
+
+        run = open_run(run_manifest, device=args.device)
+        study = getattr(run, "data", None) or getattr(run, "study", None)
+        return run, study, None
+    if args.config is None:
+        raise ValueError("A legacy checkpoint requires --config; run.json is self-describing.")
     config = load_config(args.config)
     recipe = get_recipe(config.recipe)
-    semantic_study = open_study(config, verify="semantic")
+    semantic_study = open_study(
+        config if config.study is None else config.study,
+        verify="semantic",
+    )
     try:
-        view = semantic_study.view()
-        representation_scope = getattr(
-            getattr(config.recipe_config, "validation", None),
-            "representation_scope",
-            "shared",
-        )
-        split = SplitSpec(
-            strategy="none",
-            representation_scope=representation_scope,
-            split_id=f"study-view:{view.semantic_hash()[:12]}",
-        )
+        view = config.view(semantic_study)
+        split = recipe.plan_split(view, config.recipe_config)
+        validate_split_plan(view, split)
+        validate_representation_scope(view, split)
         validate_view_for_recipe(
             view,
             split,
@@ -151,7 +151,11 @@ def _evaluate(args: argparse.Namespace) -> int:
             output.parent.mkdir(parents=True, exist_ok=True)
             metrics.to_parquet(output, index=False)
     finally:
-        owner.close()
+        if owner is not None:
+            owner.close()
+        close = getattr(run, "close", None)
+        if owner is None and callable(close):
+            close()
     print(json.dumps({"status": "evaluated", "rows": len(metrics)}, indent=2))
     return 0
 
@@ -174,17 +178,33 @@ def _counterfactual(args: argparse.Namespace) -> int:
             output.parent.mkdir(parents=True, exist_ok=True)
             frame.to_parquet(output, index=False)
     finally:
-        owner.close()
+        if owner is not None:
+            owner.close()
+        close = getattr(run, "close", None)
+        if owner is None and callable(close):
+            close()
     print(json.dumps({"status": "evaluated", "rows": len(frame)}, indent=2))
     return 0
 
 
 def _summarize(run_dir: Path) -> int:
-    directory = run_dir.expanduser().resolve()
-    with (directory / "manifest.json").open("r", encoding="utf-8") as handle:
-        manifest = json.load(handle)
-    metrics = pd.read_parquet(directory / "metrics.parquet")
-    history = pd.read_parquet(directory / "history.parquet")
+    from .artifacts import _verified_run_manifest
+
+    manifest, directory = _verified_run_manifest(run_dir)
+
+    def output(name: str) -> Path:
+        relative = manifest["outputs"][name]
+        if relative not in manifest["artifacts"]:
+            raise ValueError(f"Run output {name!r} is absent from the artifact catalog.")
+        return directory / relative
+
+    metrics = pd.read_parquet(output("metrics"))
+    predictions = pd.read_parquet(output("predictions"))
+    diagnostics = pd.read_parquet(output("diagnostics"))
+    history = pd.read_parquet(output("history"))
+    geometry = metrics.loc[metrics["metric_name"].eq("sinkhorn_divergence"), "value"]
+    mass_error = metrics.loc[metrics["metric_name"].eq("log_abundance_squared_error"), "value"]
+    ess = diagnostics.loc[diagnostics["diagnostic_name"].eq("particle_ess_fraction"), "value"]
     summary = {
         "package_version": manifest.get("package_version"),
         "axis": manifest.get("axis"),
@@ -192,9 +212,10 @@ def _summarize(run_dir: Path) -> int:
         "validation_source": manifest.get("validation_split", {}).get("source"),
         "epochs": int(len(history)),
         "metric_rows": int(len(metrics)),
-        "mean_geometry": float(metrics["geometry"].mean()),
-        "mean_log_mass_error": float(metrics["log_mass_error"].mean()),
-        "minimum_ess_fraction": float(metrics["ess_fraction"].min()),
+        "prediction_rows": int(len(predictions)),
+        "mean_geometry": float(geometry.mean()),
+        "mean_log_mass_error": float(mass_error.mean()),
+        "minimum_ess_fraction": float(ess.min()),
     }
     print(json.dumps(summary, indent=2))
     return 0
@@ -216,6 +237,10 @@ def _import_checkpoint(args: argparse.Namespace) -> int:
         model_state=args.state,
         device=args.device,
     )
+    if args.bind_config is not None:
+        from .artifacts import bind_run_study
+
+        bind_run_study(args.output / "run.json", args.bind_config)
     print(
         json.dumps(
             {

@@ -1,5 +1,32 @@
 # Changelog
 
+## 3.0.0a4 - 2026-07-22
+
+- Added one content-addressed `SplitPlan` used by semantic compilation,
+  training, evaluation, checkpoints, and run reloads, with machine-checked
+  shared/transductive and nested/inductive representation scope.
+- Added transactional native schema-v3 Study persistence with Parquet semantic
+  tables, lazy HDF5 support stores, artifact verification, support semantic
+  digests, and third-party codec discovery.
+- Moved effect and reference parameter sharing into run-selectable binding
+  catalogs and made compact-v3 reject multiple biological reference pools.
+- Added explicit no-abundance unit semantics, static context/sample checks,
+  replicate selection and pooling, selection-conditioned denominators, and
+  detached background-preserving composition blocks.
+- Replaced weak identifier hashes with Study, selection, split, compiled
+  problem, and run contract hashes that bind scientific values while excluding
+  artifact locations.
+- Added the generic `run.json` loader and recipe-owned checkpoint reconstruction
+  for compact and imported transformer bundles, including post-import Study
+  binding.
+- Split persisted results into predictions, long-form common metrics, and
+  recipe diagnostics, and changed compact output to the generic seven-file run
+  layout.
+- Added the recipe-neutral `train()` facade, reduced root exports to the
+  semantic workflow, and retained legacy numerical objects as deprecated
+  compatibility shims.
+- Documented the MIT to AGPL-3.0-only transition introduced in `39dcb615`.
+
 ## 3.0.0a3 - 2026-07-21
 
 - Added the storage-independent `Study` model and a lazy five-file compatibility

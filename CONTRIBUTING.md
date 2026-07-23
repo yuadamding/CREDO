@@ -24,3 +24,5 @@ not commit patient-level data, downloaded expression matrices, checkpoints,
 credentials, or generated runs.
 
 Contributions are accepted under the GNU Affero General Public License v3.0.
+Recipes and codecs distributed through entry points receive no plugin exception;
+see [the license transition](docs/license_migration.md).

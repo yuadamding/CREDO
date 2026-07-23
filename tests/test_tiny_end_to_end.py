@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import pkgutil
+import shutil
 from dataclasses import replace
 
 import anndata as ad
@@ -14,7 +15,13 @@ from pydantic import ValidationError
 
 import credo
 from credo.cli import main
+from credo.contracts import SplitSpec
 from credo.counterfactual import counterfactual
+from credo.evaluation import (
+    COMMON_DIAGNOSTIC_COLUMNS,
+    COMMON_METRIC_COLUMNS,
+    COMMON_PREDICTION_COLUMNS,
+)
 from credo.io import RunConfig, load_config, load_data, write_canonical_dataset
 from credo.model import CREDOModel
 from credo.registry import get_recipe
@@ -26,18 +33,22 @@ def _fit(config, data):
     return TrainingEngine().fit(get_recipe(config.recipe), data, config, device="cpu")
 
 
-def test_tiny_gse_like_run_writes_five_artifacts(trained_run) -> None:
+def test_tiny_run_writes_generic_bundle_artifacts(trained_run) -> None:
     output = trained_run.config.output
-    assert sorted(path.name for path in output.iterdir()) == sorted(
+    assert sorted(
+        str(path.relative_to(output)) for path in output.rglob("*") if path.is_file()
+    ) == sorted(
         [
-            "manifest.json",
-            "checkpoint.pt",
-            "history.parquet",
-            "metrics.parquet",
-            "counterfactuals.parquet",
+            "run.json",
+            "state/checkpoint.pt",
+            "tables/history.parquet",
+            "tables/predictions.parquet",
+            "tables/metrics.parquet",
+            "tables/diagnostics.parquet",
+            "tables/counterfactuals.parquet",
         ]
     )
-    history = pd.read_parquet(output / "history.parquet")
+    history = pd.read_parquet(output / "tables/history.parquet")
     assert history["phase"].tolist() == ["state", "mass", "context"]
     assert history.loc[history["phase"].eq("state"), "bank_seen_fraction"].eq(0.0).all()
     assert (
@@ -50,21 +61,17 @@ def test_tiny_gse_like_run_writes_five_artifacts(trained_run) -> None:
         .all()
     )
     assert history["validation_count_loss"].map(pd.notna).all()
-    metrics = pd.read_parquet(output / "metrics.parquet")
-    assert metrics.columns.tolist() == [
-        "measure_id",
-        "time_label",
-        "endpoint_role",
-        "validation_source",
-        "geometry",
-        "log_mass_error",
-        "predicted_log_mass",
-        "observed_log_mass",
-        "ess_fraction",
-        "max_weight_fraction",
-    ]
-    assert set(metrics["validation_source"]) == {"held_out"}
-    manifest = json.loads((output / "manifest.json").read_text(encoding="utf-8"))
+    predictions = pd.read_parquet(output / "tables/predictions.parquet")
+    metrics = pd.read_parquet(output / "tables/metrics.parquet")
+    diagnostics = pd.read_parquet(output / "tables/diagnostics.parquet")
+    assert predictions.columns.tolist() == list(COMMON_PREDICTION_COLUMNS)
+    assert metrics.columns.tolist() == list(COMMON_METRIC_COLUMNS)
+    assert diagnostics.columns.tolist() == list(COMMON_DIAGNOSTIC_COLUMNS)
+    assert set(metrics["metric_name"]) == {
+        "sinkhorn_divergence",
+        "log_abundance_squared_error",
+    }
+    manifest = json.loads((output / "run.json").read_text(encoding="utf-8"))
     assert manifest["mass_semantics"] == "relative_within_group"
     assert manifest["mass_denominators"] == [
         "D1::Rest::eligible_guides",
@@ -87,7 +94,7 @@ def test_tiny_gse_like_run_writes_five_artifacts(trained_run) -> None:
 
 def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp_path) -> None:
     loaded = Trainer.load(
-        trained_run.config.output / "checkpoint.pt",
+        trained_run.config.output / "state/checkpoint.pt",
         tiny_data,
         trained_run.config,
         device="cpu",
@@ -97,7 +104,7 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp
     pd.testing.assert_frame_equal(before, after, check_exact=True)
 
     higher_resolution = Trainer.load(
-        trained_run.config.output / "checkpoint.pt",
+        trained_run.config.output / "state/checkpoint.pt",
         tiny_data,
         trained_run.config,
         device="cpu",
@@ -112,7 +119,7 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp
     wrong_config = trained_run.config.model_copy(update={"recipe_config": wrong_settings})
     with pytest.raises(ValueError, match="architecture disagrees"):
         Trainer.load(
-            trained_run.config.output / "checkpoint.pt",
+            trained_run.config.output / "state/checkpoint.pt",
             tiny_data,
             wrong_config,
             device="cpu",
@@ -125,7 +132,7 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp
     wrong_config = trained_run.config.model_copy(update={"recipe_config": wrong_settings})
     with pytest.raises(ValueError, match="run contract disagrees"):
         Trainer.load(
-            trained_run.config.output / "checkpoint.pt",
+            trained_run.config.output / "state/checkpoint.pt",
             tiny_data,
             wrong_config,
             device="cpu",
@@ -136,14 +143,14 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp
     changed_data = replace(tiny_data, measure_meta=changed_meta)
     with pytest.raises(ValueError, match="run contract disagrees"):
         Trainer.load(
-            trained_run.config.output / "checkpoint.pt",
+            trained_run.config.output / "state/checkpoint.pt",
             changed_data,
             trained_run.config,
             device="cpu",
         )
 
     payload = torch.load(
-        trained_run.config.output / "checkpoint.pt",
+        trained_run.config.output / "state/checkpoint.pt",
         map_location="cpu",
         weights_only=True,
     )
@@ -154,7 +161,7 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp
         Trainer.load(missing_envelope, tiny_data, trained_run.config, device="cpu")
 
     corrupted = torch.load(
-        trained_run.config.output / "checkpoint.pt",
+        trained_run.config.output / "state/checkpoint.pt",
         map_location="cpu",
         weights_only=True,
     )
@@ -165,6 +172,77 @@ def test_checkpoint_roundtrip_reproduces_predictions(trained_run, tiny_data, tmp
     torch.save(corrupted, corrupted_checkpoint)
     with pytest.raises(ValueError, match="semantic hash"):
         Trainer.load(corrupted_checkpoint, tiny_data, trained_run.config, device="cpu")
+
+
+def test_generic_run_loader_reconstructs_compact_predictions(trained_run) -> None:
+    loaded = credo.open_run(trained_run.config.output / "run.json", device="cpu")
+    try:
+        pd.testing.assert_frame_equal(
+            trained_run.metrics.reset_index(drop=True),
+            loaded.metrics.reset_index(drop=True),
+            check_exact=True,
+        )
+        declared = json.loads((trained_run.config.output / "run.json").read_text(encoding="utf-8"))[
+            "split_plan"
+        ]
+        assert loaded.data.metadata["split_plan"] == declared
+    finally:
+        loaded.close()
+
+
+def test_generic_run_manifest_rejects_corrupt_and_external_artifacts(
+    trained_run,
+    tmp_path,
+) -> None:
+    copied = tmp_path / "copied-run"
+    shutil.copytree(trained_run.config.output, copied)
+    checkpoint = copied / "state/checkpoint.pt"
+    checkpoint.write_bytes(checkpoint.read_bytes() + b"corrupt")
+    with pytest.raises(ValueError, match="Run artifact size mismatch"):
+        credo.open_run(copied / "run.json")
+
+    from credo.artifacts import write_run_json
+
+    outside = tmp_path / "outside.bin"
+    outside.write_bytes(b"state")
+    with pytest.raises(ValueError, match="escapes its root"):
+        write_run_json(
+            tmp_path / "new-run",
+            {"recipe": {"id": "fixture", "version": "1"}},
+            artifacts={"../outside.bin": outside},
+        )
+
+
+def test_generic_run_loader_uses_the_saved_explicit_split(tiny_config, tmp_path) -> None:
+    config = tiny_config.model_copy(update={"output": tmp_path / "explicit-split-run"})
+    study = credo.open_study(config)
+    try:
+        requested = SplitSpec(
+            strategy="measure",
+            validation_values=("D1::GENE1-1",),
+            representation_scope="shared",
+        )
+        trained = TrainingEngine().fit(
+            get_recipe(config.recipe),
+            config.view(study),
+            config,
+            split=requested,
+            device="cpu",
+        )
+        trained.save()
+    finally:
+        study.close()
+    loaded = credo.open_run(config.output / "run.json", device="cpu")
+    try:
+        assert loaded.validation_measure_ids == ("D1::GENE1-1",)
+        assert loaded.validation_strategy == "within_embedding_holdout"
+        pd.testing.assert_frame_equal(
+            trained.metrics.reset_index(drop=True),
+            loaded.metrics.reset_index(drop=True),
+            check_exact=True,
+        )
+    finally:
+        loaded.close()
 
 
 def test_trainer_rejects_noncanonical_model_architecture(tiny_config, tiny_data) -> None:
@@ -247,7 +325,7 @@ def test_save_refuses_files_outside_the_artifact_contract(trained_run) -> None:
     extra = trained_run.config.output / "extra.csv"
     extra.write_text("stale\n", encoding="utf-8")
     try:
-        with pytest.raises(FileExistsError, match="five-artifact contract"):
+        with pytest.raises(FileExistsError, match="bundle contract"):
             trained_run.save()
     finally:
         extra.unlink()
@@ -352,8 +430,8 @@ def test_lazy_support_validation_scans_for_nonfinite_values(tiny_config, tmp_pat
 
 
 def test_counterfactual_persistence_preserves_prior_rows(trained_run, tiny_data) -> None:
-    path = trained_run.config.output / "counterfactuals.parquet"
-    manifest_path = trained_run.config.output / "manifest.json"
+    path = trained_run.config.output / "tables/counterfactuals.parquet"
+    manifest_path = trained_run.config.output / "run.json"
     original_artifact = path.read_bytes()
     original_manifest = manifest_path.read_bytes()
     noncontrols = tiny_data.measure_meta.loc[
@@ -384,7 +462,7 @@ def test_counterfactual_persistence_preserves_prior_rows(trained_run, tiny_data)
     try:
         pd.DataFrame([prior], columns=columns).to_parquet(path, index=False)
         loaded = Trainer.load(
-            trained_run.config.output / "checkpoint.pt",
+            trained_run.config.output / "state/checkpoint.pt",
             tiny_data,
             trained_run.config,
             device="cpu",
@@ -424,7 +502,21 @@ def test_installed_surface_is_compact_and_recipe_runtime_is_explicit() -> None:
         "runtime",
         "training",
     }
-    assert len(credo.__all__) == 18
+    assert credo.__all__ == [
+        "SelectionSpec",
+        "SplitPlan",
+        "Study",
+        "StudyView",
+        "bind_run_study",
+        "counterfactual",
+        "evaluate",
+        "get_recipe",
+        "load_config",
+        "open_study",
+        "open_run",
+        "train",
+        "write_study",
+    ]
 
 
 def test_cli_validate_and_summarize(tiny_config, trained_run, capsys, tmp_path) -> None:
@@ -435,13 +527,13 @@ def test_cli_validate_and_summarize(tiny_config, trained_run, capsys, tmp_path) 
     assert validation["measure_count"] == 12
     assert main(["summarize", str(trained_run.config.output)]) == 0
     summary = json.loads(capsys.readouterr().out)
-    assert summary["metric_rows"] == len(trained_run.metrics)
+    assert summary["prediction_rows"] == len(trained_run.metrics)
     metrics_path = tmp_path / "cli_metrics.parquet"
     assert (
         main(
             [
                 "evaluate",
-                str(trained_run.config.output / "checkpoint.pt"),
+                str(trained_run.config.output / "state/checkpoint.pt"),
                 "--config",
                 str(config_path),
                 "--output",

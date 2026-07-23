@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 import numpy as np
 import pandas as pd
+import yaml
 
 from ..contracts import (
     Axis,
@@ -44,7 +45,9 @@ from .tables import (
     AbundanceTable,
     CompositionTable,
     ConditionTable,
+    EffectBindingTable,
     ObservationTable,
+    ReferenceBindingTable,
     SeriesTable,
     SupportIndexTable,
 )
@@ -468,7 +471,11 @@ def _read_five_file_study(
             representation=representation,
         )
     study = codec.from_trajectory(components, masses=masses, counts=counts)
-    study.validate(level=verify).raise_for_errors()
+    try:
+        study.validate(level=verify).raise_for_errors()
+    except Exception:
+        study.close()
+        raise
     return study
 
 
@@ -480,14 +487,32 @@ class CurrentFiveFileStudyCodec:
     writable_schema_versions: frozenset[int] = frozenset()
 
     def probe(self, source: Any) -> bool:
-        if isinstance(source, (RunConfig, TrajectoryData)):
+        if isinstance(source, RunConfig):
+            return source.data is not None and source.axis is not None
+        if isinstance(source, TrajectoryData):
             return True
         try:
             path = Path(source).expanduser()
         except TypeError:
             return False
         if path.suffix.lower() in {".yaml", ".yml"}:
-            return path.is_file()
+            if not path.is_file():
+                return False
+            try:
+                payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError):
+                return False
+            if not isinstance(payload, Mapping):
+                return False
+            data = payload.get("data")
+            axis = payload.get("axis")
+            return (
+                isinstance(data, Mapping)
+                and {"support", "measure_meta", "masses"} <= set(data)
+                and isinstance(axis, Mapping)
+                and {"kind", "source", "labels", "values"} <= set(axis)
+                and "recipe" in payload
+            )
         manifest = path / "dataset.json" if path.is_dir() else path
         return manifest.name == "dataset.json" and manifest.is_file()
 
@@ -507,7 +532,11 @@ class CurrentFiveFileStudyCodec:
             raise ValueError(f"Unknown verification level {verify!r}.")
         if isinstance(source, TrajectoryData):
             study = self.from_trajectory(source)
-            study.validate(level=verify).raise_for_errors()
+            try:
+                study.validate(level=verify).raise_for_errors()
+            except Exception:
+                study.close()
+                raise
             return study
         return _read_five_file_study(
             self,
@@ -644,6 +673,11 @@ class CurrentFiveFileStudyCodec:
             .astype(str)
             .tolist()
         )
+        fit_split_id = (
+            f"legacy:{representation.fit_scope}:{representation.latent_cache_hash[:12]}"
+            if representation.fit_scope in {"training_fold_source", "training_split"}
+            else None
+        )
         representation_spec = RepresentationSpec(
             representation_id=representation.representation_id,
             backend=representation.backend,
@@ -661,6 +695,7 @@ class CurrentFiveFileStudyCodec:
             normalization_artifact=_artifact_ref(
                 "legacy_normalization", representation.normalization_hash
             ),
+            fit_split_id=fit_split_id,
             included_series=included_series,
             included_checkpoints=tuple(representation.included_time_labels),
         )
@@ -696,7 +731,30 @@ class CurrentFiveFileStudyCodec:
             source_schema=f"five_file_v{dataset.get('schema_version', 'unknown')}",
             primary_representation=representation.representation_id,
             primary_abundance_channel="legacy_mass",
+            primary_effect_binding="legacy_embedding",
+            primary_reference_binding="legacy_reference_group",
             description=str(dataset.get("description", "")),
+        )
+        condition_frame = conditions._unsafe_view()
+        effect_bindings = EffectBindingTable(
+            pd.DataFrame(
+                {
+                    "binding_id": "legacy_embedding",
+                    "condition_id": condition_frame["condition_id"],
+                    "effect_id": condition_frame["embedding_id"],
+                    "parameterization_kind": "legacy_condition_embedding",
+                }
+            )
+        )
+        reference_bindings = ReferenceBindingTable(
+            pd.DataFrame(
+                {
+                    "binding_id": "legacy_reference_group",
+                    "condition_id": condition_frame["condition_id"],
+                    "reference_pool_id": "legacy_global_reference",
+                    "scope_kind": "global_condition_pool",
+                }
+            )
         )
         return Study(
             manifest=manifest,
@@ -709,6 +767,8 @@ class CurrentFiveFileStudyCodec:
             compositions=compositions,
             representations=catalog,
             supports=supports,
+            effect_bindings=effect_bindings,
+            reference_bindings=reference_bindings,
             provenance={
                 "codec": self.codec_id,
                 "legacy_dataset": dataset,
@@ -736,6 +796,7 @@ def _infer_study_id(input_paths: Mapping[str, str], dataset: Mapping[str, Any]) 
 
 
 FiveFileV2Codec = CurrentFiveFileStudyCodec
+codec = CurrentFiveFileStudyCodec()
 
 
 def open_study(
@@ -759,6 +820,7 @@ def open_study(
 __all__ = [
     "CurrentFiveFileStudyCodec",
     "FiveFileV2Codec",
+    "codec",
     "observation_id",
     "open_study",
 ]

@@ -514,8 +514,8 @@ class FiniteMeasure:
     total_mass: float
 
     def __post_init__(self) -> None:
-        support = np.asarray(self.support, dtype=np.float32)
-        weights = np.asarray(self.weights, dtype=np.float64).reshape(-1)
+        support = np.array(self.support, dtype=np.float32, copy=True)
+        weights = np.array(self.weights, dtype=np.float64, copy=True).reshape(-1)
         total_mass = float(self.total_mass)
         object.__setattr__(self, "support", support)
         object.__setattr__(self, "weights", weights)

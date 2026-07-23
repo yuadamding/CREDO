@@ -206,7 +206,7 @@ toml = [
 
 [[package]]
 name = "credo"
-version = "3.0.0a3"
+version = "3.0.0a4"
 source = { editable = "." }
 dependencies = [
     { name = "anndata", version = "0.12.19", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },

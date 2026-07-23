@@ -11,19 +11,24 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from credo import SplitSpec, Study, open_study
+from credo import Study, open_study, write_study
+from credo.contracts import SplitSpec
 from credo.data import (
     AbundanceChannelSpec,
     AbundanceSemantics,
     AbundanceTable,
+    ArtifactRef,
     AxisSpec,
     Checkpoint,
     CompositionTable,
     ConditionTable,
     CurrentFiveFileStudyCodec,
+    EffectBindingTable,
     EmpiricalLaw,
     InMemorySupportStore,
     ObservationTable,
+    ReferenceBindingTable,
+    ReplicatePolicy,
     RepresentationCatalog,
     RepresentationSpec,
     SelectionSpec,
@@ -36,7 +41,8 @@ from credo.data import (
     Transition,
     available_study_codecs,
 )
-from credo.io import load_data
+from credo.data.splits import validate_representation_scope, validate_split_plan
+from credo.io import RunConfig, load_data, validate_inputs
 from credo.registry import get_recipe
 
 
@@ -172,6 +178,8 @@ def _general_study() -> Study:
             source_schema="native_test",
             primary_representation="latent-all",
             primary_abundance_channel="raw_cell_count",
+            primary_effect_binding="fixture_effect",
+            primary_reference_binding="fixture_reference",
         ),
         design=design,
         conditions=conditions,
@@ -182,11 +190,34 @@ def _general_study() -> Study:
         compositions=compositions,
         representations=representations,
         supports=store,
+        effect_bindings=EffectBindingTable(
+            pd.DataFrame(
+                {
+                    "binding_id": ["fixture_effect"],
+                    "condition_id": ["ifng"],
+                    "effect_id": ["IFNG"],
+                    "parameterization_kind": ["condition_specific"],
+                }
+            )
+        ),
+        reference_bindings=ReferenceBindingTable(
+            pd.DataFrame(
+                {
+                    "binding_id": ["fixture_reference"],
+                    "condition_id": ["ifng"],
+                    "reference_pool_id": ["media_control"],
+                    "scope_kind": ["global_condition_pool"],
+                }
+            )
+        ),
     )
 
 
 def test_five_file_codec_makes_series_and_observations_explicit(tiny_config) -> None:
-    assert available_study_codecs() == ("credo.current_five_file",)
+    assert available_study_codecs() == (
+        "credo.current_five_file",
+        "credo.native_study",
+    )
     study = open_study(tiny_config)
     try:
         assert isinstance(study, Study)
@@ -246,6 +277,41 @@ def test_study_supports_guide_free_conditions_zero_abundance_and_missing_geometr
         assert target_strict.law is None
     finally:
         study.close()
+
+
+def test_abundance_transform_records_input_and_parameters() -> None:
+    raw = AbundanceChannelSpec(
+        channel_id="raw_count",
+        semantics=AbundanceSemantics.ABSOLUTE,
+        unit="cells",
+        zero_policy="allowed",
+    )
+    modeled = AbundanceChannelSpec(
+        channel_id="modeled_frequency",
+        semantics=AbundanceSemantics.RELATIVE,
+        denominator_scope="context_checkpoint",
+        zero_policy="forbidden",
+        transform_id="jeffreys_alpha_0.5",
+        input_channel_id="raw_count",
+        transform_parameters={"alpha": 0.5},
+    )
+    table = AbundanceTable(
+        pd.DataFrame(
+            {
+                "observation_id": ["series@rest", "series@rest"],
+                "channel_id": ["raw_count", "modeled_frequency"],
+                "value": [0.0, 1.0],
+                "observed": [True, True],
+                "denominator_id": [None, "rest-library"],
+                "transform_id": [None, "jeffreys_alpha_0.5"],
+            }
+        ),
+        (raw, modeled),
+    )
+    assert table.channels["modeled_frequency"].input_channel_id == "raw_count"
+    assert table.channels["modeled_frequency"].transform_parameters == {"alpha": 0.5}
+    with pytest.raises(TypeError):
+        table.channels["modeled_frequency"].transform_parameters["alpha"] = 1.0
 
 
 def test_multiple_representations_and_views_share_one_support_store() -> None:
@@ -320,6 +386,7 @@ def test_five_file_codec_preserves_representation_fit_scope(tiny_config) -> None
         data,
         representation=replace(
             data.representation,
+            fit_scope="training_split",
             gene_names_hash="a" * 64,
             gene_mask_hash="b" * 64,
             included_samples=("D1",),
@@ -329,6 +396,7 @@ def test_five_file_codec_preserves_representation_fit_scope(tiny_config) -> None
     study = CurrentFiveFileStudyCodec().from_trajectory(scoped)
     try:
         representation = study.representations[study.manifest.primary_representation]
+        assert representation.fit_split_id is not None
         assert representation.included_series == tuple(
             data.measure_meta.loc[data.measure_meta["sample_id"].eq("D1"), "measure_id"].tolist()
         )
@@ -540,14 +608,18 @@ def test_design_validates_reachability_stars_and_ordered_direction() -> None:
         )
 
 
-def test_compact_recipe_compiles_a_guide_free_study_view(tiny_config) -> None:
+def test_compact_recipe_compiles_from_bindings_without_legacy_parameter_columns(
+    tiny_config,
+) -> None:
     study = open_study(tiny_config)
     try:
         condition_frame = study.conditions.to_pandas().drop(
-            columns=["guide_id", "target_gene"], errors="ignore"
+            columns=["guide_id", "target_gene", "embedding_id", "reference_group_id"],
+            errors="ignore",
         )
         series_frame = study.series.to_pandas().drop(
-            columns=["guide_id", "target_gene"], errors="ignore"
+            columns=["guide_id", "target_gene", "embedding_id", "reference_role"],
+            errors="ignore",
         )
         guide_free = replace(
             study,
@@ -562,6 +634,8 @@ def test_compact_recipe_compiles_a_guide_free_study_view(tiny_config) -> None:
         assert "guide_id" not in compiled.measure_meta
         assert "target_gene" not in compiled.measure_meta
         assert compiled.measure_ids == guide_free.series.series_ids
+        assert set(compiled.embedding_ids) == set(view.effect_binding()["effect_id"])
+        assert compiled.control_embedding_ids
     finally:
         study.close()
 
@@ -586,3 +660,481 @@ def test_empirical_law_owns_immutable_normalized_arrays() -> None:
     assert law.probabilities.tolist() == pytest.approx([0.4, 0.6])
     with pytest.raises(ValueError):
         law.probabilities[0] = 0.2
+
+
+def test_explicit_no_abundance_uses_unit_mass_and_static_context_is_enforced() -> None:
+    study = _general_study()
+    try:
+        assert study.view().abundance_channel == "raw_cell_count"
+        assert study.view(abundance_channel=None).abundance_channel is None
+        recipe = get_recipe("credo.compact_sde_v3@3.0")
+        report = study.view().validate_for(
+            recipe.requirements(recipe.config_schema()()), SplitSpec(strategy="none")
+        )
+        assert any(issue.code == "recipe.context_scope" for issue in report.errors)
+
+        observations = study.observations.to_pandas()
+        observations["context_id"] = "well-static"
+        static = replace(study, observations=ObservationTable(observations), compositions=None)
+        compiled = recipe.compile_study(
+            static.view(
+                SelectionSpec(composition_policy="drop"),
+                abundance_channel=None,
+            ),
+            SplitSpec(strategy="none"),
+            recipe.config_schema()(),
+        )
+        assert compiled.mass_semantics.value == "unit"
+        assert all(
+            measure.total_mass == 1.0
+            for checkpoint in compiled.measures.values()
+            for measure in checkpoint.values()
+        )
+    finally:
+        study.close()
+
+
+def test_study_content_hash_tracks_values_and_run_level_effect_bindings(tiny_config) -> None:
+    study = open_study(tiny_config)
+    try:
+        original_hash = study.content_hash()
+        abundance = study.abundance.to_pandas()
+        abundance.loc[0, "value"] = float(abundance.loc[0, "value"]) + 1.0
+        changed = replace(
+            study,
+            abundance=AbundanceTable(abundance, study.abundance.channels),
+        )
+        assert changed.content_hash() != original_hash
+
+        conditions = study.conditions.to_pandas()
+        guide_effect = pd.DataFrame(
+            {
+                "binding_id": "condition_specific",
+                "condition_id": conditions["condition_id"],
+                "effect_id": np.where(
+                    conditions["is_reference"],
+                    conditions["embedding_id"],
+                    conditions["condition_id"],
+                ),
+                "parameterization_kind": "condition_specific",
+            }
+        )
+        target_effect = pd.DataFrame(
+            {
+                "binding_id": "target_gene_shared",
+                "condition_id": conditions["condition_id"],
+                "effect_id": conditions["target_gene"].fillna(conditions["embedding_id"]),
+                "parameterization_kind": "target_gene_shared",
+            }
+        )
+        bindings = EffectBindingTable(
+            pd.concat(
+                (study.effect_bindings.to_pandas(), guide_effect, target_effect),
+                ignore_index=True,
+            )
+        )
+        rebound = replace(study, effect_bindings=bindings)
+        recipe = get_recipe(tiny_config.recipe)
+        guide_level = recipe.compile_study(
+            rebound.view(effect_binding_id="condition_specific"),
+            SplitSpec(strategy="none"),
+            tiny_config.recipe_config,
+        )
+        target_level = recipe.compile_study(
+            rebound.view(effect_binding_id="target_gene_shared"),
+            SplitSpec(strategy="none"),
+            tiny_config.recipe_config,
+        )
+        assert len(target_level.embedding_ids) < len(guide_level.embedding_ids)
+        assert set(target_level.control_embedding_ids) <= set(target_level.embedding_ids)
+    finally:
+        study.close()
+
+
+def test_compact_recipe_rejects_multiple_selected_reference_pools(tiny_config) -> None:
+    study = open_study(tiny_config)
+    try:
+        conditions = study.conditions.to_pandas()
+        references = conditions.loc[conditions["is_reference"], "condition_id"].tolist()
+        assert len(references) >= 2
+        alternate = pd.DataFrame(
+            {
+                "binding_id": "two_reference_pools",
+                "condition_id": conditions["condition_id"],
+                "reference_pool_id": [
+                    "pool-a" if index % 2 == 0 else "pool-b" for index in range(len(conditions))
+                ],
+                "scope_kind": "global_condition_pool",
+            }
+        )
+        alternate.loc[alternate["condition_id"].eq(references[0]), "reference_pool_id"] = "pool-a"
+        alternate.loc[alternate["condition_id"].eq(references[1]), "reference_pool_id"] = "pool-b"
+        rebound = replace(
+            study,
+            reference_bindings=ReferenceBindingTable(
+                pd.concat(
+                    (study.reference_bindings.to_pandas(), alternate),
+                    ignore_index=True,
+                )
+            ),
+        )
+        recipe = get_recipe(tiny_config.recipe)
+        view = rebound.view(reference_binding_id="two_reference_pools")
+        report = view.validate_for(
+            recipe.requirements(tiny_config.recipe_config),
+            SplitSpec(strategy="none"),
+        )
+        assert any(issue.code == "recipe.reference_multiplicity" for issue in report.errors)
+        with pytest.raises(ValueError, match="multiple reference pools"):
+            recipe.compile_study(view, SplitSpec(strategy="none"), tiny_config.recipe_config)
+    finally:
+        study.close()
+
+
+def test_study_content_hash_ignores_artifact_location() -> None:
+    study = _general_study()
+    try:
+        artifact = ArtifactRef(
+            artifact_id="latent-support",
+            uri="/first/location/support.h5",
+            sha256="a" * 64,
+            size_bytes=123,
+            media_type="application/x-hdf5",
+        )
+        first_spec = replace(study.representations["latent-all"], support_artifact=artifact)
+        second_spec = replace(
+            first_spec,
+            support_artifact=replace(artifact, uri="/relocated/support.h5"),
+        )
+        strict = study.representations["latent-strict"]
+        first = replace(
+            study,
+            representations=RepresentationCatalog((first_spec, strict)),
+        )
+        second = replace(
+            study,
+            representations=RepresentationCatalog((second_spec, strict)),
+        )
+        assert first.content_hash() == second.content_hash()
+    finally:
+        study.close()
+
+
+def test_semantic_split_is_content_bound_and_rejects_representation_leakage(
+    tiny_config,
+) -> None:
+    study = open_study(tiny_config)
+    try:
+        recipe = get_recipe(tiny_config.recipe)
+        shared = recipe.plan_split(study.view(), tiny_config.recipe_config)
+        validate_split_plan(study.view(), shared)
+        assert shared.representation_evaluation == "transductive"
+        with pytest.raises(ValueError, match="content-bound"):
+            validate_split_plan(study.view(), replace(shared, split_id=f"sha256:{'0' * 64}"))
+
+        settings = tiny_config.recipe_config
+        validation = settings.validation.model_copy(
+            update={
+                "strategy": "context_group",
+                "values": ("D1",),
+                "fraction": 0.0,
+                "representation_scope": "nested",
+            }
+        )
+        nested_config = settings.model_copy(update={"validation": validation})
+        primary = study.manifest.primary_representation
+        contaminated = replace(
+            study.representations[primary],
+            fit_split_id="donor-D1",
+            included_series=study.series.series_ids,
+        )
+        nested_study = replace(
+            study,
+            representations=RepresentationCatalog((contaminated,)),
+        )
+        view = nested_study.view()
+        plan = recipe.plan_split(view, nested_config)
+        validate_split_plan(view, plan)
+        assert plan.representation_evaluation == "inductive"
+        with pytest.raises(ValueError, match="held-out representation series"):
+            validate_representation_scope(view, plan)
+
+        clean = replace(
+            contaminated,
+            included_series=tuple(
+                value for value in study.series.series_ids if value not in plan.held_out_series
+            ),
+        )
+        clean_study = replace(
+            nested_study,
+            representations=RepresentationCatalog((clean,)),
+        )
+        validate_representation_scope(clean_study.view(), plan)
+
+        checkpoint_validation = settings.validation.model_copy(
+            update={
+                "strategy": "checkpoint",
+                "values": ("Stim48hr",),
+                "fraction": 0.0,
+                "representation_scope": "nested",
+            }
+        )
+        checkpoint_config = settings.model_copy(update={"validation": checkpoint_validation})
+        checkpoint_contaminated = replace(
+            study.representations[primary],
+            fit_split_id="checkpoint-Stim48hr",
+            included_checkpoints=study.design.checkpoint_ids,
+        )
+        checkpoint_study = replace(
+            study,
+            representations=RepresentationCatalog((checkpoint_contaminated,)),
+        )
+        checkpoint_view = checkpoint_study.view()
+        checkpoint_plan = recipe.plan_split(checkpoint_view, checkpoint_config)
+        validate_split_plan(checkpoint_view, checkpoint_plan)
+        assert checkpoint_plan.held_out_checkpoints == ("Stim48hr",)
+        with pytest.raises(ValueError, match="held-out representation checkpoints"):
+            validate_representation_scope(checkpoint_view, checkpoint_plan)
+    finally:
+        study.close()
+
+
+def test_composition_selection_mints_denominators_and_preserves_background(tiny_config) -> None:
+    study = open_study(tiny_config)
+    try:
+        compositions = study.compositions.to_pandas()
+        positive = compositions.groupby("series_id", observed=True)["count"].min()
+        series_id = str(positive[positive.gt(0)].index[0])
+        recipe = get_recipe(tiny_config.recipe)
+        conditioned_view = study.view(
+            SelectionSpec(
+                series_ids=(series_id,),
+                composition_policy="condition_on_selection",
+            )
+        )
+        conditioned = recipe.compile_study(
+            conditioned_view,
+            SplitSpec(strategy="none"),
+            tiny_config.recipe_config,
+        )
+        assert conditioned.count_blocks
+        assert all(
+            block.modeled_denominator_id == f"{block.source_denominator_id}|conditioned:"
+            f"{conditioned_view.semantic_hash()[:16]}"
+            for block in conditioned.count_blocks
+        )
+
+        preserved = recipe.compile_study(
+            study.view(
+                SelectionSpec(
+                    series_ids=(series_id,),
+                    composition_policy="preserve_background",
+                )
+            ),
+            SplitSpec(strategy="none"),
+            tiny_config.recipe_config,
+        )
+        assert all(block.background_series_ids for block in preserved.count_blocks)
+        assert all(
+            len(block.background_series_ids) == len(block.background_fitness)
+            for block in preserved.count_blocks
+        )
+    finally:
+        study.close()
+
+
+def test_compact_replicate_pooling_concatenates_geometry_and_sums_abundance() -> None:
+    original = _general_study()
+    observations = original.observations.to_pandas()
+    observations["context_id"] = "well-static"
+    observations["replicate_id"] = "r1"
+    duplicate = observations.copy()
+    duplicate["observation_id"] = duplicate["observation_id"] + "::r2"
+    duplicate["replicate_id"] = "r2"
+    all_observations = ObservationTable(pd.concat((observations, duplicate), ignore_index=True))
+
+    support_rows = original.support_index.to_pandas()
+    laws = {}
+    for row in support_rows.loc[support_rows["available"]].itertuples(index=False):
+        ref = SupportRef(str(row.store_id), str(row.representation_id), str(row.support_key))
+        laws[ref] = original.supports.read(ref)
+    duplicate_support = []
+    for row in support_rows.itertuples(index=False):
+        support_key = None if not row.available else f"{row.support_key}::r2"
+        duplicate_support.append(
+            {
+                "observation_id": f"{row.observation_id}::r2",
+                "representation_id": row.representation_id,
+                "store_id": row.store_id,
+                "support_key": support_key,
+                "available": row.available,
+            }
+        )
+        if row.available:
+            source = SupportRef(str(row.store_id), str(row.representation_id), str(row.support_key))
+            target = SupportRef(str(row.store_id), str(row.representation_id), str(support_key))
+            laws[target] = laws[source]
+    support_index = SupportIndexTable(
+        pd.concat((support_rows, pd.DataFrame(duplicate_support)), ignore_index=True)
+    )
+    abundance = original.abundance.to_pandas()
+    abundance.loc[abundance["value"].eq(0), "value"] = 10.0
+    duplicate_abundance = abundance.copy()
+    duplicate_abundance["observation_id"] += "::r2"
+    duplicate_abundance["value"] = [5.0, 3.0]
+    pooled_study = replace(
+        original,
+        observations=all_observations,
+        support_index=support_index,
+        abundance=AbundanceTable(
+            pd.concat((abundance, duplicate_abundance), ignore_index=True),
+            original.abundance.channels,
+        ),
+        compositions=None,
+        supports=InMemorySupportStore("memory", laws),
+    )
+    try:
+        policy = ReplicatePolicy(
+            mode="pool",
+            geometry_pooling="concatenate",
+            abundance_pooling="sum",
+        )
+        recipe = get_recipe("credo.compact_sde_v3@3.0")
+        compiled = recipe.compile_study(
+            pooled_study.view(SelectionSpec(replicate_policy=policy)),
+            SplitSpec(strategy="none"),
+            recipe.config_schema()(),
+        )
+        source = compiled.measures[compiled.axis.source][compiled.measure_ids[0]]
+        assert source.total_mass == pytest.approx(25.0)
+        assert len(source.support) == 4
+        assert next(iter(compiled.metadata["replicate_transform"]["pooled_observations"]))
+
+        selected = recipe.compile_study(
+            pooled_study.view(
+                SelectionSpec(replicate_policy=ReplicatePolicy(mode="select", selection_key="r2"))
+            ),
+            SplitSpec(strategy="none"),
+            recipe.config_schema()(),
+        )
+        selected_source = selected.measures[selected.axis.source][selected.measure_ids[0]]
+        assert selected_source.total_mass == pytest.approx(5.0)
+        assert len(selected_source.support) == 2
+    finally:
+        pooled_study.close()
+        original.close()
+
+
+def test_native_study_roundtrip_and_manifest_corruption_detection(tiny_config, tmp_path) -> None:
+    opened = open_study(tiny_config)
+    feature_path = tmp_path / "feature-catalog.txt"
+    feature_path.write_text("GENE1\nGENE2\n", encoding="utf-8")
+    feature_artifact = ArtifactRef(
+        artifact_id="feature-catalog",
+        uri=str(feature_path),
+        sha256=hashlib.sha256(feature_path.read_bytes()).hexdigest(),
+        size_bytes=feature_path.stat().st_size,
+        media_type="text/plain",
+    )
+    primary = opened.manifest.primary_representation
+    source = replace(
+        opened,
+        representations=RepresentationCatalog(
+            (replace(opened.representations[primary], feature_artifact=feature_artifact),)
+        ),
+    )
+    native = tmp_path / "native-study"
+    try:
+        expected_hash = source.content_hash()
+        manifest = write_study(source, native)
+    finally:
+        opened.close()
+    feature_path.unlink()
+    reopened = open_study(manifest, verify="full")
+    try:
+        assert reopened.content_hash() == expected_hash
+        assert reopened.effect_bindings is not None
+        assert reopened.reference_bindings is not None
+        embedded_feature = reopened.representations[primary].feature_artifact
+        assert embedded_feature is not None
+        assert Path(embedded_feature.uri).is_file()
+        assert Path(embedded_feature.uri).is_relative_to(native)
+    finally:
+        reopened.close()
+    existing = open_study(manifest)
+    try:
+        with pytest.raises(FileExistsError, match="already exists"):
+            write_study(existing, native)
+    finally:
+        existing.close()
+
+    damaged = tmp_path / "native-damaged-support"
+    shutil.copytree(native, damaged)
+    damaged_manifest = damaged / "study.json"
+    payload = json.loads(damaged_manifest.read_text(encoding="utf-8"))
+    support_relative = next(value for value in payload["artifacts"] if value.endswith(".h5"))
+    support_path = damaged / support_relative
+    with h5py.File(support_path, "r+") as handle:
+        coordinates = next(iter(handle["laws"].values()))["coordinates"]
+        coordinates[0, 0] = float(coordinates[0, 0]) + 1.0
+    payload["artifacts"][support_relative] = {
+        "sha256": hashlib.sha256(support_path.read_bytes()).hexdigest(),
+        "size_bytes": support_path.stat().st_size,
+    }
+    damaged_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(ValueError, match="support.semantic_hash"):
+        open_study(damaged_manifest, verify="full")
+
+    conditions = native / "conditions.parquet"
+    conditions.write_bytes(conditions.read_bytes() + b"corrupt")
+    with pytest.raises(ValueError, match="artifact size mismatch"):
+        open_study(manifest, verify="manifest")
+
+
+def test_failed_native_write_removes_its_transaction_directory(tiny_config, tmp_path) -> None:
+    study = open_study(tiny_config)
+    artifact_path = tmp_path / "mismatched.txt"
+    artifact_path.write_text("content", encoding="utf-8")
+    primary = study.manifest.primary_representation
+    malformed = replace(
+        study,
+        representations=RepresentationCatalog(
+            (
+                replace(
+                    study.representations[primary],
+                    feature_artifact=ArtifactRef(
+                        artifact_id="mismatched",
+                        uri=str(artifact_path),
+                        sha256="0" * 64,
+                        size_bytes=artifact_path.stat().st_size,
+                        media_type="text/plain",
+                    ),
+                ),
+            )
+        ),
+    )
+    target = tmp_path / "failed-native-study"
+    try:
+        with pytest.raises(ValueError, match="hash mismatch"):
+            write_study(malformed, target)
+        assert not target.exists()
+        assert not list(tmp_path.glob(f".{target.name}.tmp-*"))
+    finally:
+        study.close()
+
+
+def test_native_study_run_config_is_the_single_input_contract(tiny_config, tmp_path) -> None:
+    source = open_study(tiny_config)
+    try:
+        manifest = write_study(source, tmp_path / "native-config-study")
+    finally:
+        source.close()
+    raw = tiny_config.model_dump(mode="json")
+    raw.pop("data")
+    raw.pop("axis")
+    raw["study"] = str(manifest)
+    raw["output"] = str(tmp_path / "native-run")
+    config = RunConfig.model_validate(raw)
+    summary = validate_inputs(config)
+    assert summary["measure_count"] == 12
+    assert summary["axis_labels"] == ["Rest", "Stim8hr", "Stim48hr"]

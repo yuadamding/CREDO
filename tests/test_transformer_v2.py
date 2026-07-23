@@ -9,8 +9,16 @@ import numpy as np
 import pytest
 import torch
 
-from credo import Axis, CREDOStudy, FiniteMeasure, MassSemantics, counterfactual, evaluate
+from credo import (
+    bind_run_study,
+    counterfactual,
+    evaluate,
+    open_run,
+    write_study,
+)
 from credo.artifacts import CheckpointMode, tensor_state_sha256
+from credo.contracts import Axis, CREDOStudy, FiniteMeasure, MassSemantics
+from credo.data import CurrentFiveFileStudyCodec
 from credo.io import RunConfig
 from credo.recipes.transformer_v2.importer import (
     import_legacy_checkpoint,
@@ -112,6 +120,7 @@ def _generated_trajectory_study(run) -> CREDOStudy:
     rows = [
         {
             "measure_id": "reference",
+            "perturbation_id": "ctrl__reference",
             "sample_id": "sample-a",
             "embedding_id": "ctrl__reference",
             "context_group_id": "generated-group",
@@ -119,6 +128,7 @@ def _generated_trajectory_study(run) -> CREDOStudy:
         },
         {
             "measure_id": "intervention",
+            "perturbation_id": "perturbation_00",
             "sample_id": "sample-a",
             "embedding_id": "perturbation_00",
             "context_group_id": "generated-group",
@@ -332,6 +342,43 @@ def test_generated_legacy_bundle_is_portable_and_hash_verified(tmp_path: Path) -
     )
     with pytest.raises(ValueError, match="artifact hash mismatch"):
         load_imported_bundle(bundle)
+
+
+def test_bound_transformer_bundle_uses_the_generic_run_dispatcher(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    imported = import_legacy_checkpoint(
+        **_public_legacy_fixture(tmp_path),
+        output=bundle,
+    )
+    trajectory = _generated_trajectory_study(imported)
+    semantic = CurrentFiveFileStudyCodec().from_trajectory(trajectory)
+    try:
+        manifest = write_study(semantic, tmp_path / "transformer-study")
+    finally:
+        semantic.close()
+    config = RunConfig.model_validate(
+        {
+            "recipe": "credo.transformer_sde_v2@2.0",
+            "study": manifest,
+            "selection": {"composition_policy": "drop"},
+            "recipe_config": {},
+            "output": tmp_path / "bound-transformer-run",
+        }
+    )
+    bind_run_study(bundle / "run.json", config)
+    loaded = open_run(bundle / "run.json", device="cpu")
+    try:
+        metrics = evaluate(
+            loaded,
+            particles=4,
+            seed=17,
+            noise_seed=23,
+            device="cpu",
+        )
+        assert len(metrics) == 4
+        assert set(metrics["recipe_id"]) == {"credo.transformer_sde_v2"}
+    finally:
+        loaded.close()
 
 
 def test_v2_import_rejects_nonfinite_latent_cache(tmp_path: Path) -> None:

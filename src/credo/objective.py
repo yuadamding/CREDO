@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -28,16 +28,48 @@ class CountBlock:
     measure_indices: torch.Tensor | np.ndarray
     exposure: torch.Tensor | np.ndarray
     counts: torch.Tensor | np.ndarray
+    background_series_ids: tuple[str, ...] = ()
+    background_fitness: torch.Tensor | np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.float32)
+    )
+    background_exposure: torch.Tensor | np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.float32)
+    )
+    background_counts: torch.Tensor | np.ndarray = field(
+        default_factory=lambda: np.empty(0, dtype=np.float32)
+    )
+    source_denominator_id: str | None = None
+    modeled_denominator_id: str | None = None
+    conditioning_policy: str = "require_complete"
 
     def __post_init__(self) -> None:
         indices = _owned_tensor(self.measure_indices, torch.long).reshape(-1)
         exposure = _owned_tensor(self.exposure, torch.float32).reshape(-1)
         counts = _owned_tensor(self.counts, torch.float32).reshape(-1)
+        background_ids = tuple(str(value) for value in self.background_series_ids)
+        background_fitness = _owned_tensor(self.background_fitness, torch.float32).reshape(-1)
+        background_exposure = _owned_tensor(self.background_exposure, torch.float32).reshape(-1)
+        background_counts = _owned_tensor(self.background_counts, torch.float32).reshape(-1)
         object.__setattr__(self, "context_group_id", str(self.context_group_id))
         object.__setattr__(self, "time_label", str(self.time_label))
         object.__setattr__(self, "measure_indices", indices)
         object.__setattr__(self, "exposure", exposure)
         object.__setattr__(self, "counts", counts)
+        object.__setattr__(self, "background_series_ids", background_ids)
+        object.__setattr__(self, "background_fitness", background_fitness)
+        object.__setattr__(self, "background_exposure", background_exposure)
+        object.__setattr__(self, "background_counts", background_counts)
+        source_denominator = (
+            None if self.source_denominator_id is None else str(self.source_denominator_id)
+        )
+        modeled_denominator = (
+            source_denominator
+            if self.modeled_denominator_id is None
+            else str(self.modeled_denominator_id)
+        )
+        object.__setattr__(self, "source_denominator_id", source_denominator)
+        object.__setattr__(self, "modeled_denominator_id", modeled_denominator)
+        object.__setattr__(self, "conditioning_policy", str(self.conditioning_policy))
         if len(indices) < 1 or not (len(indices) == len(exposure) == len(counts)):
             raise ValueError("CountBlock arrays must be nonempty and equally sized.")
         if torch.any(indices < 0) or len(torch.unique(indices)) != len(indices):
@@ -49,11 +81,43 @@ class CountBlock:
         if not torch.equal(counts, counts.round()):
             raise ValueError("CountBlock counts must be integer-like.")
         if counts.sum() <= 0:
-            raise ValueError("CountBlock must contain at least one observed count.")
+            if background_counts.sum() <= 0:
+                raise ValueError("CountBlock must contain at least one observed count.")
+        if not (
+            len(background_ids)
+            == len(background_fitness)
+            == len(background_exposure)
+            == len(background_counts)
+        ):
+            raise ValueError("CountBlock background arrays and IDs must have equal length.")
+        if len(background_ids) != len(set(background_ids)):
+            raise ValueError("CountBlock background_series_ids must be unique.")
+        if not torch.isfinite(background_fitness).all():
+            raise ValueError("CountBlock background fitness must be finite.")
+        if len(background_ids) and (
+            not torch.isfinite(background_exposure).all() or torch.any(background_exposure <= 0)
+        ):
+            raise ValueError("CountBlock background exposures must be positive and finite.")
+        if (
+            not torch.isfinite(background_counts).all()
+            or torch.any(background_counts < 0)
+            or not torch.equal(background_counts, background_counts.round())
+        ):
+            raise ValueError("CountBlock background counts must be nonnegative integers.")
+        if self.conditioning_policy not in {
+            "require_complete",
+            "preserve_background",
+            "condition_on_selection",
+        }:
+            raise ValueError("CountBlock has an unknown conditioning policy.")
+        if self.conditioning_policy == "condition_on_selection" and (
+            source_denominator is None or modeled_denominator == source_denominator
+        ):
+            raise ValueError("Conditioned CountBlock requires a distinct modeled denominator.")
 
     @property
     def n_total(self) -> torch.Tensor:
-        return self.counts.sum()
+        return self.counts.sum() + self.background_counts.sum()
 
 
 @dataclass
@@ -285,6 +349,25 @@ def _count_block_nll(
 ) -> torch.Tensor:
     exposure = block.exposure.to(device=fitness.device, dtype=fitness.dtype)
     counts = block.counts.to(device=fitness.device, dtype=fitness.dtype)
+    if block.background_series_ids:
+        fitness = torch.cat(
+            (
+                fitness,
+                block.background_fitness.to(device=fitness.device, dtype=fitness.dtype),
+            )
+        )
+        exposure = torch.cat(
+            (
+                exposure,
+                block.background_exposure.to(device=fitness.device, dtype=fitness.dtype),
+            )
+        )
+        counts = torch.cat(
+            (
+                counts,
+                block.background_counts.to(device=fitness.device, dtype=fitness.dtype),
+            )
+        )
     probability = torch.softmax(torch.log(exposure) + fitness, dim=0)
     return _dirichlet_multinomial_loss(counts, probability, log_concentration)
 

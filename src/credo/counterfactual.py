@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -300,10 +299,10 @@ def _evaluator_provenance(run: Trainer) -> dict[str, str | None]:
 
 def _persist_if_saved(run: Trainer) -> None:
     output = Path(run.config.output)
-    manifest_path = output / "manifest.json"
+    manifest_path = output / "run.json"
     if not manifest_path.exists():
         return
-    path = output / "counterfactuals.parquet"
+    path = output / "tables/counterfactuals.parquet"
     current = pd.DataFrame(run.counterfactual_rows, columns=COUNTERFACTUAL_COLUMNS)
     if path.exists():
         existing = pd.read_parquet(path)
@@ -333,6 +332,6 @@ def _persist_if_saved(run: Trainer) -> None:
     current = current.drop_duplicates(key, keep="last").reset_index(drop=True)
     run.counterfactual_rows = current.to_dict(orient="records")
     current.to_parquet(path, index=False)
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["counterfactual_status"] = "evaluated"
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    from .artifacts import write_compact_run_json
+
+    write_compact_run_json(run)

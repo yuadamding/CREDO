@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass, replace
+from enum import Enum
 from types import MappingProxyType
 from typing import Any, Literal
 
@@ -13,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from .design import StudyDesign
-from .representations import RepresentationCatalog, RepresentationSpec
+from .representations import ArtifactRef, RepresentationCatalog, RepresentationSpec
 from .support import (
     AbundanceValue,
     MeasureSnapshot,
@@ -25,7 +26,9 @@ from .tables import (
     AbundanceTable,
     CompositionTable,
     ConditionTable,
+    EffectBindingTable,
     ObservationTable,
+    ReferenceBindingTable,
     SeriesTable,
     SupportIndexTable,
 )
@@ -38,6 +41,138 @@ CompositionPolicy = Literal[
     "condition_on_selection",
     "drop",
 ]
+_DEFAULT_ABUNDANCE = object()
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, Enum):
+        return value.value
+    if is_dataclass(value):
+        return {
+            item.name: _canonical_value(getattr(value, item.name))
+            for item in fields(value)
+            if not item.name.startswith("_")
+        }
+    if isinstance(value, Mapping):
+        return {
+            str(key): _canonical_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (tuple, list, set, frozenset)):
+        items = [_canonical_value(item) for item in value]
+        return (
+            sorted(items, key=lambda item: json.dumps(item, sort_keys=True))
+            if isinstance(value, (set, frozenset))
+            else items
+        )
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        if np.isnan(value):
+            return None
+        if not np.isfinite(value):
+            raise ValueError("Semantic content cannot contain infinite values.")
+        return value
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    return str(value)
+
+
+def _semantic_digest(payload: Any) -> str:
+    encoded = json.dumps(_canonical_value(payload), sort_keys=True, separators=(",", ":")).encode(
+        "utf-8"
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _frame_digest(frame: pd.DataFrame) -> str:
+    columns = sorted(str(column) for column in frame.columns)
+    records = [
+        {column: _canonical_value(row[column]) for column in columns}
+        for _, row in frame.loc[:, columns].iterrows()
+    ]
+    records.sort(key=lambda row: json.dumps(row, sort_keys=True, separators=(",", ":")))
+    return _semantic_digest({"columns": columns, "records": records})
+
+
+def _artifact_identity(artifact: ArtifactRef | None) -> dict[str, Any] | None:
+    """Return content identity without a location-dependent artifact URI."""
+    if artifact is None:
+        return None
+    return {
+        "artifact_id": artifact.artifact_id,
+        "sha256": artifact.sha256,
+        "size_bytes": artifact.size_bytes,
+        "media_type": artifact.media_type,
+        "semantic_hash": artifact.semantic_hash,
+    }
+
+
+def _representation_identity(spec: RepresentationSpec) -> dict[str, Any]:
+    return {
+        "representation_id": spec.representation_id,
+        "backend": spec.backend,
+        "space_kind": spec.space_kind,
+        "dimension": spec.dimension,
+        "support_store_id": spec.support_store_id,
+        "support_artifact": _artifact_identity(spec.support_artifact),
+        "feature_artifact": _artifact_identity(spec.feature_artifact),
+        "encoder_artifact": _artifact_identity(spec.encoder_artifact),
+        "decoder_artifact": _artifact_identity(spec.decoder_artifact),
+        "normalization_artifact": _artifact_identity(spec.normalization_artifact),
+        "fit_split_id": spec.fit_split_id,
+        "included_series": spec.included_series,
+        "included_checkpoints": spec.included_checkpoints,
+    }
+
+
+@dataclass(frozen=True)
+class ReplicatePolicy:
+    """Explicit transform applied when a series/checkpoint has replicate observations."""
+
+    mode: Literal["reject", "keep_separate", "pool", "select", "hierarchical"] = "reject"
+    selection_key: str | None = None
+    geometry_pooling: Literal["concatenate", "weighted_prototypes"] | None = None
+    abundance_pooling: Literal["sum", "mean", "exposure_weighted"] | None = None
+
+    def __post_init__(self) -> None:
+        if self.mode not in {"reject", "keep_separate", "pool", "select", "hierarchical"}:
+            raise ValueError(f"Unknown replicate policy {self.mode!r}.")
+        if self.selection_key is not None:
+            value = str(self.selection_key)
+            if not value:
+                raise ValueError("ReplicatePolicy.selection_key must be nonempty when supplied.")
+            object.__setattr__(self, "selection_key", value)
+        if self.mode == "select" and self.selection_key is None:
+            raise ValueError("ReplicatePolicy mode='select' requires selection_key.")
+        if self.mode != "select" and self.selection_key is not None:
+            raise ValueError("ReplicatePolicy.selection_key is only valid for mode='select'.")
+        if self.mode == "pool":
+            if self.geometry_pooling is None or self.abundance_pooling is None:
+                raise ValueError(
+                    "ReplicatePolicy mode='pool' requires geometry_pooling and abundance_pooling."
+                )
+        elif self.geometry_pooling is not None or self.abundance_pooling is not None:
+            raise ValueError("Replicate pooling settings require mode='pool'.")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "selection_key": self.selection_key,
+            "geometry_pooling": self.geometry_pooling,
+            "abundance_pooling": self.abundance_pooling,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: Mapping[str, Any]) -> ReplicatePolicy:
+        return cls(**dict(payload))
 
 
 @dataclass(frozen=True)
@@ -50,6 +185,8 @@ class StudyManifest:
     primary_representation: str
     primary_abundance_channel: str | None = None
     description: str = ""
+    primary_effect_binding: str | None = None
+    primary_reference_binding: str | None = None
 
     def __post_init__(self) -> None:
         if int(self.schema_version) < 1:
@@ -67,6 +204,13 @@ class StudyManifest:
                     "StudyManifest.primary_abundance_channel must be nonempty when provided."
                 )
             object.__setattr__(self, "primary_abundance_channel", value)
+        for name in ("primary_effect_binding", "primary_reference_binding"):
+            value = getattr(self, name)
+            if value is not None:
+                normalized = str(value)
+                if not normalized:
+                    raise ValueError(f"StudyManifest.{name} must be nonempty when provided.")
+                object.__setattr__(self, name, normalized)
         object.__setattr__(self, "description", str(self.description))
 
 
@@ -78,7 +222,10 @@ class SelectionSpec:
     checkpoint_ids: tuple[str, ...] | None = None
     condition_filter: Mapping[str, Any] | None = None
     observation_filter: Mapping[str, Any] | None = None
+    effect_binding_id: str | None = None
+    reference_binding_id: str | None = None
     composition_policy: CompositionPolicy = "require_complete"
+    replicate_policy: ReplicatePolicy = field(default_factory=ReplicatePolicy)
 
     def __post_init__(self) -> None:
         for name in ("series_ids", "checkpoint_ids"):
@@ -93,6 +240,13 @@ class SelectionSpec:
             values = getattr(self, name)
             if values is not None:
                 object.__setattr__(self, name, MappingProxyType(dict(values)))
+        for name in ("effect_binding_id", "reference_binding_id"):
+            value = getattr(self, name)
+            if value is not None:
+                normalized = str(value)
+                if not normalized:
+                    raise ValueError(f"SelectionSpec.{name} must be nonempty when provided.")
+                object.__setattr__(self, name, normalized)
         if self.composition_policy not in {
             "require_complete",
             "preserve_background",
@@ -100,6 +254,27 @@ class SelectionSpec:
             "drop",
         }:
             raise ValueError(f"Unknown composition policy {self.composition_policy!r}.")
+        if not isinstance(self.replicate_policy, ReplicatePolicy):
+            if isinstance(self.replicate_policy, Mapping):
+                object.__setattr__(
+                    self,
+                    "replicate_policy",
+                    ReplicatePolicy.from_dict(self.replicate_policy),
+                )
+            else:
+                raise TypeError("SelectionSpec.replicate_policy must be a ReplicatePolicy.")
+
+    def with_bindings(
+        self,
+        *,
+        effect_binding_id: str | None,
+        reference_binding_id: str | None,
+    ) -> SelectionSpec:
+        return replace(
+            self,
+            effect_binding_id=effect_binding_id,
+            reference_binding_id=reference_binding_id,
+        )
 
 
 def _apply_filter(frame: pd.DataFrame, filters: Mapping[str, Any] | None) -> pd.DataFrame:
@@ -137,8 +312,11 @@ class Study:
     compositions: CompositionTable | None
     representations: RepresentationCatalog
     supports: SupportStoreRegistry | SupportStore
+    effect_bindings: EffectBindingTable | None = None
+    reference_bindings: ReferenceBindingTable | None = None
     provenance: Mapping[str, Any] = field(default_factory=dict)
     _closed: bool = field(default=False, init=False, repr=False, compare=False)
+    _content_hash_cache: str | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         supports = self.supports
@@ -177,6 +355,30 @@ class Study:
                     "manifest.primary_abundance",
                     "Primary abundance channel is absent from the abundance catalog.",
                     ("manifest", "primary_abundance_channel"),
+                )
+            )
+        if self.manifest.primary_effect_binding is not None and (
+            self.effect_bindings is None
+            or self.manifest.primary_effect_binding not in self.effect_bindings.binding_ids
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "manifest.primary_effect_binding",
+                    "Primary effect binding is absent from the effect binding catalog.",
+                    ("manifest", "primary_effect_binding"),
+                )
+            )
+        if self.manifest.primary_reference_binding is not None and (
+            self.reference_bindings is None
+            or self.manifest.primary_reference_binding not in self.reference_bindings.binding_ids
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "manifest.primary_reference_binding",
+                    "Primary reference binding is absent from the reference binding catalog.",
+                    ("manifest", "primary_reference_binding"),
                 )
             )
         for representation in self.representations.values():
@@ -229,6 +431,35 @@ class Study:
         series_ids = set(series["series_id"])
         observation_ids = set(observations["observation_id"])
         checkpoint_ids = set(self.design.checkpoint_ids)
+        for name, table in (
+            ("effect", self.effect_bindings),
+            ("reference", self.reference_bindings),
+        ):
+            if table is None:
+                continue
+            bindings = table._unsafe_view()
+            unknown = set(bindings["condition_id"]) - condition_ids
+            if unknown:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        f"{name}_binding.condition_fk",
+                        f"{name.title()} bindings reference unknown conditions: "
+                        f"{sorted(unknown)[:5]}.",
+                        (f"{name}_bindings", "condition_id"),
+                    )
+                )
+            for binding_id, rows in bindings.groupby("binding_id", observed=True):
+                missing = condition_ids - set(rows["condition_id"])
+                if missing:
+                    issues.append(
+                        ValidationIssue(
+                            "error",
+                            f"{name}_binding.coverage",
+                            f"Binding {binding_id!r} omits conditions: {sorted(missing)[:5]}.",
+                            (f"{name}_bindings", str(binding_id)),
+                        )
+                    )
 
         unknown_conditions = set(series["condition_id"]) - condition_ids
         if unknown_conditions:
@@ -245,7 +476,14 @@ class Study:
             if row.condition_id not in condition_lookup.index:
                 continue
             condition = condition_lookup.loc[row.condition_id]
-            if str(row.embedding_id) != str(condition["embedding_id"]):
+            values = row._asdict()
+            if (
+                "embedding_id" in values
+                and "embedding_id" in condition.index
+                and pd.notna(values["embedding_id"])
+                and pd.notna(condition["embedding_id"])
+                and str(values["embedding_id"]) != str(condition["embedding_id"])
+            ):
                 issues.append(
                     ValidationIssue(
                         "error",
@@ -255,7 +493,11 @@ class Study:
                     )
                 )
             expected_role = "reference" if bool(condition["is_reference"]) else "intervention"
-            if str(row.reference_role) != expected_role:
+            if (
+                "reference_role" in values
+                and pd.notna(values["reference_role"])
+                and str(values["reference_role"]) != expected_role
+            ):
                 issues.append(
                     ValidationIssue(
                         "error",
@@ -265,24 +507,6 @@ class Study:
                         ("series", row.series_id, "reference_role"),
                     )
                 )
-        reference_groups = set(
-            conditions.loc[conditions["is_reference"], "reference_group_id"].astype(str)
-        )
-        unresolved_groups = (
-            set(conditions.loc[~conditions["is_reference"], "reference_group_id"].astype(str))
-            - reference_groups
-        )
-        if unresolved_groups:
-            issues.append(
-                ValidationIssue(
-                    "warning",
-                    "condition.reference_unresolved",
-                    "Intervention conditions have no in-study reference member for groups "
-                    f"{sorted(unresolved_groups)[:5]}; recipes may reject this view.",
-                    ("conditions", "reference_group_id"),
-                )
-            )
-
         unknown_series = set(observations["series_id"]) - series_ids
         unknown_checkpoints = set(observations["checkpoint_id"]) - checkpoint_ids
         if unknown_series:
@@ -413,6 +637,93 @@ class Study:
         return ValidationReport(tuple(issues)).merged(
             self.supports.validate(full_scan=level == "full")
         )
+
+    def content_hash(self) -> str:
+        """Hash the complete scientific content used to construct a selected problem."""
+        if self._content_hash_cache is not None:
+            return self._content_hash_cache
+        table_hashes = {
+            "conditions": _frame_digest(self.conditions._unsafe_view()),
+            "series": _frame_digest(self.series._unsafe_view()),
+            "observations": _frame_digest(self.observations._unsafe_view()),
+            "support_index": _frame_digest(self.support_index._unsafe_view()),
+            "abundance": (
+                None if self.abundance is None else _frame_digest(self.abundance._unsafe_view())
+            ),
+            "compositions": (
+                None
+                if self.compositions is None
+                else _frame_digest(self.compositions._unsafe_view())
+            ),
+            "effect_bindings": (
+                None
+                if self.effect_bindings is None
+                else _frame_digest(self.effect_bindings._unsafe_view())
+            ),
+            "reference_bindings": (
+                None
+                if self.reference_bindings is None
+                else _frame_digest(self.reference_bindings._unsafe_view())
+            ),
+        }
+        representation_payload: dict[str, Any] = {}
+        support_payload: dict[str, Any] = {}
+        support_index = self.support_index._unsafe_view()
+        for representation_id in sorted(self.representations):
+            representation = self.representations[representation_id]
+            representation_payload[representation_id] = _representation_identity(representation)
+            if representation.support_artifact is not None:
+                support_payload[representation_id] = {
+                    "artifact_sha256": representation.support_artifact.sha256,
+                    "semantic_hash": representation.support_artifact.semantic_hash,
+                }
+                continue
+            store = self.supports[representation.support_store_id]
+            semantic_identity = getattr(store, "semantic_identity", None)
+            if callable(semantic_identity):
+                support_payload[representation_id] = _canonical_value(
+                    semantic_identity(representation_id)
+                )
+                continue
+            rows = support_index.loc[
+                support_index["representation_id"].eq(representation_id)
+                & support_index["available"]
+            ].sort_values(["store_id", "support_key"])
+            digest = hashlib.sha256()
+            for row in rows.itertuples(index=False):
+                ref = SupportRef(str(row.store_id), representation_id, str(row.support_key))
+                law = self.supports.read(ref)
+                coordinates = np.asarray(law.coordinates, dtype="<f4", order="C")
+                probabilities = np.asarray(law.probabilities, dtype="<f8", order="C")
+                digest.update(str(row.store_id).encode("utf-8"))
+                digest.update(b"\0")
+                digest.update(str(row.support_key).encode("utf-8"))
+                digest.update(b"\0")
+                digest.update(np.asarray(coordinates.shape, dtype="<i8").tobytes())
+                digest.update(coordinates.tobytes(order="C"))
+                digest.update(probabilities.tobytes(order="C"))
+            support_payload[representation_id] = {"materialized_sha256": digest.hexdigest()}
+        abundance_channels = (
+            {}
+            if self.abundance is None
+            else {
+                channel_id: _canonical_value(spec)
+                for channel_id, spec in sorted(self.abundance.channels.items())
+            }
+        )
+        input_hashes = self.provenance.get("input_hashes", {})
+        payload = {
+            "manifest": _canonical_value(self.manifest),
+            "design": _canonical_value(self.design),
+            "tables": table_hashes,
+            "abundance_channels": abundance_channels,
+            "representations": representation_payload,
+            "supports": support_payload,
+            "source_artifact_hashes": _canonical_value(input_hashes),
+        }
+        digest = _semantic_digest(payload)
+        object.__setattr__(self, "_content_hash_cache", digest)
+        return digest
 
     def _validate_abundance_denominators(
         self,
@@ -566,7 +877,7 @@ class Study:
         observation_id: str,
         *,
         representation_id: str | None = None,
-        abundance_channel: str | None = None,
+        abundance_channel: str | None | object = _DEFAULT_ABUNDANCE,
     ) -> MeasureSnapshot:
         """Read one empirical law and one selected abundance value."""
         if self._closed:
@@ -598,7 +909,11 @@ class Study:
                     str(support_row["support_key"]),
                 )
             )
-        selected_channel = abundance_channel or self.manifest.primary_abundance_channel
+        selected_channel = (
+            self.manifest.primary_abundance_channel
+            if abundance_channel is _DEFAULT_ABUNDANCE
+            else abundance_channel
+        )
         abundance_value = None
         if selected_channel is not None:
             if self.abundance is None or selected_channel not in self.abundance.channels:
@@ -627,16 +942,32 @@ class Study:
         selection: SelectionSpec | None = None,
         *,
         representation_id: str | None = None,
-        abundance_channel: str | None = None,
+        abundance_channel: str | None | object = _DEFAULT_ABUNDANCE,
+        effect_binding_id: str | None = None,
+        reference_binding_id: str | None = None,
     ) -> StudyView:
+        base_selection = selection or SelectionSpec()
+        selected_effect_binding = (
+            effect_binding_id
+            or base_selection.effect_binding_id
+            or self.manifest.primary_effect_binding
+        )
+        selected_reference_binding = (
+            reference_binding_id
+            or base_selection.reference_binding_id
+            or self.manifest.primary_reference_binding
+        )
         return StudyView(
             study=self,
-            selection=selection or SelectionSpec(),
+            selection=base_selection.with_bindings(
+                effect_binding_id=selected_effect_binding,
+                reference_binding_id=selected_reference_binding,
+            ),
             representation_id=representation_id or self.manifest.primary_representation,
             abundance_channel=(
-                abundance_channel
-                if abundance_channel is not None
-                else self.manifest.primary_abundance_channel
+                self.manifest.primary_abundance_channel
+                if abundance_channel is _DEFAULT_ABUNDANCE
+                else abundance_channel
             ),
         )
 
@@ -671,6 +1002,16 @@ class StudyView:
             or self.abundance_channel not in self.study.abundance.channels
         ):
             raise KeyError(f"Unknown abundance channel {self.abundance_channel!r}.")
+        if self.selection.effect_binding_id is not None and (
+            self.study.effect_bindings is None
+            or self.selection.effect_binding_id not in self.study.effect_bindings.binding_ids
+        ):
+            raise KeyError(f"Unknown effect binding {self.selection.effect_binding_id!r}.")
+        if self.selection.reference_binding_id is not None and (
+            self.study.reference_bindings is None
+            or self.selection.reference_binding_id not in self.study.reference_bindings.binding_ids
+        ):
+            raise KeyError(f"Unknown reference binding {self.selection.reference_binding_id!r}.")
         known_series = set(self.study.series.series_ids)
         known_checkpoints = set(self.study.design.checkpoint_ids)
         if self.selection.series_ids is not None:
@@ -687,6 +1028,26 @@ class StudyView:
     @property
     def representation(self) -> RepresentationSpec:
         return self.study.representations[self.representation_id]
+
+    def effect_binding(self) -> pd.DataFrame:
+        binding_id = self.selection.effect_binding_id
+        if binding_id is None or self.study.effect_bindings is None:
+            return pd.DataFrame()
+        frame = self.study.effect_bindings._unsafe_view()
+        selected_conditions = set(self._selected_series_frame()["condition_id"])
+        return frame.loc[
+            frame["binding_id"].eq(binding_id) & frame["condition_id"].isin(selected_conditions)
+        ].copy()
+
+    def reference_binding(self) -> pd.DataFrame:
+        binding_id = self.selection.reference_binding_id
+        if binding_id is None or self.study.reference_bindings is None:
+            return pd.DataFrame()
+        frame = self.study.reference_bindings._unsafe_view()
+        selected_conditions = set(self._selected_series_frame()["condition_id"])
+        return frame.loc[
+            frame["binding_id"].eq(binding_id) & frame["condition_id"].isin(selected_conditions)
+        ].copy()
 
     @property
     def series_ids(self) -> tuple[str, ...]:
@@ -758,15 +1119,20 @@ class StudyView:
 
     def semantic_hash(self) -> str:
         payload = {
-            "study_id": self.study.manifest.study_id,
+            "study_content_hash": self.study.content_hash(),
             "series_ids": self.series_ids,
+            "checkpoint_ids": self.checkpoint_ids,
             "observation_ids": self.observation_ids,
             "representation_id": self.representation_id,
             "abundance_channel": self.abundance_channel,
             "composition_policy": self.selection.composition_policy,
+            "replicate_policy": self.selection.replicate_policy.to_dict(),
+            "effect_binding_id": self.selection.effect_binding_id,
+            "reference_binding_id": self.selection.reference_binding_id,
+            "condition_filter": self.selection.condition_filter,
+            "observation_filter": self.selection.observation_filter,
         }
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        return hashlib.sha256(encoded).hexdigest()
+        return _semantic_digest(payload)
 
     def _selected_series_frame(self) -> pd.DataFrame:
         conditions = _apply_filter(
@@ -785,11 +1151,18 @@ class StudyView:
         frame = frame.loc[frame["series_id"].isin(series_ids)]
         if self.selection.checkpoint_ids is not None:
             frame = frame.loc[frame["checkpoint_id"].isin(self.selection.checkpoint_ids)]
-        return _apply_filter(frame, self.selection.observation_filter)
+        frame = _apply_filter(frame, self.selection.observation_filter)
+        policy = self.selection.replicate_policy
+        if policy.mode == "select":
+            if "replicate_id" not in frame:
+                raise ValueError("Replicate selection requires observations.replicate_id.")
+            frame = frame.loc[frame["replicate_id"].astype(str).eq(policy.selection_key)]
+        return frame
 
 
 __all__ = [
     "CompositionPolicy",
+    "ReplicatePolicy",
     "SelectionSpec",
     "Study",
     "StudyManifest",

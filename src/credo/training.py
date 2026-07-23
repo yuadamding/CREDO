@@ -5,10 +5,9 @@ from __future__ import annotations
 import copy
 import hashlib
 import importlib.metadata
-import json
 import subprocess
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -24,6 +23,7 @@ from .contracts import (
     TrainingPlan,
     TrajectoryData,
 )
+from .data.splits import SplitPlan, plan_compact_trajectory_split
 from .io import RunConfig, resolved_config, validate_run_data
 from .model import CREDOModel
 from .objective import (
@@ -239,21 +239,6 @@ class CatalogBank:
         }
 
 
-@dataclass(frozen=True)
-class ValidationSplit:
-    train_measure_ids: tuple[str, ...]
-    validation_measure_ids: tuple[str, ...]
-    train_time_labels: tuple[str, ...]
-    validation_time_labels: tuple[str, ...]
-    source: Literal["held_out", "train_self_eval"]
-    strategy: Literal[
-        "context_group_holdout",
-        "checkpoint_holdout",
-        "within_embedding_holdout",
-        "train_self_eval",
-    ]
-
-
 @dataclass
 class Trainer:
     """Compact-v3 runtime produced only from an immutable recipe plan."""
@@ -316,7 +301,12 @@ class Trainer:
         model = model.to(device=selected_device, dtype=dtype)
         model.assert_soft_reference()
         validate_count_blocks(data)
-        split = _validation_split(data, config, seed=plan.seed)
+        raw_split = data.metadata.get("split_plan")
+        split = (
+            SplitPlan.from_dict(raw_split)
+            if isinstance(raw_split, Mapping)
+            else _validation_split(data, config, seed=plan.seed)
+        )
         representation_scope = _representation_scope(data, split, config)
         grid = axis_grid(
             data.axis,
@@ -962,6 +952,16 @@ class Trainer:
                 "validation_measure_ids": list(self.validation_measure_ids),
                 "train_time_labels": list(self.train_time_labels),
                 "validation_time_labels": list(self.validation_time_labels),
+                **(
+                    {
+                        "split_id": self.data.metadata["split_plan"]["split_id"],
+                        "representation_evaluation": self.data.metadata["split_plan"][
+                            "representation_evaluation"
+                        ],
+                    }
+                    if isinstance(self.data.metadata.get("split_plan"), Mapping)
+                    else {}
+                ),
             },
             "split_contract": _split_contract(self),
             "checkpoint_mode": "inference_only",
@@ -972,25 +972,31 @@ class Trainer:
         }
 
     def save(self) -> Path:
-        """Write exactly five durable run artifacts."""
+        """Write one generic run manifest, state directory, and typed result tables."""
         output_dir = Path(self.config.output)
         artifact_names = {
-            "manifest.json",
-            "checkpoint.pt",
-            "history.parquet",
-            "metrics.parquet",
-            "counterfactuals.parquet",
+            "run.json",
+            "state/checkpoint.pt",
+            "tables/history.parquet",
+            "tables/predictions.parquet",
+            "tables/metrics.parquet",
+            "tables/diagnostics.parquet",
+            "tables/counterfactuals.parquet",
         }
         if output_dir.exists():
             unknown = sorted(
-                path.name for path in output_dir.iterdir() if path.name not in artifact_names
+                str(path.relative_to(output_dir))
+                for path in output_dir.rglob("*")
+                if path.is_file() and str(path.relative_to(output_dir)) not in artifact_names
             )
             if unknown:
                 raise FileExistsError(
-                    f"Run directory contains files outside the five-artifact contract: {unknown}"
+                    f"Run directory contains files outside its bundle contract: {unknown}"
                 )
         output_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_path = output_dir / "checkpoint.pt"
+        (output_dir / "state").mkdir(exist_ok=True)
+        (output_dir / "tables").mkdir(exist_ok=True)
+        checkpoint_path = output_dir / "state/checkpoint.pt"
         torch.save(
             {
                 "schema_version": 2,
@@ -1007,6 +1013,7 @@ class Trainer:
                 "validation_source": self.validation_source,
                 "validation_strategy": self.validation_strategy,
                 "representation_scope": self.representation_scope,
+                "split_plan": self.data.metadata.get("split_plan"),
                 "training_plan": self.training_plan.to_dict(),
                 "objective_descriptors": [
                     objective.to_dict() for objective in self.objective_descriptors
@@ -1016,17 +1023,37 @@ class Trainer:
             checkpoint_path,
         )
         self.checkpoint_sha256 = _file_sha256(checkpoint_path)
-        pd.DataFrame(self.history_rows).to_parquet(output_dir / "history.parquet", index=False)
-        self.metrics.to_parquet(output_dir / "metrics.parquet", index=False)
+        pd.DataFrame(self.history_rows).to_parquet(
+            output_dir / "tables/history.parquet", index=False
+        )
+        from .evaluation import evaluation_tables, standardize_compact_metrics
+
+        wide_metrics = standardize_compact_metrics(
+            self,
+            self.metrics,
+            particles=self.settings.evaluation.particles,
+            seed=self.training_plan.seed + 9_100_001,
+        )
+        run_id = f"sha256:{self.checkpoint_sha256}"
+        tables = evaluation_tables(self, wide_metrics, run_id=run_id)
+        tables.predictions.to_parquet(output_dir / "tables/predictions.parquet", index=False)
+        tables.metrics.to_parquet(output_dir / "tables/metrics.parquet", index=False)
+        tables.diagnostics.to_parquet(output_dir / "tables/diagnostics.parquet", index=False)
         from .counterfactual import COUNTERFACTUAL_COLUMNS
 
         pd.DataFrame(self.counterfactual_rows, columns=COUNTERFACTUAL_COLUMNS).to_parquet(
-            output_dir / "counterfactuals.parquet", index=False
+            output_dir / "tables/counterfactuals.parquet", index=False
         )
-        (output_dir / "manifest.json").write_text(
-            json.dumps(self._manifest(), indent=2) + "\n", encoding="utf-8"
-        )
+        from .artifacts import write_compact_run_json
+
+        write_compact_run_json(self)
         return output_dir
+
+    def close(self) -> None:
+        owner = getattr(self, "_semantic_owner", None)
+        if owner is not None:
+            owner.close()
+            self._semantic_owner = None
 
     @classmethod
     def load(
@@ -1085,6 +1112,17 @@ class Trainer:
             "representation_scope": payload.get("representation_scope", "shared"),
             "representation_fit_scope": data.representation.fit_scope,
         }
+        if payload.get("split_plan") is not None:
+            split_plan = SplitPlan.from_dict(payload["split_plan"])
+            payload_split.update(
+                {
+                    "split_id": split_plan.split_id,
+                    "representation_evaluation": split_plan.representation_evaluation,
+                    "held_out_series": list(split_plan.held_out_series),
+                    "held_out_checkpoints": list(split_plan.held_out_checkpoints),
+                    "held_out_observations": list(split_plan.held_out_observations),
+                }
+            )
         if envelope.split_contract != payload_split:
             raise ValueError("Checkpoint split state disagrees with its envelope.")
         for name in ("training_plan", "objective_descriptors", "execution_trace"):
@@ -1096,7 +1134,9 @@ class Trainer:
         model = CREDOModel(**architecture).to(selected_device)
         if not _model_matches(model, data, config):
             raise ValueError("Checkpoint architecture disagrees with the run data or config.")
-        if payload.get("run_contract") != _checkpoint_contract(data, config):
+        if not _checkpoint_contract_matches(
+            payload.get("run_contract"), _checkpoint_contract(data, config)
+        ):
             raise ValueError("Checkpoint run contract disagrees with the data or config.")
         plan = compact_recipe.training_plan(data, settings)
         objectives = compact_recipe.build_objectives(data, settings)
@@ -1156,195 +1196,14 @@ def _validation_split(
     config: RunConfig,
     *,
     seed: int | None = None,
-) -> ValidationSplit:
-    settings = config.recipe_config
-    downstream_labels = tuple(data.axis.labels[1:])
-    eligible = [
-        measure_id
-        for measure_id in data.measure_ids
-        if any(measure_id in data.measures[label] for label in downstream_labels)
-    ]
-    if not eligible:
-        raise ValueError("No source measure has a downstream observation.")
-    metadata = data.measure_meta.set_index("measure_id")
-    validation = settings.validation
-    if validation.strategy == "checkpoint":
-        validation_times = tuple(
-            label for label in downstream_labels if label in set(validation.values)
-        )
-        train_times = tuple(label for label in downstream_labels if label not in validation_times)
-        validation_ids = tuple(
-            measure_id
-            for measure_id in data.measure_ids
-            if any(measure_id in data.measures[label] for label in validation_times)
-        )
-        if not validation_ids:
-            raise ValueError("Explicit checkpoint validation has no observed measures.")
-        return ValidationSplit(
-            train_measure_ids=data.measure_ids,
-            validation_measure_ids=validation_ids,
-            train_time_labels=train_times,
-            validation_time_labels=validation_times,
-            source="held_out",
-            strategy="checkpoint_holdout",
-        )
-
-    if validation.strategy == "context_group":
-        available = set(metadata["context_group_id"].astype(str))
-        requested = set(validation.values)
-        unknown = requested - available
-        if unknown:
-            raise ValueError(f"Unknown validation context groups: {sorted(unknown)}")
-        validation_ids = tuple(
-            measure_id
-            for measure_id in eligible
-            if str(metadata.loc[measure_id, "context_group_id"]) in requested
-        )
-        train_ids = tuple(
-            measure_id
-            for measure_id in data.measure_ids
-            if str(metadata.loc[measure_id, "context_group_id"]) not in requested
-        )
-        _validate_holdout_embeddings(metadata, train_ids, validation_ids)
-        return ValidationSplit(
-            train_measure_ids=train_ids,
-            validation_measure_ids=validation_ids,
-            train_time_labels=downstream_labels,
-            validation_time_labels=downstream_labels,
-            source="held_out",
-            strategy="context_group_holdout",
-        )
-
-    fraction = validation.fraction
-    split_seed = settings.training.seed if seed is None else int(seed)
-    if validation.strategy == "train_self_eval" or fraction <= 0 or len(eligible) < 2:
-        return ValidationSplit(
-            train_measure_ids=data.measure_ids,
-            validation_measure_ids=tuple(eligible),
-            train_time_labels=downstream_labels,
-            validation_time_labels=downstream_labels,
-            source="train_self_eval",
-            strategy="train_self_eval",
-        )
-
-    context_groups = tuple(
-        dict.fromkeys(metadata.loc[list(data.measure_ids), "context_group_id"].tolist())
-    )
-    if len(context_groups) > 1:
-        holdout_count = min(
-            max(1, int(round(len(context_groups) * fraction))),
-            len(context_groups) - 1,
-        )
-        ordered_groups = sorted(
-            context_groups,
-            key=lambda value: hashlib.sha256(f"{split_seed}:group:{value}".encode()).hexdigest(),
-        )
-        for offset in range(len(ordered_groups)):
-            held_out: set[str] = set()
-            rotated = ordered_groups[offset:] + ordered_groups[:offset]
-            for candidate in rotated:
-                trial = held_out | {candidate}
-                validation = tuple(
-                    measure_id
-                    for measure_id in eligible
-                    if metadata.loc[measure_id, "context_group_id"] in trial
-                )
-                train = tuple(
-                    measure_id
-                    for measure_id in data.measure_ids
-                    if metadata.loc[measure_id, "context_group_id"] not in trial
-                )
-                train_embeddings = {
-                    metadata.loc[measure_id, "embedding_id"] for measure_id in train
-                }
-                validation_embeddings = {
-                    metadata.loc[measure_id, "embedding_id"] for measure_id in validation
-                }
-                if train and validation and validation_embeddings <= train_embeddings:
-                    held_out = trial
-                if len(held_out) == holdout_count:
-                    return ValidationSplit(
-                        train_measure_ids=train,
-                        validation_measure_ids=validation,
-                        train_time_labels=downstream_labels,
-                        validation_time_labels=downstream_labels,
-                        source="held_out",
-                        strategy="context_group_holdout",
-                    )
-
-    # Count outcomes are compositional within a whole context group. If a clean
-    # group holdout is impossible, measure-level holdout would leak its counts.
-    if data.count_blocks:
-        return ValidationSplit(
-            train_measure_ids=data.measure_ids,
-            validation_measure_ids=tuple(eligible),
-            train_time_labels=downstream_labels,
-            validation_time_labels=downstream_labels,
-            source="train_self_eval",
-            strategy="train_self_eval",
-        )
-
-    validation_values: list[str] = []
-    for embedding_id, rows in metadata.loc[eligible].groupby("embedding_id", observed=True):
-        ids = rows.index.tolist()
-        guides: dict[str, list[str]] = {}
-        for measure_id in ids:
-            guide_id = (
-                str(metadata.loc[measure_id, "guide_id"])
-                if "guide_id" in metadata
-                else str(measure_id)
-            )
-            guides.setdefault(guide_id, []).append(measure_id)
-        if len(guides) > 1:
-            holdout_count = min(
-                max(1, int(round(len(guides) * fraction))),
-                len(guides) - 1,
-            )
-            ordered_guides = sorted(
-                guides,
-                key=lambda value: hashlib.sha256(
-                    f"{split_seed}:guide:{embedding_id}:{value}".encode()
-                ).hexdigest(),
-            )
-            for guide_id in ordered_guides[:holdout_count]:
-                validation_values.extend(guides[guide_id])
-        elif len(ids) > 1:
-            holdout_count = min(
-                max(1, int(round(len(ids) * fraction))),
-                len(ids) - 1,
-            )
-            ordered_ids = sorted(
-                ids,
-                key=lambda value: hashlib.sha256(
-                    f"{split_seed}:measure:{embedding_id}:{value}".encode()
-                ).hexdigest(),
-            )
-            validation_values.extend(ordered_ids[:holdout_count])
-    validation_set = set(validation_values)
-    validation = tuple(value for value in eligible if value in validation_set)
-    if not validation:
-        return ValidationSplit(
-            train_measure_ids=data.measure_ids,
-            validation_measure_ids=tuple(eligible),
-            train_time_labels=downstream_labels,
-            validation_time_labels=downstream_labels,
-            source="train_self_eval",
-            strategy="train_self_eval",
-        )
-    train = tuple(value for value in data.measure_ids if value not in validation_set)
-    return ValidationSplit(
-        train_measure_ids=train,
-        validation_measure_ids=validation,
-        train_time_labels=downstream_labels,
-        validation_time_labels=downstream_labels,
-        source="held_out",
-        strategy="within_embedding_holdout",
-    )
+) -> SplitPlan:
+    """Compatibility entry point backed by the shared pre-compilation planner."""
+    return plan_compact_trajectory_split(data, config, seed=seed)
 
 
 def _representation_scope(
     data: TrajectoryData,
-    split: ValidationSplit,
+    split: SplitPlan,
     config: RunConfig,
 ) -> Literal["shared", "nested"]:
     representation = data.representation
@@ -1441,7 +1300,7 @@ def _measure_meta_hash(data: TrajectoryData) -> str:
 def _checkpoint_contract(data: TrajectoryData, config: RunConfig) -> dict[str, Any]:
     settings = config.recipe_config
     input_hashes = data.metadata.get("input_hashes", {})
-    return {
+    contract = {
         "axis": {
             "kind": data.axis.kind,
             "source": data.axis.source,
@@ -1458,6 +1317,30 @@ def _checkpoint_contract(data: TrajectoryData, config: RunConfig) -> dict[str, A
         "validation": settings.validation.model_dump(mode="json"),
         "loss": settings.loss.model_dump(mode="json"),
     }
+    semantic_problem = {
+        name: data.metadata.get(name)
+        for name in ("study_content_hash", "selection_hash", "compiled_problem_hash")
+        if data.metadata.get(name) is not None
+    }
+    if semantic_problem:
+        contract["semantic_problem"] = semantic_problem
+    return contract
+
+
+def _checkpoint_contract_matches(saved: Any, current: Mapping[str, Any]) -> bool:
+    if saved == current:
+        return True
+    if not isinstance(saved, Mapping):
+        return False
+    saved_base = copy.deepcopy(dict(saved))
+    current_base = copy.deepcopy(dict(current))
+    saved_semantic = saved_base.pop("semantic_problem", None)
+    current_semantic = current_base.pop("semantic_problem", None)
+    if (saved_semantic is None) == (current_semantic is None):
+        return False
+    # Schema-v2 five-file callers remain reloadable through their verified file
+    # hashes in either migration direction. Native-only studies lack that bridge.
+    return bool(current_base.get("input_hashes")) and saved_base == current_base
 
 
 def _compact_capabilities():
@@ -1469,9 +1352,24 @@ def _compact_capabilities():
 def _compact_recipe_contract() -> dict[str, str]:
     root = Path(__file__).resolve().parent
     digest = hashlib.sha256()
-    for name in ("model.py", "particles.py", "objective.py", "training.py"):
-        digest.update((root / name).read_bytes())
-    digest.update((root / "recipes/compact_v3.py").read_bytes())
+    files = (
+        root / "artifacts.py",
+        root / "contracts.py",
+        root / "counterfactual.py",
+        root / "evaluation.py",
+        root / "model.py",
+        root / "objective.py",
+        root / "particles.py",
+        root / "runtime.py",
+        root / "training.py",
+        root / "data/splits.py",
+        root / "recipes/compact_v3.py",
+        root / "recipes/trajectory_compiler.py",
+    )
+    for path in files:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
     return {
         "id": "credo.compact_sde_v3",
         "version": "3.0",
@@ -1480,7 +1378,7 @@ def _compact_recipe_contract() -> dict[str, str]:
 
 
 def _split_contract(trainer: Trainer) -> dict[str, Any]:
-    return {
+    contract = {
         "strategy": trainer.validation_strategy,
         "train_measure_ids": list(trainer.train_measure_ids),
         "validation_measure_ids": list(trainer.validation_measure_ids),
@@ -1489,6 +1387,19 @@ def _split_contract(trainer: Trainer) -> dict[str, Any]:
         "representation_scope": trainer.representation_scope,
         "representation_fit_scope": trainer.data.representation.fit_scope,
     }
+    raw_split = trainer.data.metadata.get("split_plan")
+    if isinstance(raw_split, Mapping):
+        split = SplitPlan.from_dict(raw_split)
+        contract.update(
+            {
+                "split_id": split.split_id,
+                "representation_evaluation": split.representation_evaluation,
+                "held_out_series": list(split.held_out_series),
+                "held_out_checkpoints": list(split.held_out_checkpoints),
+                "held_out_observations": list(split.held_out_observations),
+            }
+        )
+    return contract
 
 
 def _compact_checkpoint_envelope(trainer: Trainer) -> dict[str, Any]:

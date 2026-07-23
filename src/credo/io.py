@@ -84,15 +84,64 @@ class AxisConfig(_StrictModel):
         return Axis(kind=self.kind, source=self.source, labels=self.labels, values=self.values)
 
 
+class ReplicateSelectionConfig(_StrictModel):
+    mode: Literal["reject", "keep_separate", "pool", "select", "hierarchical"] = "reject"
+    selection_key: str | None = None
+    geometry_pooling: Literal["concatenate", "weighted_prototypes"] | None = None
+    abundance_pooling: Literal["sum", "mean", "exposure_weighted"] | None = None
+
+
+class StudySelectionConfig(_StrictModel):
+    representation_id: str | None = None
+    abundance_channel: str | None = "__primary__"
+    series_ids: tuple[str, ...] | None = None
+    checkpoint_ids: tuple[str, ...] | None = None
+    condition_filter: dict[str, Any] | None = None
+    observation_filter: dict[str, Any] | None = None
+    effect_binding_id: str | None = None
+    reference_binding_id: str | None = None
+    composition_policy: Literal[
+        "require_complete",
+        "preserve_background",
+        "condition_on_selection",
+        "drop",
+    ] = "require_complete"
+    replicate_policy: ReplicateSelectionConfig = Field(default_factory=ReplicateSelectionConfig)
+
+    def build(self):
+        from .data.study import ReplicatePolicy, SelectionSpec
+
+        return SelectionSpec(
+            series_ids=self.series_ids,
+            checkpoint_ids=self.checkpoint_ids,
+            condition_filter=self.condition_filter,
+            observation_filter=self.observation_filter,
+            effect_binding_id=self.effect_binding_id,
+            reference_binding_id=self.reference_binding_id,
+            composition_policy=self.composition_policy,
+            replicate_policy=ReplicatePolicy(**self.replicate_policy.model_dump()),
+        )
+
+
 class RunConfig(_StrictModel):
     recipe: str = "credo.compact_sde_v3@3.0"
-    data: DataConfig
-    axis: AxisConfig
+    study: Path | None = None
+    selection: StudySelectionConfig = Field(default_factory=StudySelectionConfig)
+    data: DataConfig | None = None
+    axis: AxisConfig | None = None
     recipe_config: Any
     output: Path
 
     @model_validator(mode="after")
     def _validate_recipe(self) -> RunConfig:
+        native = self.study is not None
+        legacy = self.data is not None or self.axis is not None
+        if native == legacy:
+            raise ValueError(
+                "Run config requires exactly one input contract: study, or data plus axis."
+            )
+        if legacy and (self.data is None or self.axis is None):
+            raise ValueError("Legacy run config requires both data and axis.")
         from .registry import get_recipe
 
         recipe = get_recipe(self.recipe)
@@ -107,6 +156,15 @@ class RunConfig(_StrictModel):
 
     def recipe_configuration(self) -> Any:
         return self.recipe_config
+
+    def view(self, study: Any):
+        kwargs: dict[str, Any] = {
+            "selection": self.selection.build(),
+            "representation_id": self.selection.representation_id,
+        }
+        if self.selection.abundance_channel != "__primary__":
+            kwargs["abundance_channel"] = self.selection.abundance_channel
+        return study.view(**kwargs)
 
 
 def _resolve_path(base: Path, value: Any) -> Any:
@@ -124,11 +182,14 @@ def load_config(path: str | Path) -> RunConfig:
     if not isinstance(raw, dict):
         raise ValueError("CREDO config must be a YAML mapping.")
     raw = dict(raw)
-    data = dict(raw.get("data", {}))
-    for key in ("support", "measure_meta", "masses", "counts", "dataset"):
-        if key in data:
-            data[key] = _resolve_path(config_path.parent, data[key])
-    raw["data"] = data
+    if "data" in raw:
+        data = dict(raw["data"])
+        for key in ("support", "measure_meta", "masses", "counts", "dataset"):
+            if key in data:
+                data[key] = _resolve_path(config_path.parent, data[key])
+        raw["data"] = data
+    if "study" in raw:
+        raw["study"] = _resolve_path(config_path.parent, raw["study"])
     if "output" in raw:
         raw["output"] = _resolve_path(config_path.parent, raw["output"])
     return RunConfig.model_validate(raw)
@@ -628,6 +689,8 @@ def _load_canonical_data(data_config: DataConfig, axis: Axis) -> TrajectoryData:
 def load_data(config: RunConfig | str | Path) -> TrajectoryData:
     """Load canonical support, metadata, mass, and optional count blocks."""
     run_config = load_config(config) if isinstance(config, (str, Path)) else config
+    if run_config.data is None or run_config.axis is None:
+        raise ValueError("load_data() is the legacy five-file adapter; use open_study().")
     return _load_canonical_data(run_config.data, run_config.axis.build())
 
 
@@ -784,7 +847,7 @@ def resolved_config(config: RunConfig) -> dict[str, Any]:
 
 def validate_run_data(config: RunConfig, data: TrajectoryData) -> None:
     """Reject scientifically inconsistent run and loaded-data combinations."""
-    if data.axis != config.axis.build():
+    if config.axis is not None and data.axis != config.axis.build():
         raise ValueError("Loaded data axis disagrees with the run configuration.")
     from .registry import get_recipe
     from .runtime import validate_recipe_study
@@ -795,6 +858,13 @@ def validate_run_data(config: RunConfig, data: TrajectoryData) -> None:
         return
     settings = config.recipe_config
     reaction_epochs = settings.training.epochs.mass + settings.training.epochs.context
+    if data.axis.kind == "effect":
+        if data.count_blocks or settings.loss.count > 0:
+            raise ValueError("Count likelihood cannot be configured for an effect axis.")
+        if reaction_epochs > 0 or settings.loss.mass > 0:
+            raise ValueError("Growth and mass fitting cannot be configured for an effect axis.")
+        if settings.model.context != "none":
+            raise ValueError("Effect-axis runs require model.context='none'.")
     if settings.loss.count > 0 and not data.count_blocks:
         raise ValueError("Positive count loss requires at least one complete CountBlock.")
     if data.count_blocks and data.axis.kind != "physical":
@@ -809,7 +879,25 @@ def validate_run_data(config: RunConfig, data: TrajectoryData) -> None:
 def validate_inputs(config: RunConfig | str | Path) -> dict[str, Any]:
     """Load and summarize a run contract without training."""
     run_config = load_config(config) if isinstance(config, (str, Path)) else config
-    data = load_data(run_config)
+    from .data import open_study
+    from .data.splits import validate_representation_scope, validate_split_plan
+    from .registry import get_recipe
+    from .runtime import validate_view_for_recipe
+
+    source = run_config if run_config.study is None else run_config.study
+    owner = open_study(source, verify="semantic")
+    try:
+        view = run_config.view(owner)
+        recipe = get_recipe(run_config.recipe)
+        split = recipe.plan_split(view, run_config.recipe_config)
+        validate_split_plan(view, split)
+        validate_representation_scope(view, split)
+        validate_view_for_recipe(
+            view, split, recipe.requirements(run_config.recipe_config)
+        ).raise_for_errors()
+        data = recipe.compile_study(view, split, run_config.recipe_config)
+    finally:
+        owner.close()
     validate_run_data(run_config, data)
     source = data.metadata.get("dataset", {}).get("source", {})
     return {

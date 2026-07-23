@@ -19,6 +19,7 @@ from ..contracts import (
     Stage,
     TrainingPlan,
 )
+from ..data.splits import SplitPlan, plan_compact_split
 from ..model import CREDOModel
 from ..runtime import ObjectiveDescriptor, RecipeRequirements
 from .trajectory_compiler import compile_trajectory_view
@@ -150,22 +151,51 @@ class CompactSDEV3Recipe:
             permitted_abundance_semantics=frozenset(
                 {"absolute", "relative", "capture_count", "unit"}
             ),
+            requires_effect_binding=True,
             requires_reference_binding=True,
             requires_source_geometry=True,
             permits_missing_target_geometry=True,
             supports_compositions=True,
-            supports_replicates=False,
+            supports_replicates=True,
+            abundance_requirement="optional",
+            implicit_no_channel_semantics="unit",
+            reference_mode="single_global_soft_reference",
+            maximum_reference_pools=1,
+            context_scope="series_static",
+            sample_scope="series_static",
+            composition_policies=frozenset(
+                {"require_complete", "preserve_background", "condition_on_selection", "drop"}
+            ),
+            replicate_modes=frozenset({"reject", "select", "pool"}),
         )
 
-    def compile_study(self, view: Any, split: SplitSpec, config: Any) -> CREDOStudy:
-        del split, config
-        return compile_trajectory_view(view)
+    def plan_split(
+        self,
+        view: Any,
+        config: Any,
+        requested: SplitSpec | None = None,
+    ) -> SplitPlan:
+        return plan_compact_split(view, config, requested)
+
+    def compile_study(
+        self,
+        view: Any,
+        split: SplitPlan | SplitSpec,
+        config: Any,
+    ) -> CREDOStudy:
+        del config
+        return compile_trajectory_view(
+            view,
+            split_plan=split if isinstance(split, SplitPlan) else None,
+        )
 
     def validate_run_config(self, run_config: Any) -> None:
         config = run_config.recipe_config
         reaction_epochs = config.training.epochs.mass + config.training.epochs.context
-        if run_config.axis.kind == "effect":
-            if run_config.data.counts is not None or config.loss.count > 0:
+        if run_config.axis is not None and run_config.axis.kind == "effect":
+            if (run_config.data is not None and run_config.data.counts is not None) or (
+                config.loss.count > 0
+            ):
                 raise ValueError("Count likelihood cannot be configured for an effect axis.")
             if reaction_epochs > 0 or config.loss.mass > 0:
                 raise ValueError("Growth and mass fitting cannot be configured for an effect axis.")
@@ -175,13 +205,13 @@ class CompactSDEV3Recipe:
             raise ValueError("Context epochs must be zero when model.context is 'none'.")
         if config.training.epochs.context > 0 and config.training.epochs.mass == 0:
             raise ValueError("Context training requires a positive mass stage first.")
-        if config.loss.count > 0 and run_config.data.counts is None:
+        if run_config.data is not None and config.loss.count > 0 and run_config.data.counts is None:
             raise ValueError("Positive count loss requires data.counts.")
         if reaction_epochs == 0 and (config.loss.mass > 0 or config.loss.count > 0):
             raise ValueError("Mass and count losses require a mass or context training stage.")
         if config.training.epochs.context > 0 and config.loss.mass == 0 and config.loss.count == 0:
             raise ValueError("Context training requires mass or count supervision.")
-        if config.validation.strategy == "checkpoint":
+        if config.validation.strategy == "checkpoint" and run_config.axis is not None:
             unknown = set(config.validation.values) - set(run_config.axis.labels[1:])
             if unknown:
                 raise ValueError(
@@ -359,6 +389,17 @@ class CompactSDEV3Recipe:
 
     def checkpoint_codec(self) -> NativeCheckpointCodec:
         return NativeCheckpointCodec()
+
+    def load_checkpoint(
+        self,
+        checkpoint: Any,
+        study: CREDOStudy,
+        config: Any,
+        **kwargs: Any,
+    ):
+        from ..training import Trainer
+
+        return Trainer.load(checkpoint, study, config, **kwargs)
 
     def execute_training(
         self,

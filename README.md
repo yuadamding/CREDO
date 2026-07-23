@@ -1,14 +1,18 @@
 # CREDO
 
-CREDO is a research-alpha runtime for control-referenced finite-measure
-dynamics. Its storage-independent `Study` model separates experimental meaning,
-support storage, and recipe execution. Recipes declare semantic requirements
-and compile a selected `StudyView` into their numerical contract. The default
-is `credo.compact_sde_v3@3.0`; imported transformer checkpoints use
-`credo.transformer_sde_v2@2.0` without translating their tensors.
+CREDO is a research-alpha framework for control-referenced finite-measure
+perturbation dynamics. A storage-independent `Study` holds experimental meaning;
+a selected `StudyView` is validated, split, and compiled by a versioned recipe;
+and a generic run bundle records the resulting model and outputs.
 
-CREDO estimates regularized effective-generator contrasts from destructive
-snapshots. It does not reconstruct cell genealogies or turn fitted-model
+```text
+Study -> StudyView -> SplitPlan -> recipe compiler -> recipe runtime -> run.json
+```
+
+The released recipes are `credo.compact_sde_v3@3.0` for fresh training and
+`credo.transformer_sde_v2@2.0` for strict inference from imported historical
+checkpoints. CREDO estimates regularized generator contrasts from destructive
+snapshots. It does not reconstruct cell genealogies or turn model
 counterfactuals into experimental causal effects.
 
 ## Install
@@ -18,218 +22,195 @@ python -m pip install -e ".[dev]"
 credo --help
 ```
 
-Python 3.11 through 3.13 are supported.
-CUDA execution through PyTorch/Triton also requires a C compiler and development
-headers matching the selected Python interpreter (for example, `python3.12-dev`).
+Python 3.11 through 3.13 are supported. GPU execution follows the installed
+PyTorch build.
 
-## Study model
-
-The semantic API uses explicit condition, longitudinal-series, and observation
-identities. Empirical atom probabilities are normalized independently of named
-abundance channels, observation-level context can vary by checkpoint, stable
-string IDs define composition blocks, and multiple representation variants can
-coexist in one study with representation-specific coverage and support stores.
+## Core workflow
 
 ```python
-from credo import open_study
+from credo import evaluate, load_config, open_run, open_study, train
 
-study = open_study("examples/synthetic/data/dataset.json")
-snapshot = study.snapshot("D1::GENE1-1@Rest")
-study.close()
+config = load_config("run.yaml")
+study = open_study(config.study, verify="semantic")
+try:
+    fitted = train(study, config, device="cuda")
+    fitted.save()
+finally:
+    study.close()
+
+run = open_run(config.output / "run.json", device="cuda")
+try:
+    metrics = evaluate(run)
+finally:
+    run.close()
 ```
 
-See [the study model](docs/study_model.md) for contracts and the current
-compatibility boundary.
+The package root intentionally exposes the semantic workflow: `Study`,
+`StudyView`, `SelectionSpec`, `SplitPlan`, `open_study`, `write_study`, `train`,
+`open_run`, `evaluate`, and `counterfactual`. The old top-level `TrajectoryData`,
+`CREDOStudy`, `CREDOModel`, `Trainer`, and `load_data` names remain deprecated
+compatibility shims for this alpha cycle.
 
-## Compatibility data
+## Native studies
 
-Existing adapters continue to write the schema-v1/v2 five-file codec:
+A native schema-v3 study is the single source of truth for design, conditions,
+series, observations, representations, support stores, abundance channels,
+compositions, run-selectable effect and reference bindings, and provenance.
 
-| File | Contract |
-| --- | --- |
-| `support.h5ad` | `obs.measure_id`, `obs.time_label`, optional `obs.atom_weight`, and one latent `obsm` matrix. |
-| `measure_meta.parquet` | One row per opaque `measure_id` with sample, embedding, context group, and control identity; perturbation, guide, and target fields are optional compatibility metadata. |
-| `masses.parquet` | One positive mass and denominator per observed measure/checkpoint, with one explicit semantics. |
-| `counts.parquet` | Optional complete context-group/time compositional count blocks. |
-| `dataset.json` | Axis, latent key, mass semantics, representation contract, and source provenance. |
+```python
+from credo import open_study, write_study
 
-`open_study()` normalizes this format into `Study` without copying support
-atoms or materializing lazy support for abundance access. Dense H5AD latent
-supports remain lazy through a bounded cache. Set `data.lazy_support: false`
-only for small fixtures.
-
-Verification levels are operational: `none` constructs lazy handles, `schema`
-checks local tables, `manifest` verifies declared artifacts, `semantic` checks
-cross-table scientific invariants, and `full` additionally scans support
-values. Native schema-v3 writing and a generic run-bundle loader are not yet
-released; the five-file codec remains the current input format.
-
-The model never parses `measure_id`. `perturbation_id` identifies the
-experimental construct, while `embedding_id` identifies the learned residual;
-multiple guides may share one target-gene embedding.
-
-Mass semantics are one of `absolute`, `relative_within_group`,
-`captured_count`, or `unit`. Only absolute mass permits an absolute-growth
-interpretation. Relative mass supports within-denominator comparisons,
-captured counts are capture-scale diagnostics, and unit mass carries no
-abundance information.
-
-## Run
-
-The synthetic example exercises the Study-driven compact training path:
-
-```bash
-python examples/synthetic/generate.py
-credo validate examples/synthetic/config.yaml
-credo train examples/synthetic/config.yaml --device cpu
-credo summarize runs/synthetic
+legacy = open_study("inputs/cohort/dataset.json", verify="semantic")
+try:
+    manifest = write_study(legacy, "inputs/cohort/native-study")
+finally:
+    legacy.close()
 ```
 
-The YAML is authoritative. The CLI permits only operational overrides for
-output directory, device, and seed. Unknown or duplicate YAML keys are errors.
+`write_study()` writes Parquet semantic tables, lazy HDF5 empirical-law stores,
+artifact hashes, provenance, and `study.json` transactionally. The manifest is
+written last and the temporary directory is atomically renamed. Native reads
+support `none`, `schema`, `manifest`, `semantic`, and `full` verification;
+`full` additionally scans every support law and checks its semantic digest.
+
+The schema-v1/v2 five-file format remains a permanent read-only compatibility
+codec:
+
+```text
+support.h5ad
+measure_meta.parquet
+masses.parquet
+counts.parquet          # optional
+dataset.json
+```
+
+Codecs are discovered through the `credo.study_codecs` entry-point group.
+
+## Run configuration
+
+New runs should reference one native manifest. Axis and data paths are not
+duplicated in YAML.
 
 ```yaml
 recipe: credo.compact_sde_v3@3.0
+study: inputs/cohort/native-study/study.json
 
-data:
-  support: data/support.h5ad
-  latent_key: X_credo
-  measure_meta: data/measure_meta.parquet
-  masses: data/masses.parquet
-  counts: data/counts.parquet
-  dataset: data/dataset.json
-  lazy_support: true
-  support_cache_size: 256
-
-axis:
-  kind: physical
-  source: Rest
-  labels: [Rest, Stim8hr, Stim48hr]
-  values: [0.0, 8.0, 48.0]
+selection:
+  representation_id: latent32_all
+  abundance_channel: modeled_frequency
+  effect_binding_id: target_gene_shared
+  reference_binding_id: donor_matched_ntc
+  composition_policy: require_complete
+  replicate_policy: {mode: reject}
 
 recipe_config:
-  model:
-    embedding_dim: 8
-    n_programs: 8
-    hidden_dim: 128
-    context: catalog_bank
-    growth_max: 3.0
-  training:
-    epochs: {state: 40, mass: 20, context: 20}
-    particles: 64
-    steps_per_interval: 4
-    measures_per_batch: 256
-    batching: target_round_robin
-    learning_rate: 0.001
-    patience: 10
-    seed: 0
-  evaluation: {particles: 256, measures_per_batch: 256}
-  validation: {strategy: auto, fraction: 0.2, representation_scope: shared}
-  loss: {mass: 1.0, count: 0.1, sinkhorn_epsilon: 0.1}
-output: runs/example
+  validation:
+    strategy: context_group
+    values: [donor-1]
+    fraction: 0.0
+    representation_scope: shared
+
+output: runs/cohort/donor-1
 ```
 
-`target_round_robin` interleaves targets; `target_blocked` keeps all views of a
-target in one optimizer batch. `credo run` remains a compatibility alias for
-`credo train`. Both commands open a semantic `Study`, validate the recipe
-requirements, and invoke the recipe-owned compatibility compiler before the
-unchanged compact executor.
+Omitting `selection.abundance_channel` selects the study primary. Explicit
+`null` disables abundance and gives compact-v3 unit mass; unit-mass runs may
+train geometry only. Raw zero abundance is retained by the Study, but a recipe
+that models finite mass requires an explicitly selected positive transformed
+channel.
 
-Training follows a fixed continuation schedule: state geometry, finite mass
-and optional counts, then ecological context. Before the latter two phases,
-CREDO initializes every catalog-bank entry with detached complete-group
-rollouts and refuses optimization unless coverage is complete.
+Effect and reference parameterizations are selected by binding ID at run time.
+Compact-v3 supports one global soft reference and rejects selections resolving
+to multiple reference pools. It also requires series-static context and sample
+identity. Replicates may be selected or pooled by concatenating geometry and
+using an explicit abundance pooling rule.
 
-Validation may be automatic, an explicit `context_group` list, an explicit
-downstream `checkpoint` list, or `train_self_eval`. Complete context groups are
-held out whenever compositional counts are present, so their denominators do
-not leak outcomes. Evaluation particle and batch counts are operational and may
-be overridden when loading a checkpoint; model, training, validation, and loss
-settings remain bound by the checkpoint contract.
+## Splits
 
-## Counterfactuals
+The recipe plans the actual train and validation partition before compilation.
+`SplitPlan` records stable series, checkpoint, and observation IDs, selection
+objects, held-out identities, and a content-derived split ID. The same plan is
+used by training, evaluation, checkpoints, and `run.json`.
 
-```python
-from credo import Trainer, counterfactual, load_config, load_data
+A representation without `fit_split_id` is shared and results are labeled
+`transductive`. A nested representation must record its fitted series and
+checkpoints; CREDO rejects overlap with held-out donors or checkpoints and
+labels the result `inductive`.
 
-config = load_config("examples/synthetic/config.yaml")
-data = load_data(config)
-trained_run = Trainer.load(config.output / "checkpoint.pt", data, config)
-effects = counterfactual(
-    trained_run,
-    "D1::GENE1-1",
-    context_policy="self_consistent",
-    n_particles=512,
-)
-```
+## Composition semantics
 
-Factual and reference branches use identical observed source particles and
-identical noise. The reference removes only the selected perturbation residual;
-all controls already have an exact zero residual around one shared learned
-reference. Controls are valid numerical-null counterfactuals. Intrinsic models
-roll only the focal measure; contextual models use the complete context group.
-Context can be recomputed or clamped to the reference rollout.
+Geometry and abundance are separate: each empirical law contains normalized
+atom probabilities, while named abundance channels carry mass semantics,
+units, denominator scope, and transform provenance. Composition selection is
+explicit:
 
-## Artifacts
+- `require_complete` rejects partial denominators.
+- `preserve_background` keeps unselected members as detached denominator rows.
+- `condition_on_selection` mints a new denominator identity tied to the
+  selection hash.
+- `drop` removes composition likelihoods.
 
-Each run writes exactly five durable artifacts:
+Only `absolute` mass permits absolute-growth claims. Relative mass supports
+within-denominator comparisons, captured counts are capture-scale diagnostics,
+and unit mass contains no abundance information.
+
+## Run bundles
+
+Fresh compact runs use one recipe-neutral layout:
 
 ```text
-manifest.json
-checkpoint.pt
-history.parquet
-metrics.parquet
-counterfactuals.parquet
+run/
+|-- run.json
+|-- state/checkpoint.pt
+`-- tables/
+    |-- history.parquet
+    |-- predictions.parquet
+    |-- metrics.parquet
+    |-- diagnostics.parquet
+    `-- counterfactuals.parquet
 ```
 
-The manifest records the resolved config, runtime device and dtype, package and
-dependency versions, Git state, command, input hashes, axis and mass contracts,
-validation split,
-representation artifact, recipe capabilities, checkpoint mode, bank coverage,
-and particle-weight thresholds. Native compact checkpoints currently declare
-`inference_only`: fresh training is deterministic, but optimizer and RNG state
-are not persisted for trajectory continuation.
+`run.json` binds the recipe, resolved config, Study content hash, selection
+hash, compiled problem hash, exact split, checkpoint codec, and every artifact
+hash. `open_run()` verifies the bundle, resolves the recipe, reopens and checks
+the bound study, compiles the saved split, and delegates checkpoint loading to
+the recipe.
 
-## Recipes
+Predictions use stable series, observation, checkpoint, and representation IDs.
+Common metrics are long form (`metric_name`, `value`, `unit`); particle ESS,
+weight concentration, solver steps, and seeds live in a separate diagnostics
+table. Future deterministic recipes therefore do not need to fabricate
+particle fields.
 
-| Recipe | Representation | Context | Training | Imported checkpoint mode |
-| --- | --- | --- | --- | --- |
-| `credo.compact_sde_v3@3.0` | Frozen external latent | None or catalog bank | Released state, mass, context executor | Native inference; fresh fit available |
-| `credo.transformer_sde_v2@2.0` | Preserved 50-D expression VAE | Full-population inducing transformer | Typed archived-plan reconstruction | Historical inference only |
+```bash
+credo validate run.yaml
+credo train run.yaml --device cuda
+credo evaluate runs/example/run.json --output evaluation.parquet
+credo counterfactual runs/example/run.json --series-id D1::GENE1-1
+credo summarize runs/example
+```
 
-Both recipes use absolute particle weights `log_m0 + logw`, exact shared-control
-reference semantics, same-start/same-noise counterfactuals, and the common
-metric table returned by `credo.evaluate`. Recipe-specific objective values are
-not comparable across model families.
+Imported transformer-v2 bundles initially have no study binding. Bind them at
+import with `--bind-config`, or call `bind_run_study()` before generic
+evaluation. Historical bundles remain inference-only because optimizer,
+scheduler, RNG, and terminal training state were not preserved.
 
-The v2 importer strict-loads raw or embedded EMA dynamics and the preserved VAE,
-records source hashes, and refuses resume when optimizer or RNG state is absent.
-It writes a portable, hash-verified bundle containing canonical model and VAE
-states, representation metadata, latent cache, and source/artifact manifests.
-Its frozen compatibility modules are loaded only when the recipe is requested.
-Compact v3 has the released training executor; transformer v2 preserves a
-typed, non-executable reconstruction and the complete source run config, but
-supports imported inference only. Raw-cohort interpretation and archive replay
-belong to external adapters.
-See [runtime and recipes](docs/runtime_and_recipes.md).
+## Repository boundary
 
-## Examples
+Cohort-specific preprocessing, configs, provenance, and replay commands belong
+to an external analysis workspace or adapter package. CREDO core contains only
+generic semantic, recipe, execution, and generated conformance fixtures. Adding
+a cohort must not add dataset branches under `src/credo`.
 
-- [`examples/synthetic`](examples/synthetic/README.md) is the deterministic
-  contract and smoke-test cohort.
-
-Cohort-specific adapters, configs, provenance, and replay commands belong to
-the surrounding analysis workspace and are not shipped with CREDO. Adding a
-dataset requires no change under `src/credo`.
+See [the Study contract](docs/study_model.md), [runtime and recipes](docs/runtime_and_recipes.md),
+[scientific validation](docs/scientific_validation.md), and the
+[license transition](docs/license_migration.md).
 
 ## Verify
 
 ```bash
-ruff check src examples tests
-ruff format --check src examples tests
+ruff check src examples analysis tests
+ruff format --check src examples analysis tests
 pytest -q
 python -m build
 ```
-
-See [scientific validation](docs/scientific_validation.md) before making
-biological claims.

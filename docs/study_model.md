@@ -1,27 +1,26 @@
 # Study model
 
-CREDO separates biological semantics from storage and numerical execution:
+CREDO separates biological semantics from support storage and numerical
+execution:
 
 ```text
-Study -> StudyView -> recipe compiler -> recipe runtime
+Study -> StudyView -> SplitPlan -> recipe compiler
 ```
 
-`Study` is the immutable semantic object. Compact-v3 and transformer-v2
-compile a view into the existing `TrajectoryData` numerical shape internally,
-which preserves released model behavior while removing that legacy shape from
-the public training boundary.
+`Study` is immutable at its public boundary. Table access returns copies, while
+support laws remain lazy and are shared by zero-copy views.
 
 ## Identities and design
 
 | Identity | Meaning |
 | --- | --- |
-| `condition_id` | Experimental intervention or condition |
+| `condition_id` | Experimental intervention or control condition |
 | `series_id` | Longitudinal unit advanced through checkpoints |
-| `observation_id` | One replicate of a series at one checkpoint |
+| `observation_id` | One assay or replicate of a series at one checkpoint |
 
 Conditions do not require CRISPR fields. Guide, target, compound, dose,
-genotype, and modality columns are optional. Replicates have distinct
-observation IDs without pretending to be separate longitudinal series.
+genotype, and modality are optional metadata. Replicates retain distinct
+observation IDs rather than becoming artificial longitudinal series.
 
 `StudyDesign` validates chain, star, and DAG reachability, source and target
 roles, transition direction, and monotone coordinates on ordered axes. Recipes
@@ -30,63 +29,135 @@ declare the axis kinds and topologies they can compile.
 ## Geometry and abundance
 
 An `EmpiricalLaw` contains support coordinates and probabilities summing to
-one. A `SupportIndexTable` records coverage by
-`(observation_id, representation_id)` and resolves each available law through
-a fully qualified `(store_id, representation_id, support_key)` reference.
-`SupportStoreRegistry` permits different representations to use different
-backends.
+one. `SupportIndexTable` declares coverage for each
+`(observation_id, representation_id)` pair and resolves available laws through
+`(store_id, representation_id, support_key)`. A `SupportStoreRegistry` can route
+different representations to different lazy backends.
 
-Abundance is independent of support. Each channel declares semantics, unit,
-denominator scope, zero policy, and an optional transform ID. Claim permissions
-are derived from semantics. Raw zero abundance and missing geometry can be
-retained; a recipe that needs positive model mass must select an explicit
-positive transformed channel.
+Abundance is independent of geometry. Each channel declares semantics, unit,
+denominator scope, zero policy, and optional transform identity, input channel,
+and immutable transform parameters. The output channel is the channel's own ID. Calling
+`study.view()` selects the primary channel; calling
+`study.view(abundance_channel=None)` explicitly disables abundance. Raw zeros
+remain valid semantic observations, while positive-mass recipes require an
+explicit positive modeling channel.
 
-Composition rows reference observations. A `StudyView` selection states how a
-partial composition block is handled: require completeness, preserve the full
-background, condition on the selection, or drop compositions.
+## Bindings
 
-## Validation
+Biological conditions are immutable, but model parameter sharing is a run
+choice:
 
-Table constructors enforce local shape, type, and primary-key invariants.
-Cross-table checks are explicit, so malformed studies remain inspectable:
+```text
+EffectBindingTable
+binding_id, condition_id, effect_id, parameterization_kind,
+parent_effect_id?, shrinkage_group_id?
 
-```python
-report = study.validate(level="semantic")
-report.raise_for_errors()
+ReferenceBindingTable
+binding_id, condition_id, reference_pool_id, scope_kind, scope_key?
 ```
 
-Loader verification levels have distinct costs:
+A recipe that implements the corresponding parameterization can therefore
+compare guide-specific, target-shared, hierarchical, or pathway-shared effects
+without creating another Study. The released trajectory recipes currently use
+flat bindings. The five-file codec synthesizes compatibility bindings from
+legacy embeddings and controls. Legacy embedding, reference-group, and
+reference-role columns may round-trip as metadata but are not compiler inputs.
+
+## Selection transforms
+
+`SelectionSpec` binds IDs, metadata filters, representation, abundance,
+bindings, composition policy, and replicate policy. A recipe must advertise
+support for the selected policies before compilation.
+
+Composition policies are:
+
+- `require_complete`: reject a selection cutting through a denominator.
+- `preserve_background`: retain unselected members as detached background.
+- `condition_on_selection`: retain selected rows and mint a denominator suffixed
+  by the selection hash.
+- `drop`: omit composition blocks.
+
+Replicate modes are `reject`, `select`, `pool`, `keep_separate`, and
+`hierarchical`. Compact-v3 currently executes `reject`, `select`, and `pool`.
+Pooling produces a stable pooled observation ID and source-observation
+provenance. Its released geometry rule is concatenation; abundance may use
+sum, mean, or exposure-weighted pooling.
+
+## Content identity
+
+Scientific provenance is content-addressed in layers:
+
+```text
+semantic table hashes + representation artifact hashes + support identities
+    -> study_content_hash
+    -> selection_hash
+    -> split_id
+    -> compiled_problem_hash
+    -> run_contract_hash
+```
+
+Artifact locations are excluded from semantic identity; artifact content
+hashes remain included. In-memory stores are materialized into a deterministic
+support digest when necessary. Native stores persist this digest and recompute
+it during full verification.
+
+## Native schema v3
+
+`write_study()` creates a transactional directory:
+
+```text
+study/
+|-- conditions.parquet
+|-- series.parquet
+|-- observations.parquet
+|-- support_index.parquet
+|-- abundance.parquet              # when present
+|-- compositions.parquet           # when present
+|-- effect_bindings.parquet        # when present
+|-- reference_bindings.parquet     # when present
+|-- stores/
+|   |-- store-0000.h5
+|   `-- store-0000.parquet
+|-- representations/                 # embedded local artifacts, when present
+|-- provenance.json
+`-- study.json
+```
+
+All files except `study.json` are written into a sibling temporary directory.
+Their size and SHA-256 identities are recorded, the manifest is written last,
+and the directory is atomically renamed. Existing destinations are never
+overwritten.
+
+Verification costs are explicit:
 
 | Level | Work |
 | --- | --- |
 | `none` | Parse metadata and construct lazy handles |
-| `schema` | Validate local table schemas |
-| `manifest` | Check declared artifact existence, size, and hashes |
-| `semantic` | Check foreign keys, coverage, references, denominators, and design |
-| `full` | Scan support arrays and validate all numeric values |
-
-## Compatibility codec
-
-`open_study()` selects a registered codec. The released registry currently
-contains the read-only schema-v1/v2 five-file codec, which accepts a run YAML,
-`dataset.json`, its directory, a `RunConfig`, or `TrajectoryData`:
+| `schema` | Construct typed local tables and stores |
+| `manifest` | Recompute artifact sizes and SHA-256 hashes |
+| `semantic` | Check foreign keys, coverage, bindings, denominators, and design |
+| `full` | Scan every support law and recompute support semantic digests |
 
 ```python
-from credo import open_study
+from credo import open_study, write_study
 
-study = open_study("examples/synthetic/config.yaml", verify="semantic")
-view = study.view(
-    representation_id=study.manifest.primary_representation,
-    abundance_channel=study.manifest.primary_abundance_channel,
-)
+study = open_study("study/study.json", verify="semantic")
+try:
+    report = study.validate(level="semantic")
+    report.raise_for_errors()
+    view = study.view(
+        representation_id="latent-all",
+        abundance_channel="modeled_frequency",
+        effect_binding_id="target_gene_shared",
+        reference_binding_id="donor_matched_ntc",
+    )
+finally:
+    study.close()
 ```
 
-Legacy IDs map to explicit condition, series, observation, abundance,
-composition, representation, and support-index tables. Lazy finite-measure
-support is converted to conditional probabilities only when read; abundance
-access does not materialize coordinates.
+## Codec extension
 
-Native schema-v3 transactional writing, migration tooling, and generic run
-bundles are separate unreleased migrations. The codec registry is the extension
-point for those additions.
+The built-in codecs are `credo.native_study` and the read-only
+`credo.current_five_file`. Third-party distributions register a complete codec
+through the `credo.study_codecs` entry-point group. Probes must inspect an
+actual schema marker and must not claim arbitrary YAML or directories.

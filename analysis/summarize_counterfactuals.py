@@ -10,11 +10,42 @@ from pathlib import Path
 import pandas as pd
 
 
+def _measure_metadata(manifest: dict) -> pd.DataFrame:
+    resolved = manifest["resolved_config"]
+    if resolved.get("data") is not None:
+        path = Path(resolved["data"]["measure_meta"]).expanduser()
+        return pd.read_parquet(path)
+
+    from credo import get_recipe, open_study
+    from credo.data.splits import (
+        SplitPlan,
+        validate_representation_scope,
+        validate_split_plan,
+    )
+    from credo.io import RunConfig
+
+    config = RunConfig.model_validate(resolved)
+    study = open_study(config.study, verify="semantic")
+    try:
+        view = config.view(study)
+        recipe = get_recipe(config.recipe)
+        split = (
+            SplitPlan.from_dict(manifest["split_plan"])
+            if manifest.get("split_plan") is not None
+            else recipe.plan_split(view, config.recipe_config)
+        )
+        validate_split_plan(view, split)
+        validate_representation_scope(view, split)
+        compiled = recipe.compile_study(view, split, config.recipe_config)
+        return compiled.measure_meta.copy()
+    finally:
+        study.close()
+
+
 def summarize(run_dir: Path) -> pd.DataFrame:
-    manifest = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    metadata_path = Path(manifest["resolved_config"]["data"]["measure_meta"]).expanduser()
-    metadata = pd.read_parquet(metadata_path)
-    effects = pd.read_parquet(run_dir / "counterfactuals.parquet")
+    manifest = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    metadata = _measure_metadata(manifest)
+    effects = pd.read_parquet(run_dir / manifest["outputs"]["counterfactuals"])
     if effects.empty:
         return pd.DataFrame(
             columns=[
@@ -30,6 +61,9 @@ def summarize(run_dir: Path) -> pd.DataFrame:
                 "median_energy_distance",
             ]
         )
+    for column in ("target_gene", "guide_id"):
+        if column not in metadata:
+            metadata[column] = None
     joined = effects.merge(
         metadata[["measure_id", "embedding_id", "target_gene", "guide_id", "sample_id"]],
         on="measure_id",

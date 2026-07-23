@@ -9,8 +9,17 @@ from .codecs import (
 )
 from .design import AxisSpec, Checkpoint, StudyDesign, Transition
 from .legacy import CurrentFiveFileStudyCodec, FiveFileV2Codec, observation_id
+from .native import NativeH5SupportStore, NativeStudyV3Codec, StudyBuilder, write_study
 from .representations import ArtifactRef, RepresentationCatalog, RepresentationSpec
-from .study import CompositionPolicy, SelectionSpec, Study, StudyManifest, StudyView
+from .splits import SplitPlan
+from .study import (
+    CompositionPolicy,
+    ReplicatePolicy,
+    SelectionSpec,
+    Study,
+    StudyManifest,
+    StudyView,
+)
 from .support import (
     AbundanceValue,
     EmpiricalLaw,
@@ -26,7 +35,9 @@ from .tables import (
     AbundanceTable,
     CompositionTable,
     ConditionTable,
+    EffectBindingTable,
     ObservationTable,
+    ReferenceBindingTable,
     SeriesTable,
     SupportIndexTable,
 )
@@ -45,19 +56,26 @@ __all__ = [
     "ConditionTable",
     "CurrentFiveFileStudyCodec",
     "EmpiricalLaw",
+    "EffectBindingTable",
     "FiveFileV2Codec",
     "InMemorySupportStore",
     "MeasureSnapshot",
+    "NativeH5SupportStore",
+    "NativeStudyV3Codec",
     "ObservationTable",
+    "ReferenceBindingTable",
     "RepresentationCatalog",
     "RepresentationSpec",
+    "ReplicatePolicy",
     "SelectionSpec",
     "SeriesTable",
+    "SplitPlan",
     "Study",
     "StudyCodec",
     "StudyCodecRegistry",
     "StudyDesign",
     "StudyManifest",
+    "StudyBuilder",
     "StudyView",
     "SupportRef",
     "SupportStore",
@@ -70,4 +88,5 @@ __all__ = [
     "observation_id",
     "open_study",
     "register_study_codec",
+    "write_study",
 ]

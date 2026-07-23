@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
+import pandas as pd
 import torch
 
 from .contracts import (
@@ -19,6 +20,7 @@ from .contracts import (
     SplitSpec,
     TrainingPlan,
 )
+from .data.splits import SplitPlan, validate_representation_scope, validate_split_plan
 from .data.study import Study, StudyView
 from .data.validation import ValidationIssue, ValidationReport
 
@@ -91,11 +93,22 @@ class RecipeRequirements:
     supported_topologies: frozenset[str]
     supported_representation_kinds: frozenset[str]
     permitted_abundance_semantics: frozenset[str]
+    requires_effect_binding: bool
     requires_reference_binding: bool
     requires_source_geometry: bool
     permits_missing_target_geometry: bool
     supports_compositions: bool
     supports_replicates: bool
+    abundance_requirement: str = "required"
+    implicit_no_channel_semantics: str = "none"
+    reference_mode: str = "unspecified"
+    maximum_reference_pools: int | None = None
+    context_scope: str = "observation_varying"
+    sample_scope: str = "observation_varying"
+    composition_policies: frozenset[str] = frozenset(
+        {"require_complete", "preserve_background", "condition_on_selection", "drop"}
+    )
+    replicate_modes: frozenset[str] = frozenset({"reject"})
 
     def __post_init__(self) -> None:
         for name in (
@@ -108,6 +121,35 @@ class RecipeRequirements:
             if not values:
                 raise ValueError(f"RecipeRequirements.{name} must be nonempty.")
             object.__setattr__(self, name, values)
+        if self.abundance_requirement not in {"required", "optional", "forbidden"}:
+            raise ValueError("Unknown abundance requirement.")
+        if self.implicit_no_channel_semantics not in {"unit", "none"}:
+            raise ValueError("Unknown implicit no-channel abundance semantics.")
+        if self.maximum_reference_pools is not None and self.maximum_reference_pools < 1:
+            raise ValueError("maximum_reference_pools must be positive when provided.")
+        if self.context_scope not in {"none", "series_static", "observation_varying"}:
+            raise ValueError("Unknown context scope.")
+        if self.sample_scope not in {"series_static", "observation_varying"}:
+            raise ValueError("Unknown sample scope.")
+        composition_policies = frozenset(str(value) for value in self.composition_policies)
+        replicate_modes = frozenset(str(value) for value in self.replicate_modes)
+        unknown_compositions = composition_policies - {
+            "require_complete",
+            "preserve_background",
+            "condition_on_selection",
+            "drop",
+        }
+        unknown_replicates = replicate_modes - {
+            "reject",
+            "keep_separate",
+            "pool",
+            "select",
+            "hierarchical",
+        }
+        if unknown_compositions or unknown_replicates:
+            raise ValueError("RecipeRequirements contains unknown selection policies.")
+        object.__setattr__(self, "composition_policies", composition_policies)
+        object.__setattr__(self, "replicate_modes", replicate_modes)
 
 
 @runtime_checkable
@@ -120,10 +162,17 @@ class CREDORecipe(Protocol):
 
     def requirements(self, config: Any) -> RecipeRequirements: ...
 
+    def plan_split(
+        self,
+        view: StudyView,
+        config: Any,
+        requested: SplitSpec | None = None,
+    ) -> SplitPlan: ...
+
     def compile_study(
         self,
         view: StudyView,
-        split: SplitSpec,
+        split: SplitSpec | SplitPlan,
         config: Any,
     ) -> Any: ...
 
@@ -149,6 +198,14 @@ class CREDORecipe(Protocol):
     ) -> TrainingPlan: ...
 
     def checkpoint_codec(self) -> CheckpointCodec: ...
+
+    def load_checkpoint(
+        self,
+        checkpoint: Any,
+        study: Any,
+        config: Any,
+        **kwargs: Any,
+    ) -> Any: ...
 
 
 ModelRecipe = CREDORecipe
@@ -210,11 +267,10 @@ def validate_recipe_study(recipe: CREDORecipe, study: CREDOStudy) -> None:
 
 def validate_view_for_recipe(
     view: StudyView,
-    split: SplitSpec,
+    split: SplitSpec | SplitPlan,
     requirements: RecipeRequirements,
 ) -> ValidationReport:
     """Validate a semantic view before any recipe-owned tensorization."""
-    del split
     issues: list[ValidationIssue] = []
     design = view.study.design
     axis_kinds = {axis.kind for axis in design.axes}
@@ -247,9 +303,27 @@ def validate_view_for_recipe(
             )
         )
     if view.abundance_channel is None or view.study.abundance is None:
-        abundance_semantics = "none"
+        abundance_semantics = requirements.implicit_no_channel_semantics
+        if requirements.abundance_requirement == "required":
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.abundance_required",
+                    "Recipe requires an explicitly selected abundance channel.",
+                    ("abundance",),
+                )
+            )
     else:
         abundance_semantics = view.study.abundance.channels[view.abundance_channel].semantics.value
+        if requirements.abundance_requirement == "forbidden":
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.abundance_forbidden",
+                    "Recipe forbids an abundance channel for this run.",
+                    ("abundance", view.abundance_channel),
+                )
+            )
     if abundance_semantics not in requirements.permitted_abundance_semantics:
         issues.append(
             ValidationIssue(
@@ -294,9 +368,18 @@ def validate_view_for_recipe(
                     ("support_index", view.representation_id),
                 )
             )
-    if (
-        not requirements.supports_replicates
-        and observations.duplicated(["series_id", "checkpoint_id"]).any()
+    replicate_policy = view.selection.replicate_policy.mode
+    if replicate_policy not in requirements.replicate_modes:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.replicate_policy",
+                f"Recipe does not support replicate policy {replicate_policy!r}.",
+                ("selection", "replicate_policy"),
+            )
+        )
+    if observations.duplicated(["series_id", "checkpoint_id"]).any() and (
+        replicate_policy == "reject" or not requirements.supports_replicates
     ):
         duplicate = observations.loc[
             observations.duplicated(["series_id", "checkpoint_id"]),
@@ -311,6 +394,44 @@ def validate_view_for_recipe(
                 ("observations",),
             )
         )
+    if requirements.context_scope == "series_static" and "context_id" in observations:
+        varying = observations.groupby("series_id", observed=True)["context_id"].nunique(
+            dropna=False
+        )
+        if varying.gt(1).any():
+            series_id = str(varying[varying.gt(1)].index[0])
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.context_scope",
+                    f"Recipe requires series-static context; series {series_id!r} changes context.",
+                    ("observations", series_id, "context_id"),
+                )
+            )
+    if requirements.sample_scope == "series_static":
+        varying = observations.groupby("series_id", observed=True)["sample_id"].nunique(
+            dropna=False
+        )
+        if varying.gt(1).any():
+            series_id = str(varying[varying.gt(1)].index[0])
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.sample_scope",
+                    "Recipe requires series-static sample identity; "
+                    f"series {series_id!r} changes sample.",
+                    ("observations", series_id, "sample_id"),
+                )
+            )
+    if requirements.requires_effect_binding and view.effect_binding().empty:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.effect_binding",
+                "Recipe requires a selected effect binding catalog.",
+                ("effect_bindings", view.selection.effect_binding_id or "none"),
+            )
+        )
     if requirements.requires_reference_binding:
         selected_series = view.study.series._unsafe_view()
         selected_series = selected_series.loc[selected_series["series_id"].isin(view.series_ids)]
@@ -318,19 +439,47 @@ def validate_view_for_recipe(
         selected_conditions = selected_conditions.loc[
             selected_conditions["condition_id"].isin(selected_series["condition_id"])
         ]
-        reference_groups = set(
-            selected_conditions.loc[
-                selected_conditions["is_reference"], "reference_group_id"
-            ].astype(str)
-        )
-        unresolved = (
-            set(
-                selected_conditions.loc[
-                    ~selected_conditions["is_reference"], "reference_group_id"
-                ].astype(str)
+        selected_binding = view.reference_binding()
+        if selected_binding.empty:
+            pool_by_condition = pd.Series(dtype=str)
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.reference_binding",
+                    "Recipe requires a selected reference binding catalog.",
+                    ("reference_bindings", view.selection.reference_binding_id or "none"),
+                )
             )
-            - reference_groups
+        else:
+            pool_by_condition = selected_binding.set_index("condition_id")[
+                "reference_pool_id"
+            ].astype(str)
+            missing_binding = set(selected_conditions["condition_id"]) - set(
+                pool_by_condition.index
+            )
+            if missing_binding:
+                issues.append(
+                    ValidationIssue(
+                        "error",
+                        "recipe.reference_binding",
+                        f"Selected reference binding omits conditions: "
+                        f"{sorted(missing_binding)[:5]}.",
+                        ("reference_bindings", view.selection.reference_binding_id or "none"),
+                    )
+                )
+        reference_condition_ids = set(
+            selected_conditions.loc[selected_conditions["is_reference"], "condition_id"]
         )
+        intervention_condition_ids = set(
+            selected_conditions.loc[~selected_conditions["is_reference"], "condition_id"]
+        )
+        reference_groups = set(
+            pool_by_condition.loc[list(reference_condition_ids & set(pool_by_condition.index))]
+        )
+        intervention_groups = set(
+            pool_by_condition.loc[list(intervention_condition_ids & set(pool_by_condition.index))]
+        )
+        unresolved = intervention_groups - reference_groups
         if unresolved:
             issues.append(
                 ValidationIssue(
@@ -338,7 +487,7 @@ def validate_view_for_recipe(
                     "recipe.reference_binding",
                     f"Selected interventions lack resolvable reference pools: "
                     f"{sorted(unresolved)[:5]}.",
-                    ("conditions", "reference_group_id"),
+                    ("reference_bindings", view.selection.reference_binding_id or "none"),
                 )
             )
         if not reference_groups:
@@ -350,6 +499,30 @@ def validate_view_for_recipe(
                     ("conditions", "is_reference"),
                 )
             )
+        if (
+            requirements.maximum_reference_pools is not None
+            and len(reference_groups) > requirements.maximum_reference_pools
+        ):
+            issues.append(
+                ValidationIssue(
+                    "error",
+                    "recipe.reference_multiplicity",
+                    f"Recipe reference mode {requirements.reference_mode!r} permits at most "
+                    f"{requirements.maximum_reference_pools} pool(s); "
+                    f"selected={sorted(reference_groups)}.",
+                    ("reference_bindings", view.selection.reference_binding_id or "none"),
+                )
+            )
+    if view.selection.composition_policy not in requirements.composition_policies:
+        issues.append(
+            ValidationIssue(
+                "error",
+                "recipe.composition_policy",
+                f"Recipe does not support composition policy "
+                f"{view.selection.composition_policy!r}.",
+                ("selection", "composition_policy"),
+            )
+        )
     try:
         compositions = view.compositions()
     except ValueError as exc:
@@ -420,27 +593,19 @@ class TrainingEngine:
             if callable(getattr(config, "recipe_configuration", None))
             else config
         )
+        recipe.capabilities.require("train")
         if isinstance(study, Study):
-            study = study.view()
+            study = config.view(study) if callable(getattr(config, "view", None)) else study.view()
         if isinstance(study, StudyView):
-            if split is None:
-                representation_scope = getattr(
-                    getattr(recipe_config, "validation", None),
-                    "representation_scope",
-                    "shared",
-                )
-                split = SplitSpec(
-                    strategy="none",
-                    representation_scope=representation_scope,
-                    split_id=f"study-view:{study.semantic_hash()[:12]}",
-                )
+            split = recipe.plan_split(study, recipe_config, split)
+            validate_split_plan(study, split)
+            validate_representation_scope(study, split)
             requirements = recipe.requirements(recipe_config)
             validate_view_for_recipe(study, split, requirements).raise_for_errors()
             compiled_study = recipe.compile_study(study, split, recipe_config)
         else:
             compiled_study = study
         validate_recipe_study(recipe, compiled_study)
-        recipe.capabilities.require("train")
         plan = recipe.training_plan(compiled_study, recipe_config)
         objectives = recipe.build_objectives(compiled_study, recipe_config)
         validate_training_contract(recipe, objectives, plan)
@@ -474,6 +639,23 @@ class TrainingEngine:
         return result
 
 
+def train(
+    study: Study | StudyView | CREDOStudy,
+    config: Any,
+    *,
+    recipe: CREDORecipe | None = None,
+    split: SplitSpec | None = None,
+    **kwargs: Any,
+) -> Any:
+    """Fit one configured recipe through the semantic training boundary."""
+    if recipe is None:
+        from .registry import get_recipe
+
+        recipe = get_recipe(config.recipe)
+    selected = config.view(study) if isinstance(study, Study) else study
+    return TrainingEngine().fit(recipe, selected, config, split=split, **kwargs)
+
+
 __all__ = [
     "CREDORecipe",
     "CREDORun",
@@ -485,6 +667,7 @@ __all__ = [
     "RecipeRequirements",
     "RuntimeState",
     "TrainingEngine",
+    "train",
     "validate_recipe_study",
     "validate_training_contract",
     "validate_view_for_recipe",

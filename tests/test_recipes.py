@@ -31,7 +31,7 @@ def test_compact_v3_golden_run_is_unchanged(trained_run) -> None:
     assert state_hash == golden["model_state_sha256"]
     assert hashlib.sha256(metrics).hexdigest() == golden["metrics_sha256"]
     payload = torch.load(
-        trained_run.config.output / "checkpoint.pt",
+        trained_run.config.output / "state/checkpoint.pt",
         map_location="cpu",
         weights_only=True,
     )

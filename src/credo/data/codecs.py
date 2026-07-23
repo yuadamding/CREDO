@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
+from importlib import metadata
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Protocol, runtime_checkable
@@ -71,14 +72,29 @@ class StudyCodecRegistry(Mapping[str, StudyCodec]):
 
 
 study_codecs = StudyCodecRegistry()
+_entry_points_discovered = False
 
 
 def _register_builtins() -> None:
-    if "credo.current_five_file" in study_codecs:
-        return
     from .legacy import CurrentFiveFileStudyCodec
+    from .native import NativeStudyV3Codec
 
-    study_codecs.register(CurrentFiveFileStudyCodec())
+    if "credo.current_five_file" not in study_codecs:
+        study_codecs.register(CurrentFiveFileStudyCodec())
+    if "credo.native_study" not in study_codecs:
+        study_codecs.register(NativeStudyV3Codec())
+    _discover_entry_points()
+
+
+def _discover_entry_points() -> None:
+    global _entry_points_discovered
+    if _entry_points_discovered:
+        return
+    _entry_points_discovered = True
+    for entry_point in metadata.entry_points(group="credo.study_codecs"):
+        codec = entry_point.load()
+        codec = codec() if isinstance(codec, type) else codec
+        study_codecs.register(codec)
 
 
 def register_study_codec(codec: StudyCodec) -> None:

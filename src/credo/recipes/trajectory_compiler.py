@@ -10,10 +10,20 @@ import numpy as np
 import pandas as pd
 
 from ..contracts import Axis, FiniteMeasure, MassSemantics, RepresentationArtifact, TrajectoryData
+from ..data.splits import SplitPlan
 from ..data.study import StudyView
 from ..data.support import SupportRef
 from ..data.tables import AbundanceSemantics
 from ..objective import CountBlock
+
+
+def _pooled_observation_id(
+    series_id: str,
+    checkpoint_id: str,
+    observation_ids: tuple[str, ...],
+) -> str:
+    digest = hashlib.sha256("|".join(observation_ids).encode()).hexdigest()[:12]
+    return f"pooled::{series_id}@{checkpoint_id}:{digest}"
 
 
 def _axis(view: StudyView) -> Axis:
@@ -82,7 +92,7 @@ class _CompiledMeasures(Mapping[str, Mapping[str, FiniteMeasure]]):
         available = support_index.loc[support_index["available"]]
         available_ids = set(available["observation_id"])
         observations = observations.loc[observations["observation_id"].isin(available_ids)]
-        self._observation = observations.set_index(["checkpoint_id", "series_id"])
+        self._observation = observations.set_index(["checkpoint_id", "series_id"]).sort_index()
         self._support = available.set_index("observation_id")
         abundance = view.abundance()
         self._abundance = (
@@ -92,9 +102,11 @@ class _CompiledMeasures(Mapping[str, Mapping[str, FiniteMeasure]]):
         self.series_by_checkpoint = {
             checkpoint_id: tuple(
                 sorted(
-                    observations.loc[
-                        observations["checkpoint_id"].eq(checkpoint_id), "series_id"
-                    ].astype(str),
+                    set(
+                        observations.loc[
+                            observations["checkpoint_id"].eq(checkpoint_id), "series_id"
+                        ].astype(str)
+                    ),
                     key=order.__getitem__,
                 )
             )
@@ -119,44 +131,137 @@ class _CompiledMeasures(Mapping[str, Mapping[str, FiniteMeasure]]):
             observation = self._observation.loc[(checkpoint_id, series_id)]
         except KeyError as exc:
             raise KeyError(series_id) from exc
-        if isinstance(observation, pd.DataFrame):
+        rows = observation if isinstance(observation, pd.DataFrame) else observation.to_frame().T
+        rows = rows.sort_values("observation_id")
+        observation_ids = tuple(rows["observation_id"].astype(str))
+        if len(rows) > 1 and self.view.selection.replicate_policy.mode != "pool":
             raise ValueError(
-                "Trajectory compilation does not support replicate observations; select or pool "
-                f"{series_id!r}/{checkpoint_id!r} first."
+                "Trajectory compilation requires replicate mode='select' or mode='pool' for "
+                f"{series_id!r}/{checkpoint_id!r}."
             )
-        observation_id = str(observation["observation_id"])
-        support = self._support.loc[observation_id]
-        ref = SupportRef(
-            str(support["store_id"]),
-            self.view.representation_id,
-            str(support["support_key"]),
-        )
-        total_mass = 1.0
-        if self.view.abundance_channel is not None:
-            if observation_id not in self._abundance.index:
+        laws = []
+        masses = []
+        refs = []
+        for observation_id in observation_ids:
+            support = self._support.loc[observation_id]
+            ref = SupportRef(
+                str(support["store_id"]),
+                self.view.representation_id,
+                str(support["support_key"]),
+            )
+            total_mass = 1.0
+            if self.view.abundance_channel is not None:
+                if observation_id not in self._abundance.index:
+                    raise ValueError(
+                        f"Observation {observation_id!r} lacks selected abundance channel "
+                        f"{self.view.abundance_channel!r}."
+                    )
+                abundance = self._abundance.loc[observation_id]
+                if isinstance(abundance, pd.DataFrame):
+                    raise ValueError(
+                        f"Observation {observation_id!r} has duplicate abundance rows."
+                    )
+                if not bool(abundance["observed"]):
+                    raise ValueError(f"Observation {observation_id!r} has unobserved abundance.")
+                total_mass = float(abundance["value"])
+            if not np.isfinite(total_mass) or total_mass <= 0:
                 raise ValueError(
-                    f"Observation {observation_id!r} lacks selected abundance channel "
-                    f"{self.view.abundance_channel!r}."
+                    f"Compact trajectory mass must be positive for {observation_id!r}; select "
+                    "an explicit positive transformed abundance channel."
                 )
-            abundance = self._abundance.loc[observation_id]
-            if isinstance(abundance, pd.DataFrame):
-                raise ValueError(f"Observation {observation_id!r} has duplicate abundance rows.")
-            if not bool(abundance["observed"]):
-                raise ValueError(f"Observation {observation_id!r} has unobserved abundance.")
-            total_mass = float(abundance["value"])
-        if not np.isfinite(total_mass) or total_mass <= 0:
+            refs.append(ref)
+            masses.append(total_mass)
+            laws.append(self.view.study.supports.read(ref))
+        if len(rows) == 1:
+            ref = refs[0]
+            total_mass = masses[0]
+            store = self.view.study.supports[ref.store_id]
+            finite_reader = getattr(store, "finite_measure", None)
+            if callable(finite_reader):
+                measure = finite_reader(ref)
+                if np.isclose(measure.total_mass, total_mass, rtol=0, atol=0):
+                    return measure
+            law = laws[0]
+            return FiniteMeasure(law.coordinates, law.probabilities * total_mass, total_mass)
+
+        policy = self.view.selection.replicate_policy
+        if policy.geometry_pooling != "concatenate":
+            raise ValueError("Compact-v3 replicate pooling supports geometry concatenation only.")
+        mass_array = np.asarray(masses, dtype=np.float64)
+        if self.view.abundance_channel is None:
+            scales = np.full(len(rows), 1.0 / len(rows), dtype=np.float64)
+        elif policy.abundance_pooling == "sum":
+            scales = mass_array
+        elif policy.abundance_pooling == "mean":
+            scales = mass_array / len(rows)
+        elif policy.abundance_pooling == "exposure_weighted":
+            if "replicate_exposure" not in rows:
+                raise ValueError(
+                    "Exposure-weighted replicate pooling requires observation replicate_exposure."
+                )
+            exposure = pd.to_numeric(rows["replicate_exposure"], errors="raise").to_numpy(float)
+            if not np.isfinite(exposure).all() or np.any(exposure <= 0):
+                raise ValueError("Replicate exposures must be positive and finite.")
+            scales = mass_array * exposure / exposure.sum()
+        else:  # pragma: no cover - ReplicatePolicy validates this contract.
+            raise ValueError(f"Unsupported abundance pooling {policy.abundance_pooling!r}.")
+        total_mass = float(scales.sum())
+        coordinates = np.concatenate([law.coordinates for law in laws], axis=0)
+        weights = np.concatenate(
+            [law.probabilities * scale for law, scale in zip(laws, scales, strict=True)]
+        )
+        return FiniteMeasure(coordinates, weights, total_mass)
+
+
+def _validate_static_trajectory_semantics(view: StudyView) -> None:
+    observations = view.observations()
+    for column, label in (("context_id", "context"), ("sample_id", "sample identity")):
+        if column not in observations:
+            continue
+        varying = observations.groupby("series_id", observed=True)[column].nunique(dropna=False)
+        if varying.gt(1).any():
+            series_id = str(varying[varying.gt(1)].index[0])
             raise ValueError(
-                f"Compact trajectory mass must be positive for {observation_id!r}; select an "
-                "explicit positive transformed abundance channel."
+                f"Compact trajectory compilation requires series-static {label}; "
+                f"series {series_id!r} changes {column}."
             )
-        store = self.view.study.supports[ref.store_id]
-        finite_reader = getattr(store, "finite_measure", None)
-        if callable(finite_reader):
-            measure = finite_reader(ref)
-            if np.isclose(measure.total_mass, total_mass, rtol=0, atol=0):
-                return measure
-        law = store.read(ref)
-        return FiniteMeasure(law.coordinates, law.probabilities * total_mass, total_mass)
+    conditions = view.study.conditions._unsafe_view()
+    series = view.study.series._unsafe_view()
+    effect_binding = view.effect_binding()
+    if effect_binding.empty:
+        raise ValueError("Released trajectory recipes require a selected effect binding catalog.")
+    hierarchical_columns = [
+        column
+        for column in ("parent_effect_id", "shrinkage_group_id")
+        if column in effect_binding and effect_binding[column].notna().any()
+    ]
+    if hierarchical_columns:
+        raise ValueError(
+            "Released trajectory recipes support flat effect bindings only; "
+            f"hierarchical columns are populated: {hierarchical_columns}."
+        )
+    selected_conditions = set(
+        series.loc[series["series_id"].isin(view.series_ids), "condition_id"].astype(str)
+    )
+    references = conditions.loc[
+        conditions["condition_id"].isin(selected_conditions) & conditions["is_reference"]
+    ]
+    binding = view.reference_binding()
+    if binding.empty:
+        raise ValueError(
+            "Released trajectory recipes require a selected reference binding catalog."
+        )
+    pools = set(
+        binding.loc[
+            binding["condition_id"].isin(references["condition_id"]),
+            "reference_pool_id",
+        ].astype(str)
+    )
+    if len(pools) > 1:
+        raise ValueError(
+            "Released trajectory recipes have one global soft reference and cannot compile "
+            f"multiple reference pools: {sorted(pools)}."
+        )
 
 
 def _measure_meta(view: StudyView, axis: Axis) -> pd.DataFrame:
@@ -166,11 +271,20 @@ def _measure_meta(view: StudyView, axis: Axis) -> pd.DataFrame:
     observations = view.observations()
     source = observations.loc[observations["checkpoint_id"].eq(axis.source)]
     if source.duplicated("series_id").any():
-        duplicate = source.loc[source.duplicated("series_id"), "series_id"].iloc[0]
-        raise ValueError(
-            f"Trajectory compilation requires a replicate policy for source series {duplicate!r}."
-        )
+        if view.selection.replicate_policy.mode != "pool":
+            duplicate = source.loc[source.duplicated("series_id"), "series_id"].iloc[0]
+            raise ValueError(
+                "Trajectory compilation requires replicate mode='select' or mode='pool' for "
+                f"source series {duplicate!r}."
+            )
+        source = source.drop_duplicates("series_id")
     source = source.set_index("series_id")
+    effect_binding = view.effect_binding()
+    if effect_binding.empty:
+        raise ValueError("Trajectory compilation requires a selected effect binding catalog.")
+    effect_by_condition = (
+        effect_binding.set_index("condition_id")["effect_id"].astype(str).to_dict()
+    )
     rows: list[dict[str, Any]] = []
     legacy_binding = view.study.provenance.get("codec") == "credo.current_five_file"
     semantic_columns = {
@@ -191,9 +305,9 @@ def _measure_meta(view: StudyView, axis: Axis) -> pd.DataFrame:
             {
                 "measure_id": str(row.series_id),
                 "sample_id": str(row.subject_id),
-                "embedding_id": str(row.embedding_id),
+                "embedding_id": effect_by_condition[str(row.condition_id)],
                 "context_group_id": context_id,
-                "is_control": str(row.reference_role) == "reference",
+                "is_control": bool(condition["is_reference"]),
             }
         )
         if "perturbation_id" not in compiled and legacy_binding:
@@ -226,22 +340,63 @@ def _count_blocks(view: StudyView, measure_meta: pd.DataFrame) -> tuple[CountBlo
         return ()
     index = {measure_id: position for position, measure_id in enumerate(measure_meta["measure_id"])}
     blocks: list[CountBlock] = []
-    for block_id, rows in frame.groupby("composition_block_id", observed=True, sort=False):
-        del block_id
-        rows = rows.sort_values("series_id")
-        unknown = set(rows["series_id"]) - set(index)
-        if unknown:
-            raise ValueError(
-                "Composition policy retained series outside the compiled trajectory; "
-                f"unknown={sorted(unknown)[:5]}."
+    for _block_id, rows in frame.groupby("composition_block_id", observed=True, sort=False):
+        rows = rows.sort_values(["series_id", "observation_id"])
+        active = rows.loc[rows["series_id"].isin(index)].copy()
+        background = rows.loc[~rows["series_id"].isin(index)].copy()
+        if active.empty:
+            continue
+        if active["series_id"].duplicated().any():
+            active = (
+                active.groupby("series_id", observed=True, sort=False)
+                .agg(
+                    {
+                        "context_id": "first",
+                        "checkpoint_id": "first",
+                        "denominator_id": "first",
+                        "exposure": "sum",
+                        "count": "sum",
+                    }
+                )
+                .reset_index()
             )
+        policy = view.selection.composition_policy
+        source_denominator = str(rows["denominator_id"].iloc[0])
+        modeled_denominator = source_denominator
+        if policy == "condition_on_selection":
+            modeled_denominator = f"{source_denominator}|conditioned:{view.semantic_hash()[:16]}"
+        if policy != "preserve_background" and not background.empty:
+            raise ValueError(
+                f"Composition policy {policy!r} retained unmodeled background unexpectedly."
+            )
+        if not background.empty and background["series_id"].duplicated().any():
+            aggregations: dict[str, str] = {"exposure": "sum", "count": "sum"}
+            if "background_fitness" in background:
+                aggregations["background_fitness"] = "mean"
+            background = (
+                background.groupby("series_id", observed=True, sort=False)
+                .agg(aggregations)
+                .reset_index()
+            )
+        background_fitness = (
+            background["background_fitness"].to_numpy(float)
+            if "background_fitness" in background
+            else np.zeros(len(background), dtype=np.float32)
+        )
         blocks.append(
             CountBlock(
-                context_group_id=str(rows["context_id"].iloc[0]),
-                time_label=str(rows["checkpoint_id"].iloc[0]),
-                measure_indices=np.asarray([index[value] for value in rows["series_id"]]),
-                exposure=rows["exposure"].to_numpy(),
-                counts=rows["count"].to_numpy(),
+                context_group_id=str(active["context_id"].iloc[0]),
+                time_label=str(active["checkpoint_id"].iloc[0]),
+                measure_indices=np.asarray([index[value] for value in active["series_id"]]),
+                exposure=active["exposure"].to_numpy(),
+                counts=active["count"].to_numpy(),
+                background_series_ids=tuple(background["series_id"].astype(str)),
+                background_fitness=background_fitness,
+                background_exposure=background["exposure"].to_numpy(),
+                background_counts=background["count"].to_numpy(),
+                source_denominator_id=source_denominator,
+                modeled_denominator_id=modeled_denominator,
+                conditioning_policy=policy,
             )
         )
     return tuple(blocks)
@@ -287,7 +442,11 @@ def _representation(view: StudyView) -> RepresentationArtifact:
     )
 
 
-def compile_trajectory_view(view: StudyView) -> TrajectoryData:
+def compile_trajectory_view(
+    view: StudyView,
+    *,
+    split_plan: SplitPlan | None = None,
+) -> TrajectoryData:
     """Compile one semantically validated view for the legacy trajectory executor."""
     axis = _axis(view)
     if tuple(view.checkpoint_ids) != tuple(axis.labels):
@@ -316,9 +475,26 @@ def compile_trajectory_view(view: StudyView) -> TrajectoryData:
                 "Trajectory geometry requires an explicit positive modeling abundance; "
                 f"invalid observations={sorted(invalid)[:5]}."
             )
+    _validate_static_trajectory_semantics(view)
     metadata = _measure_meta(view, axis)
     measures = _CompiledMeasures(view, axis, mass_semantics)
     count_blocks = _count_blocks(view, metadata)
+    observation_map: dict[str, str] = {}
+    pooled_observations: dict[str, tuple[str, ...]] = {}
+    for (checkpoint_id, series_id), rows in view.observations().groupby(
+        ["checkpoint_id", "series_id"], observed=True, sort=False
+    ):
+        observation_ids = tuple(sorted(rows["observation_id"].astype(str)))
+        if len(observation_ids) == 1:
+            observation_id = observation_ids[0]
+        elif view.selection.replicate_policy.mode == "pool":
+            observation_id = _pooled_observation_id(
+                str(series_id), str(checkpoint_id), observation_ids
+            )
+            pooled_observations[observation_id] = observation_ids
+        else:
+            continue
+        observation_map[f"{series_id}\0{checkpoint_id}"] = observation_id
     provenance = view.study.provenance
     mass_denominators = (
         sorted(view.abundance()["denominator_id"].dropna().astype(str).unique().tolist())
@@ -330,7 +506,36 @@ def compile_trajectory_view(view: StudyView) -> TrajectoryData:
         "input_hashes": dict(provenance.get("input_hashes", {})),
         "dataset": dict(provenance.get("legacy_dataset", {})),
         "mass_denominators": list(provenance.get("mass_denominators", mass_denominators)),
+        "study_content_hash": view.study.content_hash(),
+        "selection_hash": view.semantic_hash(),
+        "compiled_problem_hash": hashlib.sha256(
+            (
+                view.semantic_hash()
+                + ":"
+                + ("unplanned" if split_plan is None else split_plan.split_id)
+                + ":trajectory-v1"
+            ).encode()
+        ).hexdigest(),
+        "replicate_transform": {
+            "policy": view.selection.replicate_policy.to_dict(),
+            "pooled_observations": pooled_observations,
+        },
+        "composition_transform": [
+            {
+                "source_denominator_id": block.source_denominator_id,
+                "modeled_denominator_id": block.modeled_denominator_id,
+                "conditioning_policy": block.conditioning_policy,
+                "background_series_ids": list(block.background_series_ids),
+                "background_fitness_source": (
+                    "none" if not block.background_series_ids else "table_or_neutral_zero"
+                ),
+            }
+            for block in count_blocks
+        ],
+        "observation_id_by_series_checkpoint": observation_map,
     }
+    if split_plan is not None:
+        runtime_metadata["split_plan"] = split_plan.to_dict()
     return TrajectoryData(
         axis=axis,
         measures=measures,

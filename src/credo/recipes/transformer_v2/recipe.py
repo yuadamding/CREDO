@@ -172,12 +172,25 @@ class TransformerSDEV2Recipe:
             permitted_abundance_semantics=frozenset(
                 {"absolute", "relative", "capture_count", "unit"}
             ),
+            requires_effect_binding=True,
             requires_reference_binding=True,
             requires_source_geometry=True,
             permits_missing_target_geometry=True,
             supports_compositions=False,
             supports_replicates=False,
+            abundance_requirement="required",
+            implicit_no_channel_semantics="none",
+            reference_mode="single_global_soft_reference",
+            maximum_reference_pools=1,
+            context_scope="series_static",
+            sample_scope="series_static",
+            composition_policies=frozenset({"drop"}),
+            replicate_modes=frozenset({"reject"}),
         )
+
+    def plan_split(self, view: Any, config: Any, requested: SplitSpec | None = None):
+        del view, config, requested
+        raise RuntimeError("transformer-v2 does not support fresh split planning or training.")
 
     def compile_study(self, view: Any, split: SplitSpec, config: Any) -> CREDOStudy:
         del split, config
@@ -378,6 +391,14 @@ class TransformerSDEV2Recipe:
 
     def checkpoint_codec(self) -> NativeCheckpointCodec:
         return NativeCheckpointCodec()
+
+    def load_checkpoint(self, checkpoint: Any, study: Any, config: Any, **kwargs: Any):
+        del config
+        from .importer import load_imported_bundle
+
+        run = load_imported_bundle(checkpoint, **kwargs)
+        run.study = study
+        return run
 
     def load_model_state(
         self,

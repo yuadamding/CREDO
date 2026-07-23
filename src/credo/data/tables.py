@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import ClassVar, Literal
@@ -91,26 +91,17 @@ class ConditionTable(FrameTable):
     required_columns = (
         "condition_id",
         "condition_kind",
-        "embedding_id",
-        "reference_group_id",
         "is_reference",
     )
     key_columns = ("condition_id",)
-    string_columns = (
-        "condition_id",
-        "condition_kind",
-        "embedding_id",
-        "reference_group_id",
-    )
+    string_columns = ("condition_id", "condition_kind")
 
     def _validate(self, frame: pd.DataFrame) -> None:
         frame["is_reference"] = _normalize_boolean(frame["is_reference"], "is_reference")
-        mixed = frame.groupby("embedding_id", observed=True)["is_reference"].nunique()
-        if (mixed > 1).any():
-            embedding_id = str(mixed[mixed > 1].index[0])
-            raise ValueError(
-                f"embedding_id {embedding_id!r} mixes reference and intervention conditions."
-            )
+        optional = tuple(
+            column for column in ("embedding_id", "reference_group_id") if column in frame
+        )
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
 
     @property
     def condition_ids(self) -> tuple[str, ...]:
@@ -124,21 +115,67 @@ class SeriesTable(FrameTable):
         "series_id",
         "condition_id",
         "subject_id",
-        "embedding_id",
-        "reference_role",
     )
     key_columns = ("series_id",)
     string_columns = required_columns
 
     def _validate(self, frame: pd.DataFrame) -> None:
+        optional = tuple(column for column in ("embedding_id", "reference_role") if column in frame)
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
+        if "reference_role" not in frame:
+            return
         allowed = {"reference", "intervention"}
-        unknown = set(frame["reference_role"]) - allowed
+        unknown = set(frame["reference_role"].dropna()) - allowed
         if unknown:
             raise ValueError(f"SeriesTable contains unknown reference roles: {sorted(unknown)}")
 
     @property
     def series_ids(self) -> tuple[str, ...]:
         return tuple(self._frame["series_id"].tolist())
+
+
+class EffectBindingTable(FrameTable):
+    """Run-selectable mapping from biological conditions to model effect identities."""
+
+    required_columns = (
+        "binding_id",
+        "condition_id",
+        "effect_id",
+        "parameterization_kind",
+    )
+    key_columns = ("binding_id", "condition_id")
+    string_columns = required_columns
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        optional = tuple(
+            column for column in ("parent_effect_id", "shrinkage_group_id") if column in frame
+        )
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
+
+    @property
+    def binding_ids(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(self._frame["binding_id"].tolist()))
+
+
+class ReferenceBindingTable(FrameTable):
+    """Run-selectable mapping from conditions to biological reference pools."""
+
+    required_columns = (
+        "binding_id",
+        "condition_id",
+        "reference_pool_id",
+        "scope_kind",
+    )
+    key_columns = ("binding_id", "condition_id")
+    string_columns = required_columns
+
+    def _validate(self, frame: pd.DataFrame) -> None:
+        optional = ("scope_key",) if "scope_key" in frame else ()
+        _normalize_strings(frame, optional, nullable=frozenset(optional))
+
+    @property
+    def binding_ids(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys(self._frame["binding_id"].tolist()))
 
 
 class ObservationTable(FrameTable):
@@ -241,6 +278,8 @@ class AbundanceChannelSpec:
     denominator_scope: Literal["none", "context_checkpoint", "sample_checkpoint", "custom"] = "none"
     zero_policy: Literal["allowed", "forbidden", "censored"] = "allowed"
     transform_id: str | None = None
+    input_channel_id: str | None = None
+    transform_parameters: Mapping[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "channel_id", str(self.channel_id))
@@ -263,6 +302,19 @@ class AbundanceChannelSpec:
             if not transform_id:
                 raise ValueError("AbundanceChannelSpec.transform_id must be nonempty when set.")
             object.__setattr__(self, "transform_id", transform_id)
+        if self.input_channel_id is not None:
+            input_channel_id = str(self.input_channel_id)
+            if not input_channel_id:
+                raise ValueError("AbundanceChannelSpec.input_channel_id must be nonempty when set.")
+            object.__setattr__(self, "input_channel_id", input_channel_id)
+        parameters = MappingProxyType(dict(self.transform_parameters))
+        object.__setattr__(self, "transform_parameters", parameters)
+        if (self.transform_id is None) != (self.input_channel_id is None):
+            raise ValueError("Abundance transforms require both transform_id and input_channel_id.")
+        if self.transform_id is None and parameters:
+            raise ValueError("Abundance transform parameters require transform_id.")
+        if self.input_channel_id == self.channel_id:
+            raise ValueError("An abundance transform cannot use its output as its input.")
         requires_denominator = self.semantics in {
             AbundanceSemantics.RELATIVE,
             AbundanceSemantics.CAPTURE_COUNT,
@@ -308,6 +360,15 @@ class AbundanceTable(FrameTable):
             raise ValueError("AbundanceTable requires at least one channel specification.")
         if len(catalog) != len(values):
             raise ValueError("Abundance channel identifiers must be unique.")
+        missing_inputs = {
+            spec.input_channel_id
+            for spec in values
+            if spec.input_channel_id is not None and spec.input_channel_id not in catalog
+        }
+        if missing_inputs:
+            raise ValueError(
+                f"Abundance transforms reference unknown input channels: {sorted(missing_inputs)}."
+            )
         self._channels = MappingProxyType(catalog)
         super().__init__(frame)
 
@@ -436,8 +497,10 @@ __all__ = [
     "AbundanceTable",
     "CompositionTable",
     "ConditionTable",
+    "EffectBindingTable",
     "FrameTable",
     "ObservationTable",
+    "ReferenceBindingTable",
     "SeriesTable",
     "SupportIndexTable",
 ]
