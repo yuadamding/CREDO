@@ -1,7 +1,8 @@
 # CREDO count-SDE v4
 
-New work: [full-cohort successor access foundation](docs/full-cohort-successor-foundation.md)
-(reader qualification only; successor model training remains unrun).
+New work: [source-only population baseline workflow](docs/source-only-population-baselines.md)
+(separate fitting, immutable prediction and endpoint evaluation; neural successor training remains unrun).
+Foundation: [full-cohort successor access](docs/full-cohort-successor-foundation.md).
 Current correction: [review of b45330b: CI and split integration](docs/review-b45330b-integration.md).
 Previous foundation: [review of 789537f and promotion gates](docs/review-789537f-corrections.md).
 

@@ -1,0 +1,573 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "BaselineRules": {
+      "additionalProperties": false,
+      "properties": {
+        "abundance_denominator": {
+          "const": "complete_bound_guide_catalog",
+          "default": "complete_bound_guide_catalog",
+          "title": "Abundance Denominator",
+          "type": "string"
+        },
+        "abundance_pseudocount": {
+          "default": 0.5,
+          "exclusiveMinimum": 0,
+          "title": "Abundance Pseudocount",
+          "type": "number"
+        },
+        "exclude_technical_features": {
+          "const": true,
+          "default": true,
+          "title": "Exclude Technical Features",
+          "type": "boolean"
+        },
+        "expression_fit_aggregation": {
+          "const": "equal_available_donor_then_equal_guide_target",
+          "default": "equal_available_donor_then_equal_guide_target",
+          "title": "Expression Fit Aggregation",
+          "type": "string"
+        },
+        "expression_pseudocount": {
+          "default": 1e-08,
+          "exclusiveMinimum": 0,
+          "title": "Expression Pseudocount",
+          "type": "number"
+        },
+        "expression_source_minimum_cells": {
+          "const": 1,
+          "default": 1,
+          "title": "Expression Source Minimum Cells",
+          "type": "integer"
+        },
+        "families": {
+          "default": [
+            "source_persistence",
+            "fitting_control_response",
+            "guide_endpoint_transfer",
+            "target_endpoint_transfer",
+            "hierarchical_source_response"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "title": "Families",
+          "type": "array"
+        },
+        "hierarchical_unknown_pair": {
+          "const": "target_then_fitting_control_response",
+          "default": "target_then_fitting_control_response",
+          "title": "Hierarchical Unknown Pair",
+          "type": "string"
+        },
+        "informative_log_effect": {
+          "default": 0.05,
+          "minimum": 0,
+          "title": "Informative Log Effect",
+          "type": "number"
+        },
+        "normalization": {
+          "const": "equal_cell_RNA_composition",
+          "default": "equal_cell_RNA_composition",
+          "title": "Normalization",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "shrinkage_cells": {
+          "default": 32.0,
+          "exclusiveMinimum": 0,
+          "title": "Shrinkage Cells",
+          "type": "number"
+        },
+        "unknown_source_abundance": {
+          "const": "mass_only_source_prior",
+          "default": "mass_only_source_prior",
+          "title": "Unknown Source Abundance",
+          "type": "string"
+        },
+        "unknown_source_expression": {
+          "const": "abstain",
+          "default": "abstain",
+          "title": "Unknown Source Expression",
+          "type": "string"
+        }
+      },
+      "title": "BaselineRules",
+      "type": "object"
+    },
+    "GuideCatalogBinding": {
+      "additionalProperties": false,
+      "description": "Artifact plus explicitly declared projection; never infer biological labels.",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "control_column": {
+          "default": "is_control",
+          "title": "Control Column",
+          "type": "string"
+        },
+        "guide_id_column": {
+          "default": "guide_id",
+          "title": "Guide Id Column",
+          "type": "string"
+        },
+        "index_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "guide_index",
+          "title": "Index Column"
+        },
+        "ordered_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ordered Catalog Sha256",
+          "type": "string"
+        },
+        "target_id_column": {
+          "default": "target_id",
+          "title": "Target Id Column",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact",
+        "ordered_catalog_sha256"
+      ],
+      "title": "GuideCatalogBinding",
+      "type": "object"
+    },
+    "PreparedAccess": {
+      "additionalProperties": false,
+      "description": "Existing V2 predictor/fitting capability; serialized identity is unchanged.",
+      "properties": {
+        "amendment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Amendment Sha256",
+          "type": "string"
+        },
+        "feature_order_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Feature Order Sha256",
+          "type": "string"
+        },
+        "guide_catalog": {
+          "$ref": "#/$defs/GuideCatalogBinding"
+        },
+        "n_features": {
+          "exclusiveMinimum": 0,
+          "title": "N Features",
+          "type": "integer"
+        },
+        "package_completion_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Package Completion Sha256",
+          "type": "string"
+        },
+        "package_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Package Inventory Sha256",
+          "type": "string"
+        },
+        "parent_view_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Parent View Sha256",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "representation_fit",
+            "dynamics_source",
+            "dynamics_supervision",
+            "baseline_fit",
+            "query"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "shards": {
+          "items": {
+            "$ref": "#/$defs/PreparedShard"
+          },
+          "title": "Shards",
+          "type": "array"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "storage_isolation_qualified": {
+          "const": false,
+          "default": false,
+          "title": "Storage Isolation Qualified",
+          "type": "boolean"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_completion_sha256",
+        "package_inventory_sha256",
+        "parent_view_sha256",
+        "amendment_sha256",
+        "feature_order_sha256",
+        "guide_catalog",
+        "n_features",
+        "task_id",
+        "source_ids",
+        "shards",
+        "role"
+      ],
+      "title": "PreparedAccess",
+      "type": "object"
+    },
+    "PreparedShard": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_rows": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Rows"
+        },
+        "cells": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "counts": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "nnz": {
+          "minimum": 0,
+          "title": "Nnz",
+          "type": "integer"
+        },
+        "rows": {
+          "exclusiveMinimum": 0,
+          "title": "Rows",
+          "type": "integer"
+        },
+        "shard": {
+          "minimum": 0,
+          "title": "Shard",
+          "type": "integer"
+        },
+        "source_id": {
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "shard",
+        "rows",
+        "nnz",
+        "counts",
+        "cells"
+      ],
+      "title": "PreparedShard",
+      "type": "object"
+    },
+    "SourceRole": {
+      "additionalProperties": false,
+      "properties": {
+        "condition_role": {
+          "enum": [
+            "source",
+            "destination"
+          ],
+          "title": "Condition Role",
+          "type": "string"
+        },
+        "donor_id": {
+          "title": "Donor Id",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "donor_id",
+        "condition_role"
+      ],
+      "title": "SourceRole",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/population-baseline-spec.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "base_git_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Base Git Commit",
+      "type": "string"
+    },
+    "batch_rows": {
+      "default": 2048,
+      "maximum": 8192,
+      "minimum": 1,
+      "title": "Batch Rows",
+      "type": "integer"
+    },
+    "context_enabled": {
+      "const": false,
+      "default": false,
+      "title": "Context Enabled",
+      "type": "boolean"
+    },
+    "destination_condition": {
+      "title": "Destination Condition",
+      "type": "string"
+    },
+    "environment": {
+      "additionalProperties": true,
+      "title": "Environment",
+      "type": "object"
+    },
+    "evaluation_view": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "expression_output": {
+      "const": "population_mean_not_cell_matched_or_full_law",
+      "default": "population_mean_not_cell_matched_or_full_law",
+      "title": "Expression Output",
+      "type": "string"
+    },
+    "external_code_sha256": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "External Code Sha256",
+      "type": "object"
+    },
+    "fitting": {
+      "$ref": "#/$defs/PreparedAccess"
+    },
+    "fitting_donors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Fitting Donors",
+      "type": "array"
+    },
+    "implementation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Implementation Sha256",
+      "type": "string"
+    },
+    "maximum_output_bytes": {
+      "default": 137438953472,
+      "exclusiveMinimum": 0,
+      "title": "Maximum Output Bytes",
+      "type": "integer"
+    },
+    "maximum_process_tree_rss_bytes": {
+      "default": 68719476736,
+      "exclusiveMinimum": 0,
+      "title": "Maximum Process Tree Rss Bytes",
+      "type": "integer"
+    },
+    "ordered_rna_features": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ordered Rna Features",
+      "type": "array"
+    },
+    "protected_donors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Protected Donors",
+      "type": "array"
+    },
+    "query": {
+      "$ref": "#/$defs/PreparedAccess"
+    },
+    "query_donor": {
+      "title": "Query Donor",
+      "type": "string"
+    },
+    "recovery_unit": {
+      "const": "complete_source_replay_incomplete_source",
+      "default": "complete_source_replay_incomplete_source",
+      "title": "Recovery Unit",
+      "type": "string"
+    },
+    "rna_positions": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Rna Positions",
+      "type": "array"
+    },
+    "rules": {
+      "$ref": "#/$defs/BaselineRules",
+      "default": {
+        "abundance_denominator": "complete_bound_guide_catalog",
+        "abundance_pseudocount": 0.5,
+        "exclude_technical_features": true,
+        "expression_fit_aggregation": "equal_available_donor_then_equal_guide_target",
+        "expression_pseudocount": 1e-08,
+        "expression_source_minimum_cells": 1,
+        "families": [
+          "source_persistence",
+          "fitting_control_response",
+          "guide_endpoint_transfer",
+          "target_endpoint_transfer",
+          "hierarchical_source_response"
+        ],
+        "hierarchical_unknown_pair": "target_then_fitting_control_response",
+        "informative_log_effect": 0.05,
+        "normalization": "equal_cell_RNA_composition",
+        "schema_version": 1,
+        "shrinkage_cells": 32.0,
+        "unknown_source_abundance": "mass_only_source_prior",
+        "unknown_source_expression": "abstain"
+      }
+    },
+    "schema_id": {
+      "const": "credo.paired_condition_baseline_spec",
+      "default": "credo.paired_condition_baseline_spec",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "seed": {
+      "const": 0,
+      "default": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "source_condition": {
+      "title": "Source Condition",
+      "type": "string"
+    },
+    "source_roles": {
+      "items": {
+        "$ref": "#/$defs/SourceRole"
+      },
+      "title": "Source Roles",
+      "type": "array"
+    },
+    "storage_isolation_qualified": {
+      "const": false,
+      "default": false,
+      "title": "Storage Isolation Qualified",
+      "type": "boolean"
+    },
+    "task_id": {
+      "title": "Task Id",
+      "type": "string"
+    },
+    "worker_count": {
+      "default": 4,
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Worker Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "base_git_commit",
+    "implementation_sha256",
+    "external_code_sha256",
+    "environment",
+    "task_id",
+    "source_condition",
+    "destination_condition",
+    "fitting_donors",
+    "query_donor",
+    "protected_donors",
+    "source_roles",
+    "fitting",
+    "query",
+    "evaluation_view",
+    "ordered_rna_features",
+    "rna_positions"
+  ],
+  "title": "ForecastSpec",
+  "type": "object"
+}

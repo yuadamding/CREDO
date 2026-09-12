@@ -94,10 +94,9 @@ def canonical_guide_catalog(table: pd.DataFrame, binding: GuideCatalogBinding) -
     return result
 
 
-class PreparedAccess(StrictModel):
-    """Resolved, content-bound subset; changing any permission changes identity."""
+class PreparedSourceView(StrictModel):
+    """Shared physical view fields; concrete capabilities declare distinct roles."""
 
-    schema_version: Literal[2] = 2
     package_completion_sha256: Sha256
     package_inventory_sha256: Sha256
     parent_view_sha256: Sha256
@@ -106,15 +105,12 @@ class PreparedAccess(StrictModel):
     guide_catalog: GuideCatalogBinding
     n_features: int = Field(gt=0, strict=True)
     task_id: str = Field(min_length=1)
-    role: Literal[
-        "representation_fit", "dynamics_source", "dynamics_supervision", "baseline_fit", "query"
-    ]
     source_ids: tuple[str, ...]
     shards: tuple[PreparedShard, ...]
     storage_isolation_qualified: Literal[False] = False
 
     @model_validator(mode="after")
-    def valid_allowlist(self) -> PreparedAccess:
+    def valid_allowlist(self) -> PreparedSourceView:
         if not self.source_ids or len(set(self.source_ids)) != len(self.source_ids):
             raise ValueError("Unique, nonempty source allowlist required.")
         keys = [(s.source_id, s.shard) for s in self.shards]
@@ -124,6 +120,24 @@ class PreparedAccess(StrictModel):
         if {s.source_id for s in self.shards} != set(self.source_ids):
             raise ValueError("Shard sources must exactly cover the authorized source allowlist.")
         return self
+
+
+class PreparedAccess(PreparedSourceView):
+    """Existing V2 predictor/fitting capability; serialized identity is unchanged."""
+
+    schema_version: Literal[2] = 2
+    role: Literal[
+        "representation_fit", "dynamics_source", "dynamics_supervision", "baseline_fit", "query"
+    ]
+
+
+class PreparedEvaluationAccess(PreparedSourceView):
+    """Distinct endpoint capability, minted only after verified prediction publication."""
+
+    schema_id: Literal["credo.prepared_evaluation_access"] = "credo.prepared_evaluation_access"
+    schema_version: Literal[1] = 1
+    role: Literal["evaluation_truth"] = "evaluation_truth"
+    prediction_seal_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class RowAddress(StrictModel):
@@ -203,7 +217,7 @@ class PreparedShardReader:
     def __init__(
         self,
         root: Path,
-        access: PreparedAccess,
+        access: PreparedAccess | PreparedEvaluationAccess,
         *,
         max_uncompressed_bytes: int = 1024**3,
         max_cached_bytes: int = 768 * 1024**2,

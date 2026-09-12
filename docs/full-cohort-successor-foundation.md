@@ -23,10 +23,13 @@ use, those external cohort files are not installed by this generic package.
 
 The local first-split audit resolved 7,416,636 fitting cells and 1,983,457 query
 cells. Five real-shard read canaries passed without accessing outer or validation
-endpoint expression. The training/evaluation integration is not implemented,
-and software allowlists explicitly do not certify physical access isolation.
+endpoint expression. That audit was an access-only milestone. The subsequent
+[source-only baseline integration](source-only-population-baselines.md) adds
+separate baseline fitting, immutable predictions and sealed endpoint evaluation;
+it does not implement count-representation or neural dynamics training.
+Software allowlists explicitly do not certify physical access isolation.
 
-Remaining stages are count representation qualification, role-scoped latent
-compilation, strong source-conditioned baselines, independent sealed evaluation,
-then gated drift/dispersion/reaction fitting and interpretation. `count_context`
+Remaining stages are full first-split baseline execution/scale qualification,
+count representation qualification, role-scoped latent compilation, then gated
+drift/dispersion/reaction fitting and interpretation. `count_context`
 remains off. A successful engineering test is not biological advancement.

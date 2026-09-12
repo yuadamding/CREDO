@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "observation": "completed_remote_CPU_CI",
+  "observed_utc": "2026-09-12T19:39:29Z",
+  "repository": "yuadamding/CREDO",
+  "commit": "21656d8e2f0f30bcadadd4e1a3d73f760a4d00bf",
+  "run_id": 34712619149,
+  "url": "https://github.com/yuadamding/CREDO/actions/runs/34712619149",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {"name": "wheel", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.11)", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.12)", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.13)", "status": "completed", "conclusion": "success"}
+  ],
+  "evidence_method": "gh run view 34712619149 --repo yuadamding/CREDO --json headSha,status,conclusion,url,jobs",
+  "remote_coverage_percentage": null,
+  "local_receipt_preserved": "receipts/review-b45330b-local-validation.json",
+  "scope": "This is an additional observation for the exact base commit, not validation of the subsequent R48 working-tree implementation, GPU execution, biological discovery, or remote input publication."
+}

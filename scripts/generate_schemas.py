@@ -146,10 +146,14 @@ from credo_count_sde_v4.contracts import (
     VirtualCanonicalCountStoreManifestV1,
     VirtualCanonicalCountStoreManifestV2,
 )
-from credo_count_sde_v4.data.prepared_shards import PreparedAccess
+from credo_count_sde_v4.data.prepared_shards import PreparedAccess, PreparedEvaluationAccess
+from credo_count_sde_v4.forecast.contracts import BundleManifest, ForecastSpec
 from credo_count_sde_v4.reports import PerturbationDossier
 
 MODELS = {
+    "prepared-evaluation-access.v1.json": PreparedEvaluationAccess,
+    "population-baseline-spec.v2.json": ForecastSpec,
+    "population-baseline-bundle.v1.json": BundleManifest,
     "prepared-access.v2.json": PreparedAccess,
     "study-evidence-contract.v1.json": StudyEvidenceContract,
     "dataset-capability-assessment.v1.json": DatasetCapabilityAssessment,
@@ -296,6 +300,7 @@ MODELS = {
 # Immutable accepted schemas whose active construction advanced to v2. They are
 # validated by explicit v1 models and compatibility tests, never regenerated.
 LEGACY_SCHEMAS = {
+    "population-baseline-spec.v1.json",  # A1 source wheel preserves its original constructor.
     "checkpoint-multinomial-decoder.v1.json",
     "claim-registry.v1.json",
     "g14-multiplicity-contract.v1.json",

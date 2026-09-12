@@ -146,10 +146,10 @@
       "type": "object"
     }
   },
-  "$id": "https://credo.local/schemas/prepared-access.v2.json",
+  "$id": "https://credo.local/schemas/prepared-evaluation-access.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Existing V2 predictor/fitting capability; serialized identity is unchanged.",
+  "description": "Distinct endpoint capability, minted only after verified prediction publication.",
   "properties": {
     "amendment_sha256": {
       "pattern": "^[0-9a-f]{64}$",
@@ -184,20 +184,26 @@
       "title": "Parent View Sha256",
       "type": "string"
     },
+    "prediction_seal_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Prediction Seal Sha256",
+      "type": "string"
+    },
     "role": {
-      "enum": [
-        "representation_fit",
-        "dynamics_source",
-        "dynamics_supervision",
-        "baseline_fit",
-        "query"
-      ],
+      "const": "evaluation_truth",
+      "default": "evaluation_truth",
       "title": "Role",
       "type": "string"
     },
+    "schema_id": {
+      "const": "credo.prepared_evaluation_access",
+      "default": "credo.prepared_evaluation_access",
+      "title": "Schema Id",
+      "type": "string"
+    },
     "schema_version": {
-      "const": 2,
-      "default": 2,
+      "const": 1,
+      "default": 1,
       "title": "Schema Version",
       "type": "integer"
     },
@@ -238,8 +244,8 @@
     "task_id",
     "source_ids",
     "shards",
-    "role"
+    "prediction_seal_sha256"
   ],
-  "title": "PreparedAccess",
+  "title": "PreparedEvaluationAccess",
   "type": "object"
 }
