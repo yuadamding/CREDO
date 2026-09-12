@@ -365,10 +365,14 @@ def test_program_bundle_publication_is_content_verified(tmp_path) -> None:
     assert bundle.qualification.status == "fail_qualification"
     assert not bundle.qualification.null_inclusion_calibrated
     detailed = json.loads((destination / "artifacts/qualification_metrics.json").read_text())
-    assert detailed["metric_revision"] == 2
+    assert detailed["metric_revision"] == 3
     assert not detailed["biological_efficiency_identified"]
     assert detailed["execution_limits"]["maximum_panel_genes"] == 2048
-    assert any(item["gene_sign_accuracy"] is None for item in detailed["splits"])
+    assert all(item["gene_sign_accuracy"] is not None for item in detailed["splits"])
+    assert all(
+        item["evaluation_reference"]["evaluation_reference_rows"] > 0 for item in detailed["splits"]
+    )
+    assert detailed["execution_limits"]["maximum_evaluation_output_bytes"] == 64 * 1024**2
     assert len(bundle.program_definitions) == 3
     assert bundle.qualification.qualification_protocol_id == (
         bundle.qualification_protocol.qualification_protocol_id

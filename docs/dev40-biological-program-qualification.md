@@ -3,8 +3,10 @@
 Original design: 2026-08-21. Interpretation corrected: 2026-09-12.
 
 Status: **bounded component diagnostic, not qualified biological programs**.
-See [the correction record](review-789537f-corrections.md). Historical receipts
-remain unchanged; newly computed metrics use revision 2. The legacy universal
+See [the foundation correction](review-789537f-corrections.md) and
+[split-integration follow-up](review-b45330b-integration.md). Historical receipts
+remain unchanged; newly computed qualification details use revision 3. The keyed
+effect formula retains revision-2 semantics. The legacy universal
 gate remains named and separate, but its null-calibration gate now fails closed.
 
 ## Decision
@@ -99,6 +101,25 @@ be reported as that experiment. Stopping inspects only its inner subset.
 Known-target donor forecasting needs a separately qualified nested-donor
 profile, not mandatory unseen-target success under this universal diagnostic.
 
+Evaluation targets and observed evaluation references are now separate row sets.
+For held-out guide/target diagnostics, reserve `ceil(0.25 * n)` controls within
+each donor/condition using the configured seed and ascending physical row order,
+leaving at least one control for fitting. A stratum with fewer than two controls
+provides no independent reserved reference; its sign metric stays undefined.
+Reservation inspects metadata only and precedes the inner fitting/validation
+split. Donor/time references are controls already inside the held-out stratum.
+All three row sets must be disjoint. The reference outcomes enter only the
+evaluator, not that split's head fitting, baseline fitting, or control prediction.
+Later all-data reference/stability fits are separate diagnostics, not held-out
+predictive evidence.
+
+This is held-out **cell-observation** evidence; shared donor/culture effects do
+not become independent biological replicates. Count likelihoods now score
+perturbation evaluation targets only, not reserved control cells. Revision-3
+scores therefore must not be pooled with historical scores under old supports.
+The detailed artifact binds physical row partitions by digest. Frozen V1 split
+summary IDs remain unit-label summaries, not row-level access authorities.
+
 Strictly increasing physical checkpoint times remain required. GSE314342's
 Rest/Stim8hr/Stim48hr `[8,8,48]` collection times cannot be supplied as a single
 ordered trajectory. A condition/branch-aware successor remains necessary; do
@@ -132,6 +153,22 @@ with log pseudocount `1e-8`. Missing matched controls or no informative effects
 produce undefined metrics and explicit coverage losses. All reported units
 must be supported to pass the diagnostic split gate. This is a panel-composition
 metric, not absolute expression or causal knockdown validation.
+
+## Bounded diagnostic execution
+
+The head remains a dense-host small-panel component (default 2,048 genes and
+512 MiB training/inner-validation input-tensor payload), not a full-cohort CSR
+trainer. Inner validation, outer prediction, and independently predicted
+references use a shared bounded batch routine. Outer likelihoods and keyed
+effects accumulate per chunk; baseline tables are fitted once at unit depth for
+unique target/checkpoint metadata pairs, then expanded only for the current
+chunk. No complete cell-by-gene outer prediction panel is retained.
+
+The default 64 MiB evaluation-output cap covers retained numeric guide/control
+summaries, baseline tables, and one prediction/reference chunk; it is checked
+before fitting. It does not measure process RSS, GPU allocator peaks, model
+activations, temporary likelihood/SVD work, metadata objects, or the caller's
+input matrix. Exceeding the cap fails, without subsampling or changing scores.
 
 ## Stability and null calibration
 

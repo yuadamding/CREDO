@@ -2,7 +2,8 @@
 
 New work: [full-cohort successor access foundation](docs/full-cohort-successor-foundation.md)
 (reader qualification only; successor model training remains unrun).
-Current correction: [review of 789537f and remaining promotion gates](docs/review-789537f-corrections.md).
+Current correction: [review of b45330b: CI and split integration](docs/review-b45330b-integration.md).
+Previous foundation: [review of 789537f and promotion gates](docs/review-789537f-corrections.md).
 
 Independent count-native finite-measure SDE recipe for longitudinal
 perturbation screens. This repository implements three gated intents:

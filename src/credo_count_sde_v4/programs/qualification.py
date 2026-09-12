@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from scipy.optimize import linear_sum_assignment
 
+from ..canonical import contract_id
 from ..contracts import BaselineName, ProgramSplitKind
 from ..errors import ContractError
 from .baselines import fit_frozen_baselines
@@ -18,9 +19,10 @@ from .head import (
     ProgramFitConfig,
     ProgramFitResult,
     fit_program_head,
+    iter_program_predictions,
     negative_binomial_log_prob,
 )
-from .keyed_metrics import gene_sign_report, sister_guide_reports
+from .keyed_metrics import GeneSignAccumulator, gene_sign_report, sister_guide_reports
 
 
 @dataclass(frozen=True)
@@ -124,6 +126,8 @@ class ProgramQualificationConfig:
     effect_inclusion_threshold: float = 0.15
     loading_inclusion_threshold: float = 0.05
     inner_validation_fraction: float = 0.15
+    evaluation_control_fraction: float = 0.25
+    maximum_evaluation_output_bytes: int = 64 * 1024**2
     seed: int = 0
 
 
@@ -150,6 +154,7 @@ class RuntimeSplitMetric:
     predictive_nb_log_likelihood: float | None = None
     common_dispersion_mean_prediction_score: float | None = None
     gene_sign_coverage: dict[str, Any] | None = None
+    evaluation_reference: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -192,7 +197,7 @@ class ProgramQualificationMetrics:
     null_replicate_families: tuple[str, ...]
     reference_fit: ProgramFitResult
     qualification_scope: str = "legacy_four_split_component_diagnostic_not_nested_donor_forecast"
-    metric_revision: int = 2
+    metric_revision: int = 3
     null_calibration_semantics: str = "legacy_coefficient_exceedance_not_discovery_calibration"
     biological_efficiency_identified: bool = False
 
@@ -241,7 +246,28 @@ def _initialize_intercept(model: CountLinkedProgramHead, counts: np.ndarray[Any,
 
 def _split_masks(
     dataset: ProgramDataset,
-) -> tuple[tuple[ProgramSplitKind, np.ndarray[Any, Any], np.ndarray[Any, Any], str | None], ...]:
+    *,
+    evaluation_control_fraction: float = 0.25,
+    seed: int = 0,
+) -> tuple[
+    tuple[
+        ProgramSplitKind,
+        np.ndarray[Any, Any],
+        np.ndarray[Any, Any],
+        np.ndarray[Any, Any],
+        str | None,
+    ],
+    ...,
+]:
+    """Separate target predictions from prespecified evaluator-only controls.
+
+    Guide/target splits reserve a seeded fraction per donor/condition before
+    fitting; no outcomes are inspected. At least one control stays available for
+    fitting. A singleton control is not borrowed as independent test evidence.
+    Donor/time references come only from their already held-out observations.
+    """
+    if not 0 < evaluation_control_fraction < 1:
+        raise ContractError("Evaluation control fraction must lie between zero and one.")
     rows = len(dataset.counts)
     all_rows = np.arange(rows)
     donor = int(np.max(dataset.donor_index))
@@ -252,6 +278,21 @@ def _split_masks(
 
     heldout_guides: list[int] = []
     controls = set(dataset.control_guide_indices)
+    control_mask = np.isin(dataset.guide_index, tuple(controls))
+    reserved = np.zeros(rows, dtype=bool)
+    rng = np.random.default_rng(seed)
+    for d, c in sorted(
+        set(zip(dataset.donor_index.tolist(), dataset.checkpoint_index.tolist(), strict=True))
+    ):
+        candidates = all_rows[
+            control_mask & (dataset.donor_index == d) & (dataset.checkpoint_index == c)
+        ]
+        if len(candidates) >= 2:
+            number = min(
+                len(candidates) - 1,
+                max(1, int(np.ceil(len(candidates) * evaluation_control_fraction))),
+            )
+            reserved[rng.permutation(candidates)[:number]] = True
     for target in sorted(set(dataset.target_index)):
         guides = sorted(
             set(dataset.guide_index[dataset.target_index == target].tolist()) - controls
@@ -284,25 +325,29 @@ def _split_masks(
         (
             ProgramSplitKind.HELDOUT_DONOR,
             all_rows[~donor_eval],
-            all_rows[donor_eval],
+            all_rows[donor_eval & ~control_mask],
+            all_rows[donor_eval & control_mask],
             donor_reason,
         ),
         (
             ProgramSplitKind.HELDOUT_GUIDE_TARGET_SHARED,
-            all_rows[~guide_eval],
+            all_rows[~guide_eval & ~reserved],
             all_rows[guide_eval],
+            all_rows[reserved],
             None if heldout_guides else "no target has two observed sister guides",
         ),
         (
             ProgramSplitKind.HELDOUT_TARGET,
-            all_rows[~target_eval],
+            all_rows[~target_eval & ~reserved],
             all_rows[target_eval],
+            all_rows[reserved],
             target_reason,
         ),
         (
             ProgramSplitKind.HELDOUT_TIME,
             all_rows[~time_eval],
-            all_rows[time_eval],
+            all_rows[time_eval & ~control_mask],
+            all_rows[time_eval & control_mask],
             time_reason,
         ),
     )
@@ -373,10 +418,32 @@ def _evaluate_split(
     kind: ProgramSplitKind,
     training_indices: np.ndarray[Any, Any],
     evaluation_indices: np.ndarray[Any, Any],
+    evaluation_reference_indices: np.ndarray[Any, Any],
     ineligibility_reason: str | None,
     config: ProgramQualificationConfig,
     device: torch.device | str,
 ) -> tuple[RuntimeSplitMetric, ProgramFitResult | None]:
+    partitions = (training_indices, evaluation_indices, evaluation_reference_indices)
+    for indices in partitions:
+        if (
+            indices.ndim != 1
+            or indices.dtype.kind not in "iu"
+            or np.any(indices >= len(dataset.counts))
+            or np.any(indices < 0)
+            or len(np.unique(indices)) != len(indices)
+        ):
+            raise ContractError("Evaluation row partitions must contain unique valid row indices.")
+    if any(np.intersect1d(partitions[a], partitions[b]).size for a, b in ((0, 1), (0, 2), (1, 2))):
+        raise ContractError(
+            "Fitting, evaluation targets and evaluation references must be disjoint."
+        )
+    if (
+        not np.isin(
+            dataset.guide_index[evaluation_reference_indices], dataset.control_guide_indices
+        ).all()
+        or np.isin(dataset.guide_index[evaluation_indices], dataset.control_guide_indices).any()
+    ):
+        raise ContractError("Evaluation target/reference roles contradict control identities.")
     if ineligibility_reason is not None or not len(training_indices) or not len(evaluation_indices):
         reason = ineligibility_reason or "split has no fit or evaluation rows"
         return (
@@ -395,6 +462,62 @@ def _evaluate_split(
             ),
             None,
         )
+    genes = dataset.counts.shape[1]
+    if config.maximum_evaluation_output_bytes <= 0 or config.fit.minibatch_size <= 0:
+        raise ContractError("Evaluation batch and output limits must be positive.")
+    target_keys = set(
+        zip(
+            dataset.donor_index[evaluation_indices].tolist(),
+            dataset.checkpoint_index[evaluation_indices].tolist(),
+            dataset.guide_index[evaluation_indices].tolist(),
+            strict=True,
+        )
+    )
+    reference_keys = set(
+        zip(
+            dataset.donor_index[evaluation_reference_indices].tolist(),
+            dataset.checkpoint_index[evaluation_reference_indices].tolist(),
+            strict=True,
+        )
+    )
+    baseline_keys, baseline_inverse = np.unique(
+        np.stack(
+            (
+                dataset.checkpoint_index[evaluation_indices],
+                dataset.target_index[evaluation_indices],
+            ),
+            axis=1,
+        ),
+        axis=0,
+        return_inverse=True,
+    )
+    summary_bytes = (3 * len(target_keys) + len(reference_keys)) * genes * 8
+    baseline_bytes = len(BaselineName) * len(baseline_keys) * genes * 8
+    chunk_bytes = min(config.fit.minibatch_size, len(evaluation_indices)) * genes * 2 * 4
+    required_bytes = summary_bytes + baseline_bytes + chunk_bytes
+    if (
+        genes > config.fit.maximum_panel_genes
+        or required_bytes > config.maximum_evaluation_output_bytes
+    ):
+        raise ContractError("Outer evaluation exceeds its small-panel evaluation-output budget.")
+    reference_record = {
+        "policy": "outcome_blind_seeded_control_reservation_or_outer_donor_time_controls_v1",
+        "independence_unit": "cell_observations_not_independent_donor_or_culture_replicates",
+        "reserved_fraction": config.evaluation_control_fraction,
+        "reservation_seed": config.seed,
+        "fit_candidate_rows": len(training_indices),
+        "evaluation_target_rows": len(evaluation_indices),
+        "evaluation_reference_rows": len(evaluation_reference_indices),
+        "partition_sha256": contract_id(
+            {
+                name: rows.tolist()
+                for name, rows in zip(("fit", "target", "reference"), partitions, strict=True)
+            }
+        ),
+        "reference_outcomes": "evaluator_only_excluded_from_fit_and_prediction",
+        "likelihood_population": "evaluation_target_rows_only",
+        "estimated_retained_array_and_prediction_bytes": required_bytes,
+    }
     fit_indices, validation_indices = _inner_split(
         training_indices,
         fraction=config.inner_validation_fraction,
@@ -409,50 +532,86 @@ def _evaluate_split(
         config=config.fit,
         device=device,
     )
-    evaluation_batch = _batch(dataset, evaluation_indices).to(device)
-    with torch.no_grad():
-        predicted_mean = fit.model.mean(evaluation_batch).cpu().numpy()
-        predicted_reference = fit.model.reference_mean(evaluation_batch).cpu().numpy()
     dispersion = _dispersion(dataset.counts[fit_indices])
-    model_ll, model_nll = _likelihood_metrics(
-        dataset.counts[evaluation_indices], predicted_mean, dispersion
-    )
-    predictive_ll, _ = _likelihood_metrics(
-        dataset.counts[evaluation_indices],
-        predicted_mean,
-        fit.model.dispersion.detach().cpu().numpy(),
-    )
-    baseline_predictions = fit_frozen_baselines(
+    fitted_dispersion = fit.model.dispersion.detach().cpu().numpy()
+    # Fit once at unit depth on unique evaluation metadata keys. Only bounded
+    # chunks of cell-level baseline predictions are ever materialized.
+    baseline_tables = fit_frozen_baselines(
         training_counts=dataset.counts[fit_indices],
         training_library_size=dataset.counts[fit_indices].sum(axis=1),
         training_checkpoint=dataset.checkpoint_index[fit_indices],
         training_target=dataset.target_index[fit_indices],
         training_guide=dataset.guide_index[fit_indices],
         control_guide_indices=dataset.control_guide_indices,
-        evaluation_library_size=dataset.counts[evaluation_indices].sum(axis=1),
-        evaluation_checkpoint=dataset.checkpoint_index[evaluation_indices],
-        evaluation_target=dataset.target_index[evaluation_indices],
+        evaluation_library_size=np.ones(len(baseline_keys)),
+        evaluation_checkpoint=baseline_keys[:, 0],
+        evaluation_target=baseline_keys[:, 1],
         sparse_factor_rank=config.sparse_factor_rank,
     )
-    baseline_metrics = tuple(
-        RuntimeBaselineMetric(
-            prediction.name,
-            *_likelihood_metrics(dataset.counts[evaluation_indices], prediction.mean, dispersion),
+    accumulator = GeneSignAccumulator(
+        genes=genes,
+        guide_to_target=dataset.guide_to_target,
+        control_guides=dataset.control_guide_indices,
+        maximum_output_bytes=config.maximum_evaluation_output_bytes - baseline_bytes - chunk_bytes,
+    )
+    # References are summarized only here, never passed to the model/baselines.
+    for start in range(0, len(evaluation_reference_indices), config.fit.minibatch_size):
+        indices = evaluation_reference_indices[start : start + config.fit.minibatch_size]
+        accumulator.add_controls(
+            counts=dataset.counts[indices],
+            donor=dataset.donor_index[indices],
+            condition=dataset.checkpoint_index[indices],
+            guide=dataset.guide_index[indices],
         )
-        for prediction in baseline_predictions
+    batches = (
+        _batch(dataset, evaluation_indices[start : start + config.fit.minibatch_size])
+        for start in range(0, len(evaluation_indices), config.fit.minibatch_size)
+    )
+    totals = np.zeros((2 + len(baseline_tables), 2), dtype=np.float64)
+    total_counts = 0.0
+    start = 0
+    for batch, prediction, reference in iter_program_predictions(
+        fit.model,
+        batches,
+        device=device,
+        maximum_batch_rows=config.fit.minibatch_size,
+        maximum_output_bytes=config.maximum_evaluation_output_bytes
+        - summary_bytes
+        - baseline_bytes,
+    ):
+        assert reference is not None
+        stop = start + len(batch.counts)
+        indices = evaluation_indices[start:stop]
+        counts = dataset.counts[indices]
+        library = counts.sum(axis=1, dtype=np.float64)
+        predicted = prediction.cpu().numpy()
+        reference_mean = reference.cpu().numpy()
+        weight = np.array([library.sum(), len(indices)])
+        total_counts += float(library.sum())
+        totals[0] += np.asarray(_likelihood_metrics(counts, predicted, dispersion)) * weight
+        totals[1] += np.asarray(_likelihood_metrics(counts, predicted, fitted_dispersion)) * weight
+        for number, table in enumerate(baseline_tables, start=2):
+            mean = library[:, None] * table.mean[baseline_inverse[start:stop]]
+            totals[number] += np.asarray(_likelihood_metrics(counts, mean, dispersion)) * weight
+        accumulator.add_targets(
+            counts=counts,
+            predicted_mean=predicted,
+            predicted_reference_mean=reference_mean,
+            donor=dataset.donor_index[indices],
+            condition=dataset.checkpoint_index[indices],
+            guide=dataset.guide_index[indices],
+        )
+        start = stop
+    totals /= np.array([max(total_counts, 1.0), len(evaluation_indices)])
+    model_ll, model_nll = map(float, totals[0])
+    predictive_ll = float(totals[1, 0])
+    baseline_metrics = tuple(
+        RuntimeBaselineMetric(table.name, float(values[0]), float(values[1]))
+        for table, values in zip(baseline_tables, totals[2:], strict=True)
     )
     best_baseline = max(item.mean_log_likelihood_per_count for item in baseline_metrics)
     improvement = model_ll - best_baseline
-    sign_report = gene_sign_report(
-        counts=dataset.counts[evaluation_indices],
-        predicted_mean=predicted_mean,
-        predicted_reference_mean=predicted_reference,
-        donor=dataset.donor_index[evaluation_indices],
-        condition=dataset.checkpoint_index[evaluation_indices],
-        guide=dataset.guide_index[evaluation_indices],
-        guide_to_target=dataset.guide_to_target,
-        control_guides=dataset.control_guide_indices,
-    )
+    sign_report = accumulator.report()
     sign_accuracy = sign_report.accuracy
     passed = (
         improvement > config.minimum_log_likelihood_improvement
@@ -486,6 +645,7 @@ def _evaluate_split(
             predictive_nb_log_likelihood=predictive_ll,
             common_dispersion_mean_prediction_score=model_ll,
             gene_sign_coverage=asdict(sign_report),
+            evaluation_reference=reference_record,
         ),
         fit,
     )
@@ -680,12 +840,15 @@ def qualify_program_model(
     ):
         raise ContractError("Program stability requires at least three unique seeds.")
     split_metrics: list[RuntimeSplitMetric] = []
-    for kind, training, evaluation, reason in _split_masks(dataset):
+    for kind, training, evaluation, references, reason in _split_masks(
+        dataset, evaluation_control_fraction=config.evaluation_control_fraction, seed=config.seed
+    ):
         metric, _ = _evaluate_split(
             dataset,
             kind=kind,
             training_indices=training,
             evaluation_indices=evaluation,
+            evaluation_reference_indices=references,
             ineligibility_reason=reason,
             config=config,
             device=device,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, replace
 from typing import cast
 
@@ -296,6 +297,38 @@ class ProgramFitResult:
     stopped_early: bool
 
 
+def iter_program_predictions(
+    model: CountLinkedProgramHead,
+    batches: Iterable[ProgramBatch],
+    *,
+    device: torch.device | str,
+    maximum_batch_rows: int,
+    maximum_output_bytes: int,
+    include_reference: bool = True,
+) -> Iterator[tuple[ProgramBatch, Tensor, Tensor | None]]:
+    """Predict bounded host batches; callers consume each result before advancing.
+
+    The byte limit covers prediction tensors, not allocator/workspace peak memory.
+    Observed evaluator-reference rows must never be passed to this predictor.
+    """
+    if min(maximum_batch_rows, maximum_output_bytes) <= 0:
+        raise ContractError("Prediction batch and output limits must be positive.")
+    model.eval()
+    for host_batch in batches:
+        rows = len(host_batch.counts)
+        needed = rows * model.genes * model.gene_intercept.element_size()
+        needed *= 2 if include_reference else 1
+        if rows > maximum_batch_rows or needed > maximum_output_bytes:
+            raise ContractError("Prediction chunk exceeds its evaluation-output budget.")
+        if any(value.device.type != "cpu" for value in vars(host_batch).values()):
+            raise ContractError("Prediction input batches must remain on the CPU host.")
+        batch = host_batch.to(device)
+        with torch.no_grad():
+            mean = model.mean(batch)
+            reference = model.reference_mean(batch) if include_reference else None
+        yield batch, mean, reference
+
+
 def fit_program_head(
     model: CountLinkedProgramHead,
     *,
@@ -372,12 +405,25 @@ def fit_program_head(
         model.eval()
         with torch.no_grad():
             total = 0.0
-            for start in range(0, len(validation.counts), config.minibatch_size):
-                indices = torch.arange(
-                    start, min(start + config.minibatch_size, len(validation.counts))
+            batches = (
+                validation.subset(
+                    torch.arange(start, min(start + config.minibatch_size, len(validation.counts)))
                 )
-                batch = validation.subset(indices).to(device_value)
-                total += float(model.negative_log_likelihood(batch)) * len(indices)
+                for start in range(0, len(validation.counts), config.minibatch_size)
+            )
+            for batch, mean, _ in iter_program_predictions(
+                model,
+                batches,
+                device=device_value,
+                maximum_batch_rows=config.minibatch_size,
+                maximum_output_bytes=config.maximum_host_payload_bytes,
+                include_reference=False,
+            ):
+                total -= float(
+                    negative_binomial_log_prob(batch.counts, mean, model.dispersion)
+                    .sum(dim=1)
+                    .mean()
+                ) * len(batch.counts)
             value = total / len(validation.counts)
         validation_trace.append(value)
         if value < best_loss - config.minimum_delta:

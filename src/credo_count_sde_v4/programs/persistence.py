@@ -494,6 +494,11 @@ def _publish_bundle(
             "execution_limits": {
                 "maximum_panel_genes": config.fit.maximum_panel_genes,
                 "maximum_host_payload_bytes": config.fit.maximum_host_payload_bytes,
+                "maximum_evaluation_output_bytes": config.maximum_evaluation_output_bytes,
+                "evaluation_minibatch_size": config.fit.minibatch_size,
+                "evaluation_memory_semantics": (
+                    "retained_numeric_summaries_tables_and_prediction_chunk_not_peak_RSS"
+                ),
                 "memory_semantics": "input_tensor_payload_not_peak_process_or_device_memory",
             },
             "seed_loading_stability": metrics.median_seed_loading_correlation,
@@ -511,6 +516,7 @@ def _publish_bundle(
                     "improvement": item.improvement_over_best_baseline,
                     "gene_sign_accuracy": item.gene_sign_accuracy,
                     "gene_sign_coverage": item.gene_sign_coverage,
+                    "evaluation_reference": item.evaluation_reference,
                     "predictive_nb_log_likelihood": item.predictive_nb_log_likelihood,
                     "common_dispersion_mean_prediction_score": (
                         item.common_dispersion_mean_prediction_score

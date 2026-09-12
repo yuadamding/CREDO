@@ -29,7 +29,8 @@ class SparseCountBatch:
 
     @property
     def library_sizes(self) -> np.ndarray[Any, Any]:
-        return cast(np.ndarray[Any, Any], np.asarray(self.matrix.sum(axis=1)).reshape(-1))
+        sizes: np.ndarray[Any, Any] = np.asarray(self.matrix.sum(axis=1)).reshape(-1)
+        return sizes
 
     def to_dense(self, *, byte_limit: int) -> np.ndarray[Any, Any]:
         needed = self.matrix.shape[0] * self.matrix.shape[1] * self.matrix.dtype.itemsize

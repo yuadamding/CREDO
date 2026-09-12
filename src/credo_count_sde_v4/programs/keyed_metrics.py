@@ -74,54 +74,125 @@ class GeneSignReport:
     metric_semantics: str = "donor_condition_guide_gene_sign_v2_equal_cell_composition"
 
 
-def gene_sign_report(
-    *,
-    counts: Array,
-    predicted_mean: Array,
-    predicted_reference_mean: Array,
-    donor: Array,
-    condition: Array,
-    guide: Array,
-    guide_to_target: Array,
-    control_guides: tuple[int, ...],
-    minimum_abs_log_effect: float = 0.05,
-    log_pseudocount: float = 1e-8,
-) -> GeneSignReport:
-    if not np.isfinite(minimum_abs_log_effect) or minimum_abs_log_effect < 0:
-        raise ContractError("Informative-effect threshold must be fixed and nonnegative.")
-    if not np.isfinite(log_pseudocount) or log_pseudocount <= 0:
-        raise ContractError("Log pseudocount must be fixed and positive.")
-    observed, predicted, reference = map(
-        _composition, (counts, predicted_mean, predicted_reference_mean)
-    )
-    if observed.shape != predicted.shape or observed.shape != reference.shape:
-        raise ContractError("Observed and predicted effect rows/features must align.")
-    _validate_keys(len(observed), donor, condition, guide, guide_to_target, control_guides)
-    controls = np.isin(guide, control_guides)
-    units: list[dict[str, Any]] = []
-    for d, c in sorted(set(zip(donor.tolist(), condition.tolist(), strict=True))):
-        stratum = (donor == d) & (condition == c)
-        ntc = stratum & controls
-        for g in sorted(set(guide[stratum & ~controls].tolist())):
-            selected = stratum & (guide == g)
+class GeneSignAccumulator:
+    """Evaluator-only sums of cell compositions; no retained cell-by-gene panel."""
+
+    def __init__(
+        self,
+        *,
+        genes: int,
+        guide_to_target: Array,
+        control_guides: tuple[int, ...],
+        maximum_output_bytes: int,
+        minimum_abs_log_effect: float = 0.05,
+        log_pseudocount: float = 1e-8,
+    ) -> None:
+        if not np.isfinite(minimum_abs_log_effect) or minimum_abs_log_effect < 0:
+            raise ContractError("Informative-effect threshold must be fixed and nonnegative.")
+        if not np.isfinite(log_pseudocount) or log_pseudocount <= 0:
+            raise ContractError("Log pseudocount must be fixed and positive.")
+        if min(genes, maximum_output_bytes) <= 0:
+            raise ContractError("Effect output dimensions and budget must be positive.")
+        empty = np.empty(0, dtype=np.int64)
+        _validate_keys(0, empty, empty, empty, guide_to_target, control_guides)
+        self.genes = genes
+        self.guide_to_target = guide_to_target
+        self.control_guides = control_guides
+        self.maximum_output_bytes = maximum_output_bytes
+        self.minimum_abs_log_effect = minimum_abs_log_effect
+        self.log_pseudocount = log_pseudocount
+        self.targets: dict[tuple[int, int, int], tuple[int, Array, Array, Array]] = {}
+        self.controls: dict[tuple[int, int], tuple[int, Array]] = {}
+
+    @property
+    def output_bytes(self) -> int:
+        return (3 * len(self.targets) + len(self.controls)) * self.genes * 8
+
+    def _reserve(self, arrays: int) -> None:
+        if self.output_bytes + arrays * self.genes * 8 > self.maximum_output_bytes:
+            raise ContractError("Keyed effects exceed their evaluation-output budget.")
+
+    def add_controls(self, *, counts: Array, donor: Array, condition: Array, guide: Array) -> None:
+        observed = _composition(counts)
+        _validate_keys(
+            len(observed), donor, condition, guide, self.guide_to_target, self.control_guides
+        )
+        if observed.shape[1] != self.genes or not np.isin(guide, self.control_guides).all():
+            raise ContractError("Evaluation references must be aligned control observations.")
+        for d, c in sorted(set(zip(donor.tolist(), condition.tolist(), strict=True))):
+            selected = (donor == d) & (condition == c)
+            if (d, c) not in self.controls:
+                self._reserve(1)
+                self.controls[d, c] = (0, np.zeros(self.genes))
+            n, total = self.controls[d, c]
+            total += observed[selected].sum(axis=0)
+            self.controls[d, c] = (n + int(selected.sum()), total)
+
+    def add_targets(
+        self,
+        *,
+        counts: Array,
+        predicted_mean: Array,
+        predicted_reference_mean: Array,
+        donor: Array,
+        condition: Array,
+        guide: Array,
+    ) -> None:
+        observed, predicted, reference = map(
+            _composition, (counts, predicted_mean, predicted_reference_mean)
+        )
+        if (
+            observed.shape != predicted.shape
+            or observed.shape != reference.shape
+            or observed.shape[1] != self.genes
+        ):
+            raise ContractError("Observed and predicted effect rows/features must align.")
+        _validate_keys(
+            len(observed), donor, condition, guide, self.guide_to_target, self.control_guides
+        )
+        if np.isin(guide, self.control_guides).any():
+            raise ContractError("Evaluation targets must be perturbation observations.")
+        for key in sorted(
+            set(zip(donor.tolist(), condition.tolist(), guide.tolist(), strict=True))
+        ):
+            d, c, g = key
+            selected = (donor == d) & (condition == c) & (guide == g)
+            if key not in self.targets:
+                self._reserve(3)
+                self.targets[key] = (
+                    0,
+                    np.zeros(self.genes),
+                    np.zeros(self.genes),
+                    np.zeros(self.genes),
+                )
+            n, obs, pred, ref = self.targets[key]
+            obs += observed[selected].sum(axis=0)
+            pred += predicted[selected].sum(axis=0)
+            ref += reference[selected].sum(axis=0)
+            self.targets[key] = (n + int(selected.sum()), obs, pred, ref)
+
+    def report(self) -> GeneSignReport:
+        units: list[dict[str, Any]] = []
+        for (d, c, g), (n, observed, predicted, reference) in sorted(self.targets.items()):
+            control = self.controls.get((d, c))
             row: dict[str, Any] = {
                 "donor": int(d),
                 "condition": int(c),
                 "guide": int(g),
-                "target": int(guide_to_target[g]),
-                "cells": int(selected.sum()),
-                "control_cells": int(ntc.sum()),
-                "genes": observed.shape[1],
+                "target": int(self.guide_to_target[g]),
+                "cells": n,
+                "control_cells": control[0] if control is not None else 0,
+                "genes": self.genes,
                 "informative_genes": 0,
                 "accuracy": None,
                 "status": "missing_donor_condition_controls",
             }
-            if ntc.any():
-                truth = np.log(observed[selected].mean(axis=0) + log_pseudocount)
-                truth -= np.log(observed[ntc].mean(axis=0) + log_pseudocount)
-                estimate = np.log(predicted[selected].mean(axis=0) + log_pseudocount)
-                estimate -= np.log(reference[selected].mean(axis=0) + log_pseudocount)
-                informative = np.abs(truth) >= minimum_abs_log_effect
+            if control is not None:
+                truth = np.log(observed / n + self.log_pseudocount)
+                truth -= np.log(control[1] / control[0] + self.log_pseudocount)
+                estimate = np.log(predicted / n + self.log_pseudocount)
+                estimate -= np.log(reference / n + self.log_pseudocount)
+                informative = np.abs(truth) >= self.minimum_abs_log_effect
                 row["informative_genes"] = int(informative.sum())
                 row["status"] = "no_informative_effects"
                 if informative.any():
@@ -130,6 +201,14 @@ def gene_sign_report(
                     )
                     row["status"] = "supported"
             units.append(row)
+        return _summarize_sign_units(
+            units, self.genes, self.minimum_abs_log_effect, self.log_pseudocount
+        )
+
+
+def _summarize_sign_units(
+    units: list[dict[str, Any]], genes: int, minimum_abs_log_effect: float, log_pseudocount: float
+) -> GeneSignReport:
     # Conditions within guide, guides within target, targets within donor, donors.
     by_guide: dict[tuple[int, int, int], list[float]] = defaultdict(list)
     for row in units:
@@ -146,12 +225,60 @@ def gene_sign_report(
         accuracy,
         tuple(units),
         sum(r["informative_genes"] for r in units),
-        len(units) * observed.shape[1],
+        len(units) * genes,
         sum(r["accuracy"] is not None for r in units),
         len(units),
         minimum_abs_log_effect,
         log_pseudocount,
     )
+
+
+def gene_sign_report(
+    *,
+    counts: Array,
+    predicted_mean: Array,
+    predicted_reference_mean: Array,
+    donor: Array,
+    condition: Array,
+    guide: Array,
+    guide_to_target: Array,
+    control_guides: tuple[int, ...],
+    minimum_abs_log_effect: float = 0.05,
+    log_pseudocount: float = 1e-8,
+) -> GeneSignReport:
+    # Preserve the public dense helper's validation, while sharing aggregation.
+    observed, predicted, reference = map(
+        _composition, (counts, predicted_mean, predicted_reference_mean)
+    )
+    if observed.shape != predicted.shape or observed.shape != reference.shape:
+        raise ContractError("Observed and predicted effect rows/features must align.")
+    _validate_keys(len(observed), donor, condition, guide, guide_to_target, control_guides)
+    accumulator = GeneSignAccumulator(
+        genes=observed.shape[1],
+        guide_to_target=guide_to_target,
+        control_guides=control_guides,
+        maximum_output_bytes=observed.size * 3 * 8,
+        minimum_abs_log_effect=minimum_abs_log_effect,
+        log_pseudocount=log_pseudocount,
+    )
+    controls = np.isin(guide, control_guides)
+    if controls.any():
+        accumulator.add_controls(
+            counts=counts[controls],
+            donor=donor[controls],
+            condition=condition[controls],
+            guide=guide[controls],
+        )
+    if (~controls).any():
+        accumulator.add_targets(
+            counts=counts[~controls],
+            predicted_mean=predicted_mean[~controls],
+            predicted_reference_mean=predicted_reference_mean[~controls],
+            donor=donor[~controls],
+            condition=condition[~controls],
+            guide=guide[~controls],
+        )
+    return accumulator.report()
 
 
 def sister_guide_reports(

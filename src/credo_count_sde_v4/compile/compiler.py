@@ -544,7 +544,20 @@ def compile_problem(config_path: Path) -> Path:
             canonical_json_bytes(snapshot.model_dump(mode="json")) + b"\n"
         )
         with (temp / "problem.npz").open("xb") as handle:
-            np.savez(handle, **problem_arrays)
+            np.savez(
+                handle,
+                source_z=problem_arrays["source_z"],
+                terminal_z=problem_arrays["terminal_z"],
+                target_index=problem_arrays["target_index"],
+                pool_index=problem_arrays["pool_index"],
+                is_control=problem_arrays["is_control"],
+                duration=problem_arrays["duration"],
+                grid_steps=problem_arrays["grid_steps"],
+                grid_step_size=problem_arrays["grid_step_size"],
+                source_counts=problem_arrays["source_counts"],
+                terminal_counts=problem_arrays["terminal_counts"],
+                series_ids=problem_arrays["series_ids"],
+            )
 
     publish_directory(destination, writer)
     return destination

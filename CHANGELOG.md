@@ -1,5 +1,21 @@
 # Changelog
 
+## Follow-up to b45330b — 2026-09-12
+
+- use the supported workspace resolver in frozen-checkout compatibility tests,
+  including nested CI layout and explicit-missing-artifact regressions;
+- remove NumPy-version-dependent typing failures without changing CSR totals or
+  compiled NPZ member names, values, dtypes, or reload verification;
+- separate evaluation targets from reserved evaluator-only matched controls;
+  exclude these controls from fitting, inner validation, and predictor calls;
+- stream outer prediction, independent reference prediction, likelihood scores,
+  baseline scores, and keyed cell-composition summaries with an explicit output
+  budget; retain the small-panel scope and unchanged scientific thresholds;
+- publish metric revision 3 with reference-partition evidence and memory limits;
+  retain the uncalibrated-null promotion block and historical receipts;
+- record validation and the still-gated R48 next step in the
+  [follow-up report](docs/review-b45330b-integration.md).
+
 ## Unreleased correction to dev40 — 2026-09-12
 
 - bind prepared access V2 to authoritative ordered guide/target/control identity

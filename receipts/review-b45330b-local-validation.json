@@ -1,0 +1,130 @@
+{
+  "schema_version": 1,
+  "record_type": "local_engineering_validation_not_scientific_qualification",
+  "status": "passed_local_fresh_suite_remote_matrix_pending",
+  "timestamp_utc": "2026-09-12T15:41:01Z",
+  "base_commit": "b45330be0d39c39b16309dd7e9d162cd121c9199",
+  "tested_commit": null,
+  "commit_binding_note": "Validation precedes the follow-up commit; the corrected source and validation inventory hashes bind this evidence. Not a remote CI matrix.",
+  "source_tree_sha256": "cf5c76ccf031b05af0b38606d737ed2739b03a61a554c1734117d3906afd6965",
+  "validation_inventory_sha256": "f31be05e42de7a9646a5347bdd12e760b52819f0509dfcd807560597963b8beb",
+  "validation_inventory_files": 162,
+  "validation_inventory_algorithm": "canonical contract_id of sorted [{path,sha256}] from Git cached plus nonignored new files beneath validation_input_paths; working-tree bytes; docs and receipts excluded to avoid self-reference",
+  "validation_input_paths": [
+    "src/credo_count_sde_v4",
+    "tests",
+    "scripts",
+    "pyproject.toml",
+    ".github/workflows/ci.yml"
+  ],
+  "review_attachment_sha256": "f3a98b4cf70f16f2e1f4645116a26426fcfd40fc1071f10672b4b4091d109fe3",
+  "frozen_credo_commit": "6f4f57c114606476cb6e93c6d52dc34628173a4d",
+  "historical_receipts_preserved": {
+    "receipts/local-validation.json": "f2d494c5d7087a90707c1177099ade917cb4ac408b0122b720bb65a7f5492c0f",
+    "receipts/review-789537f-local-validation.json": "ecbaf311be41a28824ec65bf70af8067c283c364ce9704d2611b80ddead6cf90"
+  },
+  "execution": {
+    "device": "cpu",
+    "python_executable": "/home/yding1995/miniforge3/envs/ml1/bin/python",
+    "python_version": "3.13.2",
+    "numpy": "2.2.6",
+    "torch": "2.9.1+cu128",
+    "h5py": "3.14.0",
+    "pandas": "3.0.3",
+    "pyarrow": "21.0.0",
+    "pydantic": "2.12.5",
+    "PyYAML": "6.0.2",
+    "scipy": "1.18.0",
+    "CUDA_VISIBLE_DEVICES": "",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "CREDO_V4_WORKSPACE_ROOT": "/home/yding1995/opscc_sc",
+    "PYTHONPATH": "src",
+    "environment_mutated": false
+  },
+  "tooling": {
+    "pytest": "8.4.2",
+    "coverage": "7.13.0",
+    "ruff": "0.13.1",
+    "mypy": "2.3.1",
+    "build_setuptools": "84.0.0",
+    "build_wheel": "0.48.0"
+  },
+  "full_cpu_suite": {
+    "passed": 543,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 4,
+    "skip_reason": "CUDA unavailable by explicit CPU-only validation configuration",
+    "warnings": 1,
+    "warning": "pre-existing NearConstantInputWarning in test_bound_pooled_outer_evaluation_exercises_nested_gate",
+    "elapsed_seconds": 859.46,
+    "exit_code": 0,
+    "fresh_coverage_database": true,
+    "coverage_append_used": false,
+    "combined_statement_branch_percent": 85.1903741552662,
+    "required_percent": 85,
+    "covered_lines": 16877,
+    "statements": 18838,
+    "covered_branches": 3797,
+    "branches": 5430,
+    "branch_only_percent": 69.92633517495396,
+    "command": "python -m pytest -q -p no:cacheprovider --cov=credo_count_sde_v4 --cov-report=term-missing --cov-report=json:/home/yding1995/opscc_sc/credo_full_cohort_20260912/review_b45330b_validation/coverage-full.json --cov-fail-under=85 --junitxml=/home/yding1995/opscc_sc/credo_full_cohort_20260912/review_b45330b_validation/full-suite.xml",
+    "COVERAGE_FILE": "/home/yding1995/opscc_sc/credo_full_cohort_20260912/review_b45330b_validation/coverage-fresh",
+    "coverage_json_sha256": "01daad522f9b7fc205ccde4415aefe54962e386782f90d934a5c220e12708bbe",
+    "junit_xml_sha256": "0f253a6aa0715370076ab5805e3102d84a0f0febc5468917bb56142bc822443e"
+  },
+  "focused_checks": {
+    "compatibility_and_programs": {"passed": 44, "elapsed_seconds": 9.65},
+    "archive_and_store": {"passed": 2, "elapsed_seconds": 0.44},
+    "numpy_253_overlay": {
+      "mypy": "passed_99_source_files",
+      "focused_tests_passed": 31,
+      "elapsed_seconds": 3.49,
+      "scope": "CPython_3.13.2_numpy_only_overlay_not_fresh_dependency_resolution"
+    },
+    "numpy_246_overlay": {
+      "mypy": "passed_99_source_files",
+      "focused_tests_passed": 31,
+      "elapsed_seconds": 4.04,
+      "scope": "CPython_3.13.2_numpy_only_overlay_not_fresh_dependency_resolution"
+    },
+    "mypy_base_numpy_226": "passed_99_source_files",
+    "ruff_format": "passed_159_python_files",
+    "ruff_check": "passed",
+    "generated_schemas": "passed",
+    "documentation_links": "passed",
+    "package_build_and_audit": "passed",
+    "wheel_only_synthetic_lifecycle": {
+      "status": "passed",
+      "source_tree_sha256": "cf5c76ccf031b05af0b38606d737ed2739b03a61a554c1734117d3906afd6965",
+      "wheel_sha256": "3cb04f4b0eed8fc247076567db45c843882e7eb385cb5c59362674db25925f6e",
+      "updates": 4,
+      "cells": 192,
+      "reloaded_series": 6,
+      "verification_level": "full",
+      "environment_note": "Fresh wheel install outside checkout, using existing ml1 dependency site-packages"
+    }
+  },
+  "base_remote_ci": {
+    "run_id": 34700035365,
+    "url": "https://github.com/yuadamding/CREDO/actions/runs/34700035365",
+    "inspected_directly": true,
+    "head_sha": "b45330be0d39c39b16309dd7e9d162cd121c9199",
+    "conclusion": "failure",
+    "wheel": "passed",
+    "python_311": "2_failed_524_passed_4_skipped_coverage_84.92_percent",
+    "python_312_and_313": "two_mypy_errors_tests_skipped"
+  },
+  "correction_remote_ci": "not_run_pending_publication",
+  "scientific_status": {
+    "metric_revision": 3,
+    "gene_sign_formula_revision": 2,
+    "null_inclusion_calibrated": false,
+    "biological_efficiency_identified": false,
+    "real_cohort_expression_opened": false,
+    "r48_baseline_run": "not_started_fresh_CI_gate_pending",
+    "new_gpu_or_remote_jobs": false
+  }
+}

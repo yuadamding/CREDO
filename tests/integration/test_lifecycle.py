@@ -113,6 +113,51 @@ def test_prepare_rejects_reordered_feature_contract(tmp_path: Path) -> None:
         api.prepare(config)
 
 
+def test_compiled_npz_explicit_keywords_preserve_archive_payload(tmp_path, monkeypatch):
+    import io
+
+    from credo_count_sde_v4.compile import compiler
+
+    config = create_synthetic_project(tmp_path / "npz-keywords", updates=1)
+    api.prepare(config)
+    original = np.savez
+    captured = {}
+
+    def capture(handle, **arrays):
+        captured.update({key: value.copy() for key, value in arrays.items()})
+        original(handle, **arrays)
+
+    monkeypatch.setattr(compiler.np, "savez", capture)
+    api.compile_run(config)
+    expected_names = [
+        "source_z",
+        "terminal_z",
+        "target_index",
+        "pool_index",
+        "is_control",
+        "duration",
+        "grid_steps",
+        "grid_step_size",
+        "source_counts",
+        "terminal_counts",
+        "series_ids",
+    ]
+    assert list(captured) == expected_names
+    # Historical dynamic expansion and new fixed keywords have identical members,
+    # values and dtypes. ZIP timestamps are deliberately not a byte-equality claim.
+    historical = io.BytesIO()
+    original(historical, **captured)
+    historical.seek(0)
+    contract, reloaded = load_compiled_problem(config.parent / "work")
+    assert contract.compiled_problem_hash == compiler._problem_hash(captured)
+    with np.load(historical, allow_pickle=False) as old:
+        assert old.files == expected_names
+        assert list(reloaded) == expected_names
+        for key in expected_names:
+            np.testing.assert_array_equal(reloaded[key], old[key])
+            assert reloaded[key].dtype == old[key].dtype
+
+
 def test_trained_gene_decoder_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = create_synthetic_project(tmp_path / "decoder", intent=RunIntent.COUNT_STATE, updates=3)
     payload = yaml.safe_load(config.read_text())
