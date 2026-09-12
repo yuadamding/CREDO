@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "credo-count-sde-v4"
-version = "4.0.0.dev37"
+version = "4.0.0.dev40"
 description = "Count-native finite-measure SDE recipe for longitudinal perturbation screens"
 readme = "README.md"
 requires-python = ">=3.11"

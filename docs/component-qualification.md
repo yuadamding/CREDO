@@ -1,6 +1,6 @@
 # Component-wise qualification program
 
-Status: authoritative development order for `4.0.0.dev37`. This page defines
+Status: authoritative development order through `4.0.0.dev40`. This page defines
 software promotion, not a biological claim.
 
 CREDO V4 is qualified as three dependency tracks rather than one large training

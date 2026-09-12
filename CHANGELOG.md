@@ -1,5 +1,27 @@
 # Changelog
 
+## 4.0.0.dev40 — 2026-08-21
+
+- seal Dev39 evidence semantics by separating evidence tier, channel,
+  independence, exposure, semantic role, replication, prospective status,
+  multiplicity, and report-section availability;
+- factor abundance claims by scale, entity, process, system boundary,
+  calibration, and component-specific assays, and require typed estimands
+  before deterministic biological wording;
+- add semantic evidence links that bind exact study, scope, split, result,
+  artifact, metric, and role instead of accepting hash membership alone;
+- add the static/checkpoint-conditional NB2 count-linked program head with an
+  observed panel-library offset, sparse signed loadings, continuous physical
+  time, and control/target/guide hierarchy;
+- qualify the head against four frozen outer splits and six frozen baselines,
+  with separate seed and donor stability, sister-guide consistency, three
+  negative-control families, gene-sign calibration, and atomic verified
+  publication;
+- fail scientific promotion when biological donor identity, a third
+  checkpoint, or predeclared target descriptors are unavailable; and
+- leave V4 SDE dynamics and checkpoint schemas unchanged for the separately
+  gated Dev41 coupling phase.
+
 ## 4.0.0.dev37 — 2026-08-20
 
 - construct and fully verify the accepted G00B V2 source plane inside the

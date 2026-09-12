@@ -1,0 +1,179 @@
+{
+  "$defs": {
+    "AbundanceSemantics": {
+      "description": "Observation gauge attached to every abundance result.",
+      "enum": [
+        "relative_within_pool",
+        "capture_calibrated_cells",
+        "absolute_tissue_cells",
+        "clone_resolved_abundance"
+      ],
+      "title": "AbundanceSemantics",
+      "type": "string"
+    },
+    "CapabilityDecision": {
+      "additionalProperties": false,
+      "description": "One explicit capability decision and every blocking reason.",
+      "properties": {
+        "blocking_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blocking Reasons",
+          "type": "array"
+        },
+        "capability": {
+          "$ref": "#/$defs/ScientificCapability"
+        },
+        "missing_fields": {
+          "items": {
+            "$ref": "#/$defs/StudyField"
+          },
+          "title": "Missing Fields",
+          "type": "array"
+        },
+        "required_fields": {
+          "items": {
+            "$ref": "#/$defs/StudyField"
+          },
+          "title": "Required Fields",
+          "type": "array"
+        },
+        "supported": {
+          "title": "Supported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "capability",
+        "supported",
+        "required_fields",
+        "missing_fields",
+        "blocking_reasons"
+      ],
+      "title": "CapabilityDecision",
+      "type": "object"
+    },
+    "LineageEvidenceLevel": {
+      "description": "Strongest lineage observation physically present in a study.",
+      "enum": [
+        "L0_destructive_snapshots",
+        "L1_stable_clone_barcodes",
+        "L2_heritable_barcodes",
+        "L3_live_or_paired_cells"
+      ],
+      "title": "LineageEvidenceLevel",
+      "type": "string"
+    },
+    "ScientificCapability": {
+      "description": "Structurally detectable scientific capability.",
+      "enum": [
+        "supports_perturbation_programs",
+        "supports_population_trajectory",
+        "supports_strict_heldout_time",
+        "supports_relative_abundance",
+        "supports_absolute_abundance",
+        "supports_ecology",
+        "supports_clone_lineage",
+        "supports_ancestral_lineage",
+        "supports_direct_cell_path"
+      ],
+      "title": "ScientificCapability",
+      "type": "string"
+    },
+    "StudyField": {
+      "description": "Fields that may unlock a scientific result layer.",
+      "enum": [
+        "biological_sample_id",
+        "physical_pool_id",
+        "donor_id",
+        "replicate_id",
+        "time",
+        "perturbation_id",
+        "guide_id",
+        "target_id",
+        "cell_id",
+        "clone_id",
+        "lineage_parent_id",
+        "live_cell_track_id",
+        "input_guide_count",
+        "recovered_guide_count",
+        "absolute_total_cell_count",
+        "capture_fraction",
+        "spatial_coordinates",
+        "rna_counts",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "mediator_intervention"
+      ],
+      "title": "StudyField",
+      "type": "string"
+    }
+  },
+  "$id": "https://credo.local/schemas/dataset-capability-assessment.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Content-addressed, fail-closed capability assessment for one study.",
+  "properties": {
+    "capability_assessment_id": {
+      "title": "Capability Assessment Id",
+      "type": "string"
+    },
+    "decisions": {
+      "items": {
+        "$ref": "#/$defs/CapabilityDecision"
+      },
+      "title": "Decisions",
+      "type": "array"
+    },
+    "maximum_lineage_level": {
+      "$ref": "#/$defs/LineageEvidenceLevel"
+    },
+    "schema_id": {
+      "const": "credo.dataset_capability_assessment",
+      "default": "credo.dataset_capability_assessment",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scientific_validation_passed": {
+      "const": false,
+      "default": false,
+      "title": "Scientific Validation Passed",
+      "type": "boolean"
+    },
+    "structural_capability_only": {
+      "const": true,
+      "default": true,
+      "title": "Structural Capability Only",
+      "type": "boolean"
+    },
+    "study_contract_id": {
+      "minLength": 1,
+      "title": "Study Contract Id",
+      "type": "string"
+    },
+    "supported_abundance_semantics": {
+      "items": {
+        "$ref": "#/$defs/AbundanceSemantics"
+      },
+      "title": "Supported Abundance Semantics",
+      "type": "array"
+    }
+  },
+  "required": [
+    "capability_assessment_id",
+    "study_contract_id",
+    "decisions",
+    "supported_abundance_semantics",
+    "maximum_lineage_level"
+  ],
+  "title": "DatasetCapabilityAssessment",
+  "type": "object"
+}

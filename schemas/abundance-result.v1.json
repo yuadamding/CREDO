@@ -1,0 +1,214 @@
+{
+  "$defs": {
+    "AbundanceComponent": {
+      "description": "Biological component that an abundance result may populate.",
+      "enum": [
+        "relative_selection",
+        "absolute_net_growth",
+        "proliferation_component",
+        "death_component",
+        "migration_or_compartment_loss",
+        "clone_resolved_abundance"
+      ],
+      "title": "AbundanceComponent",
+      "type": "string"
+    },
+    "AbundanceComponentEvidence": {
+      "additionalProperties": false,
+      "description": "One component and the exact evidence supporting it.",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "component": {
+          "$ref": "#/$defs/AbundanceComponent"
+        },
+        "evidence_tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "supports": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSupport"
+          },
+          "title": "Supports",
+          "type": "array"
+        }
+      },
+      "required": [
+        "component",
+        "evidence_tier",
+        "supports",
+        "artifact"
+      ],
+      "title": "AbundanceComponentEvidence",
+      "type": "object"
+    },
+    "AbundanceObservationModel": {
+      "description": "Likelihood family used for the declared abundance gauge.",
+      "enum": [
+        "dirichlet_multinomial_relative",
+        "dirichlet_multinomial_plus_capture_nb",
+        "absolute_total_negative_binomial",
+        "clone_fate_dirichlet_multinomial"
+      ],
+      "title": "AbundanceObservationModel",
+      "type": "string"
+    },
+    "AbundanceSemantics": {
+      "description": "Observation gauge attached to every abundance result.",
+      "enum": [
+        "relative_within_pool",
+        "capture_calibrated_cells",
+        "absolute_tissue_cells",
+        "clone_resolved_abundance"
+      ],
+      "title": "AbundanceSemantics",
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "EvidenceSupport": {
+      "description": "Typed evidence channels that justify an assigned tier.",
+      "enum": [
+        "engineering_test",
+        "model_fit",
+        "held_out_donor",
+        "held_out_guide",
+        "held_out_target",
+        "held_out_time",
+        "independent_cohort",
+        "intervention",
+        "rescue",
+        "epistasis",
+        "orthogonal_plasticity_assay",
+        "absolute_cell_count",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "clone_barcode",
+        "ancestral_barcode",
+        "live_imaging"
+      ],
+      "title": "EvidenceSupport",
+      "type": "string"
+    },
+    "EvidenceTier": {
+      "description": "Highest evidence class actually bound to one result or claim.",
+      "enum": [
+        "E0_engineering",
+        "E1_in_sample",
+        "E2_held_out",
+        "E3_independent_cohort",
+        "E4_orthogonal_intervention",
+        "E5_direct_measurement"
+      ],
+      "title": "EvidenceTier",
+      "type": "string"
+    }
+  },
+  "$id": "https://credo.local/schemas/abundance-result.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Hash-bound abundance result with a non-negotiable observation gauge.",
+  "properties": {
+    "abundance_result_id": {
+      "title": "Abundance Result Id",
+      "type": "string"
+    },
+    "calibration": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "capability_assessment_id": {
+      "minLength": 1,
+      "title": "Capability Assessment Id",
+      "type": "string"
+    },
+    "components": {
+      "items": {
+        "$ref": "#/$defs/AbundanceComponentEvidence"
+      },
+      "title": "Components",
+      "type": "array"
+    },
+    "observation_model": {
+      "$ref": "#/$defs/AbundanceObservationModel"
+    },
+    "pool_wide_growth_offset_identified": {
+      "title": "Pool Wide Growth Offset Identified",
+      "type": "boolean"
+    },
+    "schema_id": {
+      "const": "credo.abundance_result",
+      "default": "credo.abundance_result",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "semantics": {
+      "$ref": "#/$defs/AbundanceSemantics"
+    }
+  },
+  "required": [
+    "abundance_result_id",
+    "capability_assessment_id",
+    "semantics",
+    "observation_model",
+    "components",
+    "pool_wide_growth_offset_identified"
+  ],
+  "title": "AbundanceResult",
+  "type": "object"
+}

@@ -1,0 +1,177 @@
+{
+  "$defs": {
+    "AbsoluteCountBasis": {
+      "description": "Physical calibration behind an absolute abundance capability.",
+      "enum": [
+        "none",
+        "capture_calibrated",
+        "absolute_tissue"
+      ],
+      "title": "AbsoluteCountBasis",
+      "type": "string"
+    },
+    "StudyEntityCounts": {
+      "additionalProperties": false,
+      "description": "Cardinalities used for structural capability checks, not outcome claims.",
+      "properties": {
+        "biological_samples": {
+          "minimum": 0,
+          "title": "Biological Samples",
+          "type": "integer"
+        },
+        "cells": {
+          "minimum": 0,
+          "title": "Cells",
+          "type": "integer"
+        },
+        "checkpoints": {
+          "minimum": 1,
+          "title": "Checkpoints",
+          "type": "integer"
+        },
+        "clones": {
+          "minimum": 0,
+          "title": "Clones",
+          "type": "integer"
+        },
+        "donors": {
+          "minimum": 0,
+          "title": "Donors",
+          "type": "integer"
+        },
+        "guides": {
+          "minimum": 0,
+          "title": "Guides",
+          "type": "integer"
+        },
+        "perturbations": {
+          "minimum": 0,
+          "title": "Perturbations",
+          "type": "integer"
+        },
+        "physical_pools": {
+          "minimum": 0,
+          "title": "Physical Pools",
+          "type": "integer"
+        },
+        "replicates": {
+          "minimum": 0,
+          "title": "Replicates",
+          "type": "integer"
+        },
+        "targets": {
+          "minimum": 0,
+          "title": "Targets",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "biological_samples",
+        "physical_pools",
+        "donors",
+        "replicates",
+        "checkpoints",
+        "perturbations",
+        "guides",
+        "targets",
+        "cells",
+        "clones"
+      ],
+      "title": "StudyEntityCounts",
+      "type": "object"
+    },
+    "StudyField": {
+      "description": "Fields that may unlock a scientific result layer.",
+      "enum": [
+        "biological_sample_id",
+        "physical_pool_id",
+        "donor_id",
+        "replicate_id",
+        "time",
+        "perturbation_id",
+        "guide_id",
+        "target_id",
+        "cell_id",
+        "clone_id",
+        "lineage_parent_id",
+        "live_cell_track_id",
+        "input_guide_count",
+        "recovered_guide_count",
+        "absolute_total_cell_count",
+        "capture_fraction",
+        "spatial_coordinates",
+        "rna_counts",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "mediator_intervention"
+      ],
+      "title": "StudyField",
+      "type": "string"
+    }
+  },
+  "$id": "https://credo.local/schemas/study-evidence-contract.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Observed study-design fields from which capabilities are derived.",
+  "properties": {
+    "absolute_count_basis": {
+      "$ref": "#/$defs/AbsoluteCountBasis",
+      "default": "none"
+    },
+    "destructive_snapshots_only": {
+      "default": true,
+      "title": "Destructive Snapshots Only",
+      "type": "boolean"
+    },
+    "entity_counts": {
+      "$ref": "#/$defs/StudyEntityCounts"
+    },
+    "observed_fields": {
+      "items": {
+        "$ref": "#/$defs/StudyField"
+      },
+      "title": "Observed Fields",
+      "type": "array"
+    },
+    "physical_pool_identity_complete": {
+      "default": false,
+      "title": "Physical Pool Identity Complete",
+      "type": "boolean"
+    },
+    "schema_id": {
+      "const": "credo.study_evidence_contract",
+      "default": "credo.study_evidence_contract",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "study_contract_id": {
+      "title": "Study Contract Id",
+      "type": "string"
+    },
+    "study_id": {
+      "minLength": 1,
+      "title": "Study Id",
+      "type": "string"
+    },
+    "training_only_heldout_time_representation": {
+      "default": false,
+      "title": "Training Only Heldout Time Representation",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "study_contract_id",
+    "study_id",
+    "observed_fields",
+    "entity_counts"
+  ],
+  "title": "StudyEvidenceContract",
+  "type": "object"
+}

@@ -11,8 +11,12 @@ from credo_count_sde_v4 import validate_contract
 from credo_count_sde_v4.canonical import contract_id
 from credo_count_sde_v4.claims import validate_g14_contracts
 from credo_count_sde_v4.contracts import (
+    ClaimAdjudication,
+    ClaimDecision,
     ClaimRecord,
     ClaimRegistry,
+    EvidenceChannel,
+    EvidenceTier,
     G14MultiplicityContract,
     G14MultiplicityFamily,
     G14RobustnessPlan,
@@ -143,6 +147,38 @@ def test_g14_contract_graph_is_complete_and_evidence_only() -> None:
     assert not robustness.target_discovery
     assert not seal.model_fitting
     assert set(seal.required_outputs) == set(OUTPUTS)
+
+
+def test_g14_cannot_promote_a_blocked_evidence_adjudication() -> None:
+    registry, robustness, multiplicity, seal = _contracts()
+    seal_payload = seal.model_dump(mode="python")
+    seal_payload["claim_decisions"] = {"STATE_E8": "promoted"}
+    seal_payload.pop("g14_contract_id")
+    promoted = _identified(G14SealContract, seal_payload, "g14_contract_id")
+    blocked = _identified(
+        ClaimAdjudication,
+        {
+            "schema_id": "credo.claim_adjudication",
+            "schema_version": 1,
+            "claim_id": "STATE_E8",
+            "claim_request_id": "dev39-request",
+            "capability_assessment_id": "dev39-capability",
+            "decision": ClaimDecision.BLOCKED,
+            "evidence_tiers": (EvidenceTier.E1_IN_SAMPLE,),
+            "evidence_channels": (EvidenceChannel.MODEL_FIT,),
+            "permitted_wording": None,
+            "blocking_reasons": ("scientific capability failed",),
+        },
+        "adjudication_id",
+    )
+    with pytest.raises(IntegrityError, match="blocked evidence adjudication"):
+        validate_g14_contracts(
+            registry,
+            robustness,
+            multiplicity,
+            promoted,
+            {"STATE_E8": blocked},
+        )
 
 
 def test_g14_registry_rejects_unknown_parent_claim() -> None:

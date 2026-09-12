@@ -1,0 +1,102 @@
+{
+  "$defs": {
+    "ClaimDecision": {
+      "description": "Fail-closed disposition for one requested claim.",
+      "enum": [
+        "permitted",
+        "model_attribution_only",
+        "blocked"
+      ],
+      "title": "ClaimDecision",
+      "type": "string"
+    },
+    "EvidenceTier": {
+      "description": "Highest evidence class actually bound to one result or claim.",
+      "enum": [
+        "E0_engineering",
+        "E1_in_sample",
+        "E2_held_out",
+        "E3_independent_cohort",
+        "E4_orthogonal_intervention",
+        "E5_direct_measurement"
+      ],
+      "title": "EvidenceTier",
+      "type": "string"
+    }
+  },
+  "$id": "https://credo.local/schemas/claim-adjudication.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Machine-readable permitted scope for one exact claim request.",
+  "properties": {
+    "adjudication_id": {
+      "title": "Adjudication Id",
+      "type": "string"
+    },
+    "blocking_reasons": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Blocking Reasons",
+      "type": "array"
+    },
+    "capability_assessment_id": {
+      "minLength": 1,
+      "title": "Capability Assessment Id",
+      "type": "string"
+    },
+    "claim_request_id": {
+      "minLength": 1,
+      "title": "Claim Request Id",
+      "type": "string"
+    },
+    "decision": {
+      "$ref": "#/$defs/ClaimDecision"
+    },
+    "evidence_tier": {
+      "$ref": "#/$defs/EvidenceTier"
+    },
+    "forbidden_wording": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Forbidden Wording",
+      "type": "array"
+    },
+    "permitted_wording": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Permitted Wording"
+    },
+    "schema_id": {
+      "const": "credo.claim_adjudication",
+      "default": "credo.claim_adjudication",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "adjudication_id",
+    "claim_request_id",
+    "capability_assessment_id",
+    "decision",
+    "evidence_tier",
+    "blocking_reasons",
+    "forbidden_wording"
+  ],
+  "title": "ClaimAdjudication",
+  "type": "object"
+}

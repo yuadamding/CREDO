@@ -1,6 +1,6 @@
 # Implementation status
 
-Last verified: 2026-08-20. Authority: package engineering status; biological
+Last verified: 2026-08-21. Authority: package engineering status; biological
 run receipts and cohort audits remain external to this repository.
 
 Implemented in this repository:
@@ -274,7 +274,27 @@ batched speedup for the CUDA-native resident path. Both compact paths consume
 another RNG stream and are not Dev37 promotion evidence. See the
 [Dev38 GPU qualification record](g00-dev38-gpu-qualification.md).
 
-Deliberately not asserted complete in `4.0.0.dev37`:
+The following Dev39 Phase 1 branch adds no model channel and makes no biological
+claim. It introduces content-addressed study-capability, abundance-gauge,
+trajectory/lineage, evidence-tier, claim-adjudication, and perturbation-dossier
+contracts. Positive, null, adversarial, and ablation tests enforce that missing
+physical pools, absolute counts, barcodes, or live tracking disable the related
+language without weakening other capabilities. See the
+[Dev39 evidence-framework record](dev39-evidence-framework.md).
+
+Dev39 and Dev40 add an orthogonal scientific-result boundary. Dev39 factorizes
+evidence tier, channel, independence, exposure, replication, multiplicity,
+semantic role, abundance axes, and section availability. Dev40 implements the
+static count-linked program observation model and its full qualification
+surface: four non-interchangeable outer splits, six frozen baselines, separate
+seed and donor stability, sister-guide agreement, three null families, gene
+sign calibration, and content-verified publication. Identifier-only unseen
+targets are not eligible, two-checkpoint studies cannot claim held-out-time
+qualification, and technical batches cannot substitute for donors. See the
+[Dev39 framework](dev39-evidence-framework.md) and
+[Dev40 qualification](dev40-biological-program-qualification.md).
+
+Deliberately not asserted complete in `4.0.0.dev40`:
 
 - stable CREDO entry-point discovery;
 - in-repository real-cohort adapters, biological thresholds, or biological claims;

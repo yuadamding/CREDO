@@ -1,0 +1,249 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "EvidenceSupport": {
+      "description": "Typed evidence channels that justify an assigned tier.",
+      "enum": [
+        "engineering_test",
+        "model_fit",
+        "held_out_donor",
+        "held_out_guide",
+        "held_out_target",
+        "held_out_time",
+        "independent_cohort",
+        "intervention",
+        "rescue",
+        "epistasis",
+        "orthogonal_plasticity_assay",
+        "absolute_cell_count",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "clone_barcode",
+        "ancestral_barcode",
+        "live_imaging"
+      ],
+      "title": "EvidenceSupport",
+      "type": "string"
+    },
+    "EvidenceTier": {
+      "description": "Highest evidence class actually bound to one result or claim.",
+      "enum": [
+        "E0_engineering",
+        "E1_in_sample",
+        "E2_held_out",
+        "E3_independent_cohort",
+        "E4_orthogonal_intervention",
+        "E5_direct_measurement"
+      ],
+      "title": "EvidenceTier",
+      "type": "string"
+    },
+    "LineageEvidenceLevel": {
+      "description": "Strongest lineage observation physically present in a study.",
+      "enum": [
+        "L0_destructive_snapshots",
+        "L1_stable_clone_barcodes",
+        "L2_heritable_barcodes",
+        "L3_live_or_paired_cells"
+      ],
+      "title": "LineageEvidenceLevel",
+      "type": "string"
+    },
+    "LineageResultSemantics": {
+      "description": "Result language authorized by each lineage evidence level.",
+      "enum": [
+        "population_transition_only",
+        "clone_resolved_fate",
+        "ancestral_tree",
+        "direct_cell_path_validation"
+      ],
+      "title": "LineageResultSemantics",
+      "type": "string"
+    },
+    "ObservedCheckpoint": {
+      "additionalProperties": false,
+      "description": "One observed checkpoint on a physical-time scale.",
+      "properties": {
+        "checkpoint_id": {
+          "minLength": 1,
+          "title": "Checkpoint Id",
+          "type": "string"
+        },
+        "physical_time": {
+          "title": "Physical Time",
+          "type": "number"
+        }
+      },
+      "required": [
+        "checkpoint_id",
+        "physical_time"
+      ],
+      "title": "ObservedCheckpoint",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/trajectory-result.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "A transition-law result whose lineage language is evidence-gated.",
+  "properties": {
+    "capability_assessment_id": {
+      "minLength": 1,
+      "title": "Capability Assessment Id",
+      "type": "string"
+    },
+    "evidence_tier": {
+      "$ref": "#/$defs/EvidenceTier"
+    },
+    "heldout_time_evaluation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "individual_cell_paths_claimed": {
+      "default": false,
+      "title": "Individual Cell Paths Claimed",
+      "type": "boolean"
+    },
+    "lineage_evaluation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "lineage_level": {
+      "$ref": "#/$defs/LineageEvidenceLevel"
+    },
+    "observed_checkpoints": {
+      "items": {
+        "$ref": "#/$defs/ObservedCheckpoint"
+      },
+      "title": "Observed Checkpoints",
+      "type": "array"
+    },
+    "predicted_finite_measures": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "schema_id": {
+      "const": "credo.trajectory_result",
+      "default": "credo.trajectory_result",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "semantics": {
+      "$ref": "#/$defs/LineageResultSemantics"
+    },
+    "semigroup_evaluation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "supports": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSupport"
+      },
+      "title": "Supports",
+      "type": "array"
+    },
+    "terminal_fate_probabilities": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "trajectory_result_id": {
+      "title": "Trajectory Result Id",
+      "type": "string"
+    },
+    "transition_kernels": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "uncertainty": {
+      "$ref": "#/$defs/ArtifactRef"
+    }
+  },
+  "required": [
+    "trajectory_result_id",
+    "capability_assessment_id",
+    "evidence_tier",
+    "supports",
+    "lineage_level",
+    "semantics",
+    "observed_checkpoints",
+    "predicted_finite_measures",
+    "transition_kernels",
+    "uncertainty"
+  ],
+  "title": "TrajectoryResult",
+  "type": "object"
+}

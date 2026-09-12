@@ -1,5 +1,8 @@
 # CREDO count-SDE v4
 
+New work: [full-cohort successor access foundation](docs/full-cohort-successor-foundation.md)
+(reader qualification only; successor model training remains unrun).
+
 Independent count-native finite-measure SDE recipe for longitudinal
 perturbation screens. This repository implements three gated intents:
 
@@ -8,7 +11,7 @@ count_state → count_measure → count_context
 ```
 
 It is a sibling of, not a modification to, the frozen CREDO checkout. Version
-`4.0.0.dev37` is engineering software; it is not a biological result and cannot
+`4.0.0.dev40` is engineering software; it is not a biological result and cannot
 be relabeled as stable `4.0`.
 
 Implemented surfaces include strict hash-bound contracts, sparse count storage,
@@ -100,6 +103,14 @@ Dev38 adds a behavior-preserving sampler optimization and three explicitly
 separated CUDA reduction envelopes. The H100 canaries are engineering evidence
 only; the fast CUDA-native stream requires a new authority. See the
 [Dev38 GPU qualification](docs/g00-dev38-gpu-qualification.md).
+Dev39 begins an evidence-aware result layer without changing the
+finite-measure core: observed study fields derive hard capability limits,
+abundance and lineage semantics are explicit, and biological wording fails
+closed. See the [Dev39 Phase 1 evidence framework](docs/dev39-evidence-framework.md).
+Dev40 adds the separately qualified static count-linked biological-program
+head, frozen split/baseline/null gates, and immutable result bundle. It does
+not couple the new head to SDE dynamics or alter checkpoint schemas. See the
+[Dev40 program qualification](docs/dev40-biological-program-qualification.md).
 
 ## Quick start
 

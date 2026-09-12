@@ -1,0 +1,1030 @@
+{
+  "$defs": {
+    "AbsoluteCountBasis": {
+      "description": "Physical calibration behind an absolute abundance capability.",
+      "enum": [
+        "none",
+        "capture_calibrated",
+        "absolute_tissue"
+      ],
+      "title": "AbsoluteCountBasis",
+      "type": "string"
+    },
+    "AbundanceComponent": {
+      "description": "Biological component that an abundance result may populate.",
+      "enum": [
+        "relative_selection",
+        "absolute_net_growth",
+        "proliferation_component",
+        "death_component",
+        "migration_or_compartment_loss",
+        "clone_resolved_abundance"
+      ],
+      "title": "AbundanceComponent",
+      "type": "string"
+    },
+    "AbundanceComponentEvidence": {
+      "additionalProperties": false,
+      "description": "One component and the exact evidence supporting it.",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "component": {
+          "$ref": "#/$defs/AbundanceComponent"
+        },
+        "evidence_tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "supports": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSupport"
+          },
+          "title": "Supports",
+          "type": "array"
+        }
+      },
+      "required": [
+        "component",
+        "evidence_tier",
+        "supports",
+        "artifact"
+      ],
+      "title": "AbundanceComponentEvidence",
+      "type": "object"
+    },
+    "AbundanceObservationModel": {
+      "description": "Likelihood family used for the declared abundance gauge.",
+      "enum": [
+        "dirichlet_multinomial_relative",
+        "dirichlet_multinomial_plus_capture_nb",
+        "absolute_total_negative_binomial",
+        "clone_fate_dirichlet_multinomial"
+      ],
+      "title": "AbundanceObservationModel",
+      "type": "string"
+    },
+    "AbundanceResult": {
+      "additionalProperties": false,
+      "description": "Hash-bound abundance result with a non-negotiable observation gauge.",
+      "properties": {
+        "abundance_result_id": {
+          "title": "Abundance Result Id",
+          "type": "string"
+        },
+        "calibration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "capability_assessment_id": {
+          "minLength": 1,
+          "title": "Capability Assessment Id",
+          "type": "string"
+        },
+        "components": {
+          "items": {
+            "$ref": "#/$defs/AbundanceComponentEvidence"
+          },
+          "title": "Components",
+          "type": "array"
+        },
+        "observation_model": {
+          "$ref": "#/$defs/AbundanceObservationModel"
+        },
+        "pool_wide_growth_offset_identified": {
+          "title": "Pool Wide Growth Offset Identified",
+          "type": "boolean"
+        },
+        "schema_id": {
+          "const": "credo.abundance_result",
+          "default": "credo.abundance_result",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "semantics": {
+          "$ref": "#/$defs/AbundanceSemantics"
+        }
+      },
+      "required": [
+        "abundance_result_id",
+        "capability_assessment_id",
+        "semantics",
+        "observation_model",
+        "components",
+        "pool_wide_growth_offset_identified"
+      ],
+      "title": "AbundanceResult",
+      "type": "object"
+    },
+    "AbundanceSemantics": {
+      "description": "Observation gauge attached to every abundance result.",
+      "enum": [
+        "relative_within_pool",
+        "capture_calibrated_cells",
+        "absolute_tissue_cells",
+        "clone_resolved_abundance"
+      ],
+      "title": "AbundanceSemantics",
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "CapabilityDecision": {
+      "additionalProperties": false,
+      "description": "One explicit capability decision and every blocking reason.",
+      "properties": {
+        "blocking_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blocking Reasons",
+          "type": "array"
+        },
+        "capability": {
+          "$ref": "#/$defs/ScientificCapability"
+        },
+        "missing_fields": {
+          "items": {
+            "$ref": "#/$defs/StudyField"
+          },
+          "title": "Missing Fields",
+          "type": "array"
+        },
+        "required_fields": {
+          "items": {
+            "$ref": "#/$defs/StudyField"
+          },
+          "title": "Required Fields",
+          "type": "array"
+        },
+        "supported": {
+          "title": "Supported",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "capability",
+        "supported",
+        "required_fields",
+        "missing_fields",
+        "blocking_reasons"
+      ],
+      "title": "CapabilityDecision",
+      "type": "object"
+    },
+    "ClaimAdjudication": {
+      "additionalProperties": false,
+      "description": "Machine-readable permitted scope for one exact claim request.",
+      "properties": {
+        "adjudication_id": {
+          "title": "Adjudication Id",
+          "type": "string"
+        },
+        "blocking_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Blocking Reasons",
+          "type": "array"
+        },
+        "capability_assessment_id": {
+          "minLength": 1,
+          "title": "Capability Assessment Id",
+          "type": "string"
+        },
+        "claim_request_id": {
+          "minLength": 1,
+          "title": "Claim Request Id",
+          "type": "string"
+        },
+        "decision": {
+          "$ref": "#/$defs/ClaimDecision"
+        },
+        "evidence_tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "forbidden_wording": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Forbidden Wording",
+          "type": "array"
+        },
+        "permitted_wording": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Permitted Wording"
+        },
+        "schema_id": {
+          "const": "credo.claim_adjudication",
+          "default": "credo.claim_adjudication",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "adjudication_id",
+        "claim_request_id",
+        "capability_assessment_id",
+        "decision",
+        "evidence_tier",
+        "blocking_reasons",
+        "forbidden_wording"
+      ],
+      "title": "ClaimAdjudication",
+      "type": "object"
+    },
+    "ClaimDecision": {
+      "description": "Fail-closed disposition for one requested claim.",
+      "enum": [
+        "permitted",
+        "model_attribution_only",
+        "blocked"
+      ],
+      "title": "ClaimDecision",
+      "type": "string"
+    },
+    "DatasetCapabilityAssessment": {
+      "additionalProperties": false,
+      "description": "Content-addressed, fail-closed capability assessment for one study.",
+      "properties": {
+        "capability_assessment_id": {
+          "title": "Capability Assessment Id",
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/CapabilityDecision"
+          },
+          "title": "Decisions",
+          "type": "array"
+        },
+        "maximum_lineage_level": {
+          "$ref": "#/$defs/LineageEvidenceLevel"
+        },
+        "schema_id": {
+          "const": "credo.dataset_capability_assessment",
+          "default": "credo.dataset_capability_assessment",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "scientific_validation_passed": {
+          "const": false,
+          "default": false,
+          "title": "Scientific Validation Passed",
+          "type": "boolean"
+        },
+        "structural_capability_only": {
+          "const": true,
+          "default": true,
+          "title": "Structural Capability Only",
+          "type": "boolean"
+        },
+        "study_contract_id": {
+          "minLength": 1,
+          "title": "Study Contract Id",
+          "type": "string"
+        },
+        "supported_abundance_semantics": {
+          "items": {
+            "$ref": "#/$defs/AbundanceSemantics"
+          },
+          "title": "Supported Abundance Semantics",
+          "type": "array"
+        }
+      },
+      "required": [
+        "capability_assessment_id",
+        "study_contract_id",
+        "decisions",
+        "supported_abundance_semantics",
+        "maximum_lineage_level"
+      ],
+      "title": "DatasetCapabilityAssessment",
+      "type": "object"
+    },
+    "DossierSection": {
+      "additionalProperties": false,
+      "description": "Available or explicitly unavailable report section.",
+      "properties": {
+        "artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "available": {
+          "title": "Available",
+          "type": "boolean"
+        },
+        "evidence_tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "interpretation": {
+          "minLength": 1,
+          "title": "Interpretation",
+          "type": "string"
+        },
+        "section": {
+          "$ref": "#/$defs/DossierSectionName"
+        }
+      },
+      "required": [
+        "section",
+        "available",
+        "evidence_tier",
+        "interpretation"
+      ],
+      "title": "DossierSection",
+      "type": "object"
+    },
+    "DossierSectionName": {
+      "description": "Frozen user-facing sections in every perturbation dossier.",
+      "enum": [
+        "guide_target_qc",
+        "biological_programs",
+        "gene_effect_decomposition",
+        "generator_attribution",
+        "context_effect",
+        "uncertainty",
+        "external_validation"
+      ],
+      "title": "DossierSectionName",
+      "type": "string"
+    },
+    "EvidenceSupport": {
+      "description": "Typed evidence channels that justify an assigned tier.",
+      "enum": [
+        "engineering_test",
+        "model_fit",
+        "held_out_donor",
+        "held_out_guide",
+        "held_out_target",
+        "held_out_time",
+        "independent_cohort",
+        "intervention",
+        "rescue",
+        "epistasis",
+        "orthogonal_plasticity_assay",
+        "absolute_cell_count",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "clone_barcode",
+        "ancestral_barcode",
+        "live_imaging"
+      ],
+      "title": "EvidenceSupport",
+      "type": "string"
+    },
+    "EvidenceTier": {
+      "description": "Highest evidence class actually bound to one result or claim.",
+      "enum": [
+        "E0_engineering",
+        "E1_in_sample",
+        "E2_held_out",
+        "E3_independent_cohort",
+        "E4_orthogonal_intervention",
+        "E5_direct_measurement"
+      ],
+      "title": "EvidenceTier",
+      "type": "string"
+    },
+    "LineageEvidenceLevel": {
+      "description": "Strongest lineage observation physically present in a study.",
+      "enum": [
+        "L0_destructive_snapshots",
+        "L1_stable_clone_barcodes",
+        "L2_heritable_barcodes",
+        "L3_live_or_paired_cells"
+      ],
+      "title": "LineageEvidenceLevel",
+      "type": "string"
+    },
+    "LineageResultSemantics": {
+      "description": "Result language authorized by each lineage evidence level.",
+      "enum": [
+        "population_transition_only",
+        "clone_resolved_fate",
+        "ancestral_tree",
+        "direct_cell_path_validation"
+      ],
+      "title": "LineageResultSemantics",
+      "type": "string"
+    },
+    "ObservedCheckpoint": {
+      "additionalProperties": false,
+      "description": "One observed checkpoint on a physical-time scale.",
+      "properties": {
+        "checkpoint_id": {
+          "minLength": 1,
+          "title": "Checkpoint Id",
+          "type": "string"
+        },
+        "physical_time": {
+          "title": "Physical Time",
+          "type": "number"
+        }
+      },
+      "required": [
+        "checkpoint_id",
+        "physical_time"
+      ],
+      "title": "ObservedCheckpoint",
+      "type": "object"
+    },
+    "ScientificCapability": {
+      "description": "Structurally detectable scientific capability.",
+      "enum": [
+        "supports_perturbation_programs",
+        "supports_population_trajectory",
+        "supports_strict_heldout_time",
+        "supports_relative_abundance",
+        "supports_absolute_abundance",
+        "supports_ecology",
+        "supports_clone_lineage",
+        "supports_ancestral_lineage",
+        "supports_direct_cell_path"
+      ],
+      "title": "ScientificCapability",
+      "type": "string"
+    },
+    "ScientificClaimKind": {
+      "description": "Biological claim classes with distinct capability requirements.",
+      "enum": [
+        "perturbation_program_association",
+        "population_transition",
+        "relative_selection",
+        "absolute_net_growth",
+        "proliferation_component",
+        "death_component",
+        "migration_or_compartment_loss",
+        "diffusion_attribution",
+        "biological_plasticity",
+        "ecological_association",
+        "ecological_mechanism",
+        "clone_fate",
+        "ancestral_lineage",
+        "direct_cell_path",
+        "causal_mechanism"
+      ],
+      "title": "ScientificClaimKind",
+      "type": "string"
+    },
+    "ScientificClaimRequest": {
+      "additionalProperties": false,
+      "description": "Requested wording plus exact evidence, before capability adjudication.",
+      "properties": {
+        "abundance_semantics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbundanceSemantics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "claim_request_id": {
+          "title": "Claim Request Id",
+          "type": "string"
+        },
+        "evidence_sha256s": {
+          "items": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "title": "Evidence Sha256S",
+          "type": "array"
+        },
+        "evidence_tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "kind": {
+          "$ref": "#/$defs/ScientificClaimKind"
+        },
+        "schema_id": {
+          "const": "credo.scientific_claim_request",
+          "default": "credo.scientific_claim_request",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "supports": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSupport"
+          },
+          "title": "Supports",
+          "type": "array"
+        },
+        "trajectory_semantics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineageResultSemantics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "wording": {
+          "minLength": 1,
+          "title": "Wording",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_request_id",
+        "claim_id",
+        "kind",
+        "wording",
+        "evidence_tier",
+        "supports",
+        "evidence_sha256s"
+      ],
+      "title": "ScientificClaimRequest",
+      "type": "object"
+    },
+    "StudyEntityCounts": {
+      "additionalProperties": false,
+      "description": "Cardinalities used for structural capability checks, not outcome claims.",
+      "properties": {
+        "biological_samples": {
+          "minimum": 0,
+          "title": "Biological Samples",
+          "type": "integer"
+        },
+        "cells": {
+          "minimum": 0,
+          "title": "Cells",
+          "type": "integer"
+        },
+        "checkpoints": {
+          "minimum": 1,
+          "title": "Checkpoints",
+          "type": "integer"
+        },
+        "clones": {
+          "minimum": 0,
+          "title": "Clones",
+          "type": "integer"
+        },
+        "donors": {
+          "minimum": 0,
+          "title": "Donors",
+          "type": "integer"
+        },
+        "guides": {
+          "minimum": 0,
+          "title": "Guides",
+          "type": "integer"
+        },
+        "perturbations": {
+          "minimum": 0,
+          "title": "Perturbations",
+          "type": "integer"
+        },
+        "physical_pools": {
+          "minimum": 0,
+          "title": "Physical Pools",
+          "type": "integer"
+        },
+        "replicates": {
+          "minimum": 0,
+          "title": "Replicates",
+          "type": "integer"
+        },
+        "targets": {
+          "minimum": 0,
+          "title": "Targets",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "biological_samples",
+        "physical_pools",
+        "donors",
+        "replicates",
+        "checkpoints",
+        "perturbations",
+        "guides",
+        "targets",
+        "cells",
+        "clones"
+      ],
+      "title": "StudyEntityCounts",
+      "type": "object"
+    },
+    "StudyEvidenceContract": {
+      "additionalProperties": false,
+      "description": "Observed study-design fields from which capabilities are derived.",
+      "properties": {
+        "absolute_count_basis": {
+          "$ref": "#/$defs/AbsoluteCountBasis",
+          "default": "none"
+        },
+        "destructive_snapshots_only": {
+          "default": true,
+          "title": "Destructive Snapshots Only",
+          "type": "boolean"
+        },
+        "entity_counts": {
+          "$ref": "#/$defs/StudyEntityCounts"
+        },
+        "observed_fields": {
+          "items": {
+            "$ref": "#/$defs/StudyField"
+          },
+          "title": "Observed Fields",
+          "type": "array"
+        },
+        "physical_pool_identity_complete": {
+          "default": false,
+          "title": "Physical Pool Identity Complete",
+          "type": "boolean"
+        },
+        "schema_id": {
+          "const": "credo.study_evidence_contract",
+          "default": "credo.study_evidence_contract",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "study_contract_id": {
+          "title": "Study Contract Id",
+          "type": "string"
+        },
+        "study_id": {
+          "minLength": 1,
+          "title": "Study Id",
+          "type": "string"
+        },
+        "training_only_heldout_time_representation": {
+          "default": false,
+          "title": "Training Only Heldout Time Representation",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "study_contract_id",
+        "study_id",
+        "observed_fields",
+        "entity_counts"
+      ],
+      "title": "StudyEvidenceContract",
+      "type": "object"
+    },
+    "StudyField": {
+      "description": "Fields that may unlock a scientific result layer.",
+      "enum": [
+        "biological_sample_id",
+        "physical_pool_id",
+        "donor_id",
+        "replicate_id",
+        "time",
+        "perturbation_id",
+        "guide_id",
+        "target_id",
+        "cell_id",
+        "clone_id",
+        "lineage_parent_id",
+        "live_cell_track_id",
+        "input_guide_count",
+        "recovered_guide_count",
+        "absolute_total_cell_count",
+        "capture_fraction",
+        "spatial_coordinates",
+        "rna_counts",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "mediator_intervention"
+      ],
+      "title": "StudyField",
+      "type": "string"
+    },
+    "TrajectoryResult": {
+      "additionalProperties": false,
+      "description": "A transition-law result whose lineage language is evidence-gated.",
+      "properties": {
+        "capability_assessment_id": {
+          "minLength": 1,
+          "title": "Capability Assessment Id",
+          "type": "string"
+        },
+        "evidence_tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "heldout_time_evaluation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "individual_cell_paths_claimed": {
+          "default": false,
+          "title": "Individual Cell Paths Claimed",
+          "type": "boolean"
+        },
+        "lineage_evaluation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "lineage_level": {
+          "$ref": "#/$defs/LineageEvidenceLevel"
+        },
+        "observed_checkpoints": {
+          "items": {
+            "$ref": "#/$defs/ObservedCheckpoint"
+          },
+          "title": "Observed Checkpoints",
+          "type": "array"
+        },
+        "predicted_finite_measures": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schema_id": {
+          "const": "credo.trajectory_result",
+          "default": "credo.trajectory_result",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "semantics": {
+          "$ref": "#/$defs/LineageResultSemantics"
+        },
+        "semigroup_evaluation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "supports": {
+          "items": {
+            "$ref": "#/$defs/EvidenceSupport"
+          },
+          "title": "Supports",
+          "type": "array"
+        },
+        "terminal_fate_probabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "trajectory_result_id": {
+          "title": "Trajectory Result Id",
+          "type": "string"
+        },
+        "transition_kernels": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "uncertainty": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "trajectory_result_id",
+        "capability_assessment_id",
+        "evidence_tier",
+        "supports",
+        "lineage_level",
+        "semantics",
+        "observed_checkpoints",
+        "predicted_finite_measures",
+        "transition_kernels",
+        "uncertainty"
+      ],
+      "title": "TrajectoryResult",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/perturbation-dossier.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Primary biological result object with embedded capability evidence.",
+  "properties": {
+    "abundance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AbundanceResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "capabilities": {
+      "$ref": "#/$defs/DatasetCapabilityAssessment"
+    },
+    "claim_adjudications": {
+      "items": {
+        "$ref": "#/$defs/ClaimAdjudication"
+      },
+      "title": "Claim Adjudications",
+      "type": "array"
+    },
+    "claim_requests": {
+      "items": {
+        "$ref": "#/$defs/ScientificClaimRequest"
+      },
+      "title": "Claim Requests",
+      "type": "array"
+    },
+    "dossier_id": {
+      "title": "Dossier Id",
+      "type": "string"
+    },
+    "guide_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Guide Ids",
+      "type": "array"
+    },
+    "perturbation_id": {
+      "minLength": 1,
+      "title": "Perturbation Id",
+      "type": "string"
+    },
+    "schema_id": {
+      "const": "credo.perturbation_dossier",
+      "default": "credo.perturbation_dossier",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sections": {
+      "items": {
+        "$ref": "#/$defs/DossierSection"
+      },
+      "title": "Sections",
+      "type": "array"
+    },
+    "study": {
+      "$ref": "#/$defs/StudyEvidenceContract"
+    },
+    "target_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Target Id"
+    },
+    "trajectory": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrajectoryResult"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    }
+  },
+  "required": [
+    "dossier_id",
+    "study",
+    "capabilities",
+    "perturbation_id",
+    "sections",
+    "claim_requests",
+    "claim_adjudications"
+  ],
+  "title": "PerturbationDossier",
+  "type": "object"
+}

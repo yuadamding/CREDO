@@ -1,6 +1,6 @@
 # Release policy
 
-`4.0.0.dev37` is engineering-only. It cannot be relabeled as alpha, beta,
+`4.0.0.dev40` is engineering-only. It cannot be relabeled as alpha, beta,
 release-candidate, stable, or biological evidence.
 
 The intended ladder is `dev1 → dev2 → a1 → a2 → b1 → rc1 → 4.0.0`. Every

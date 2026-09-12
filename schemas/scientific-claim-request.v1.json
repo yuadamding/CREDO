@@ -1,0 +1,172 @@
+{
+  "$defs": {
+    "AbundanceSemantics": {
+      "description": "Observation gauge attached to every abundance result.",
+      "enum": [
+        "relative_within_pool",
+        "capture_calibrated_cells",
+        "absolute_tissue_cells",
+        "clone_resolved_abundance"
+      ],
+      "title": "AbundanceSemantics",
+      "type": "string"
+    },
+    "EvidenceSupport": {
+      "description": "Typed evidence channels that justify an assigned tier.",
+      "enum": [
+        "engineering_test",
+        "model_fit",
+        "held_out_donor",
+        "held_out_guide",
+        "held_out_target",
+        "held_out_time",
+        "independent_cohort",
+        "intervention",
+        "rescue",
+        "epistasis",
+        "orthogonal_plasticity_assay",
+        "absolute_cell_count",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "clone_barcode",
+        "ancestral_barcode",
+        "live_imaging"
+      ],
+      "title": "EvidenceSupport",
+      "type": "string"
+    },
+    "EvidenceTier": {
+      "description": "Highest evidence class actually bound to one result or claim.",
+      "enum": [
+        "E0_engineering",
+        "E1_in_sample",
+        "E2_held_out",
+        "E3_independent_cohort",
+        "E4_orthogonal_intervention",
+        "E5_direct_measurement"
+      ],
+      "title": "EvidenceTier",
+      "type": "string"
+    },
+    "LineageResultSemantics": {
+      "description": "Result language authorized by each lineage evidence level.",
+      "enum": [
+        "population_transition_only",
+        "clone_resolved_fate",
+        "ancestral_tree",
+        "direct_cell_path_validation"
+      ],
+      "title": "LineageResultSemantics",
+      "type": "string"
+    },
+    "ScientificClaimKind": {
+      "description": "Biological claim classes with distinct capability requirements.",
+      "enum": [
+        "perturbation_program_association",
+        "population_transition",
+        "relative_selection",
+        "absolute_net_growth",
+        "proliferation_component",
+        "death_component",
+        "migration_or_compartment_loss",
+        "diffusion_attribution",
+        "biological_plasticity",
+        "ecological_association",
+        "ecological_mechanism",
+        "clone_fate",
+        "ancestral_lineage",
+        "direct_cell_path",
+        "causal_mechanism"
+      ],
+      "title": "ScientificClaimKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://credo.local/schemas/scientific-claim-request.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Requested wording plus exact evidence, before capability adjudication.",
+  "properties": {
+    "abundance_semantics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AbundanceSemantics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "claim_id": {
+      "minLength": 1,
+      "title": "Claim Id",
+      "type": "string"
+    },
+    "claim_request_id": {
+      "title": "Claim Request Id",
+      "type": "string"
+    },
+    "evidence_sha256s": {
+      "items": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Evidence Sha256S",
+      "type": "array"
+    },
+    "evidence_tier": {
+      "$ref": "#/$defs/EvidenceTier"
+    },
+    "kind": {
+      "$ref": "#/$defs/ScientificClaimKind"
+    },
+    "schema_id": {
+      "const": "credo.scientific_claim_request",
+      "default": "credo.scientific_claim_request",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "supports": {
+      "items": {
+        "$ref": "#/$defs/EvidenceSupport"
+      },
+      "title": "Supports",
+      "type": "array"
+    },
+    "trajectory_semantics": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LineageResultSemantics"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "wording": {
+      "minLength": 1,
+      "title": "Wording",
+      "type": "string"
+    }
+  },
+  "required": [
+    "claim_request_id",
+    "claim_id",
+    "kind",
+    "wording",
+    "evidence_tier",
+    "supports",
+    "evidence_sha256s"
+  ],
+  "title": "ScientificClaimRequest",
+  "type": "object"
+}

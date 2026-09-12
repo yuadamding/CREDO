@@ -15,16 +15,21 @@ from .canonical import sha256_file
 from .compat.credo3 import verify_frozen_credo
 from .compile import compile_problem
 from .contracts import (
+    AbundanceResult,
+    BiologicalProgramQualificationBundle,
     CheckpointMultinomialDecoderContract,
     CheckpointMultinomialDecoderContractV1,
+    ClaimAdjudication,
     ClaimRegistry,
     ClaimRegistryV1,
     CompiledRunContract,
     ComponentTestContract,
     ComponentTestReceipt,
     ComponentTestReceiptV2,
+    CountLinkedProgramContract,
     CountRepresentationBundle,
     CountStoreManifest,
+    DatasetCapabilityAssessment,
     EvaluationBundleManifest,
     FoldNativeCompactViewContractV1,
     FoldNativeCompactViewContractV2,
@@ -40,6 +45,8 @@ from .contracts import (
     G14RobustnessPlanV1,
     G14SealContract,
     G14SealContractV1,
+    GeneLevelEffect,
+    GuideTargetConsistency,
     InferenceBundleManifest,
     IntegratedLoaderQualificationContractV1,
     IntegratedLoaderQualificationContractV2,
@@ -48,12 +55,19 @@ from .contracts import (
     LifecycleState,
     ParticleEngineQualificationBundle,
     ParticleEngineTestReceipt,
+    PerturbationProgramEffect,
     PhysicalPoolConditionalReactionBundle,
     PhysicalPoolConditionalReactionReceipt,
     PooledFiniteMeasureBundle,
     PooledReactionLikelihoodBundle,
     PooledReactionLikelihoodReceipt,
     PreparedRepresentation,
+    ProgramDefinition,
+    ProgramNullContract,
+    ProgramQualificationProtocol,
+    ProgramQualificationReceipt,
+    ProgramSimulationContract,
+    ProgramUncertainty,
     RawCountMassNoiseAmendment,
     RawCountMassNoiseAmendmentReceipt,
     RawCountMassNoiseBundle,
@@ -65,6 +79,7 @@ from .contracts import (
     ReactionRecoveryTestReceiptV1,
     ReactionRecoveryTestReceiptV3,
     ResolvedConfig,
+    ScientificClaimRequest,
     SealedRunManifest,
     SelectionManifest,
     SemanticStudySnapshot,
@@ -72,6 +87,8 @@ from .contracts import (
     SourcePlaneDerivationReceipt,
     StateSelectionCalibration,
     StateSelectionCalibrationResults,
+    StudyEvidenceContract,
+    TrajectoryResult,
     VerifyLevel,
     VirtualCanonicalCountStoreManifestV1,
     VirtualCanonicalCountStoreManifestV2,
@@ -104,6 +121,7 @@ from .reaction import (
     verify_reaction_recovery_metric_amendment,
     verify_reaction_recovery_qualification,
 )
+from .reports import PerturbationDossier
 from .representation import qualify_count_representation, verify_count_representation
 from .store import CountStore
 from .training import resume_training, train_model
@@ -332,7 +350,31 @@ def validate_contract(path: Path) -> dict[str, Any]:
         raise ValueError("A contract must be a JSON object with schema_version.")
     canonical_json_bytes(payload)
     selected: type[BaseModel] | None
-    if "calibration_id" in payload and "rows" in payload:
+    evidence_contracts: dict[str, type[BaseModel]] = {
+        "credo.study_evidence_contract": StudyEvidenceContract,
+        "credo.dataset_capability_assessment": DatasetCapabilityAssessment,
+        "credo.abundance_result": AbundanceResult,
+        "credo.trajectory_result": TrajectoryResult,
+        "credo.scientific_claim_request": ScientificClaimRequest,
+        "credo.claim_adjudication": ClaimAdjudication,
+        "credo.perturbation_dossier": PerturbationDossier,
+        "credo.count_linked_program_contract": CountLinkedProgramContract,
+        "credo.program_definition": ProgramDefinition,
+        "credo.perturbation_program_effect": PerturbationProgramEffect,
+        "credo.gene_level_effect": GeneLevelEffect,
+        "credo.guide_target_consistency": GuideTargetConsistency,
+        "credo.program_uncertainty": ProgramUncertainty,
+        "credo.program_qualification_receipt": ProgramQualificationReceipt,
+        "credo.program_null_contract": ProgramNullContract,
+        "credo.program_qualification_protocol": ProgramQualificationProtocol,
+        "credo.program_simulation_contract": ProgramSimulationContract,
+        "credo.biological_program_qualification_bundle": (
+            BiologicalProgramQualificationBundle
+        ),
+    }
+    if payload.get("schema_id") in evidence_contracts:
+        selected = evidence_contracts[str(payload["schema_id"])]
+    elif "calibration_id" in payload and "rows" in payload:
         selected = StateSelectionCalibrationResults
     else:
         if payload.get("backend") == "csr_hdf5_sharded":

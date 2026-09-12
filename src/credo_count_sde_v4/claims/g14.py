@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ..contracts import (
+    ClaimAdjudication,
+    ClaimDecision,
     ClaimRegistry,
     G14MultiplicityContract,
     G14RobustnessPlan,
@@ -25,6 +29,7 @@ def validate_g14_contracts(
     robustness: G14RobustnessPlan,
     multiplicity: G14MultiplicityContract,
     seal: G14SealContract,
+    evidence_adjudications: Mapping[str, ClaimAdjudication] | None = None,
 ) -> None:
     """Fail closed unless registry, sensitivity, multiplicity, and seal agree."""
 
@@ -75,6 +80,12 @@ def validate_g14_contracts(
         raise IntegrityError("G14 evidence graph must bind every and only claimed components.")
     for claim_id, record in records.items():
         decision = seal.claim_decisions[claim_id]
+        if evidence_adjudications is not None and claim_id in evidence_adjudications:
+            adjudication = evidence_adjudications[claim_id]
+            if adjudication.claim_id != claim_id:
+                raise IntegrityError(f"G14 claim {claim_id} has a cross-wired adjudication.")
+            if decision == "promoted" and adjudication.decision == ClaimDecision.BLOCKED:
+                raise IntegrityError(f"G14 claim {claim_id} has a blocked evidence adjudication.")
         if record.external_independence_class == "unresolved_blocked" and decision == "promoted":
             raise IntegrityError(f"Unresolved external claim {claim_id} cannot be promoted.")
         if record.claim_family == "M" and decision == "promoted":

@@ -1,6 +1,6 @@
 # Architecture
 
-Status: component-qualified engineering architecture for `4.0.0.dev37`.
+Status: component-qualified engineering architecture for `4.0.0.dev40`.
 
 The package is a sibling distribution. It owns the count-native numerical
 recipe and never writes into the frozen CREDO checkout. Numerical modules can
@@ -12,6 +12,27 @@ strict contracts → sparse CountStore → source-only preparation
 → content-addressed compilation → update-based training/checkpoints
 → inference bundle → separate one-shot evaluation → sealed aggregate
 ```
+
+The evidence-aware result layer is a second, orthogonal graph:
+
+```text
+observed study fields → structural capability assessment
+→ static count-linked program qualification
+→ abundance/trajectory/lineage semantics → perturbation dossier
+→ evidence-aware claim adjudication → G14 claim seal
+```
+
+It cannot promote a numerical capability. Missing physical pools, absolute
+counts, clone observations, or live tracking disable the corresponding result
+instead of selecting a weaker model under stronger biological wording. See the
+[Dev39 Phase 1 evidence framework](dev39-evidence-framework.md).
+
+The Dev40 head is static/checkpoint-conditional. It models raw panel counts
+with a gene-dispersion NB2 likelihood, observed library offset, sparse signed
+loadings, continuous physical time, and a control/target/guide hierarchy. Its
+qualification graph is independent of the V4 state SDE and cannot modify an
+existing checkpoint. Dynamic coupling remains a Dev41 question. See
+[Dev40 program qualification](dev40-biological-program-qualification.md).
 
 The three intents are monotone. `count_state` exposes state transport only.
 `count_measure` adds a complete-denominator relative-fitness model and exact
