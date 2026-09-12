@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -30,19 +31,21 @@ REPLAY_COLUMNS = (
     "validation_nll_per_count",
     "final_state_hash",
 )
-AccessCallback = Callable[[str, np.ndarray], None]
+AccessCallback = Callable[[str, np.ndarray[Any, Any]], None]
 
 
-def _ordered_hash(values: np.ndarray) -> str:
+def _ordered_hash(values: np.ndarray[Any, Any]) -> str:
     return hashlib.sha256(np.asarray(values, dtype="<i8").tobytes(order="C")).hexdigest()
 
 
-def _array_hash(values: np.ndarray) -> str:
+def _array_hash(values: np.ndarray[Any, Any]) -> str:
     array = np.asarray(values, dtype="<f8")
     return hashlib.sha256(array.tobytes(order="C")).hexdigest()
 
 
-def _checkpoint_codes(store: VirtualCanonicalCountStore, row_ids: np.ndarray) -> np.ndarray:
+def _checkpoint_codes(
+    store: VirtualCanonicalCountStore, row_ids: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     sorted_ids, source_indices, _ = store._locator()
     positions = np.searchsorted(sorted_ids, row_ids)
     if np.any(positions >= len(sorted_ids)) or not np.array_equal(sorted_ids[positions], row_ids):
@@ -56,11 +59,11 @@ def _checkpoint_codes(store: VirtualCanonicalCountStore, row_ids: np.ndarray) ->
 
 def _thin_and_accumulate(
     matrix: sparse.csr_matrix,
-    checkpoint_codes: np.ndarray,
-    weights: np.ndarray,
+    checkpoint_codes: np.ndarray[Any, Any],
+    weights: np.ndarray[Any, Any],
     *,
     seed: int,
-) -> tuple[np.ndarray, str]:
+) -> tuple[np.ndarray[Any, Any], str]:
     rng = np.random.Generator(np.random.PCG64DXSM(seed))
     thinned_data = rng.binomial(matrix.data.astype(np.int64), 0.5).astype(np.float64)
     digest = hashlib.sha256(np.asarray(thinned_data, dtype="<f8").tobytes(order="C")).hexdigest()
@@ -78,8 +81,8 @@ def _thin_and_accumulate(
 
 def _read_selected_rows(
     store: VirtualCanonicalCountStore,
-    row_ids: np.ndarray,
-    feature_indices: np.ndarray,
+    row_ids: np.ndarray[Any, Any],
+    feature_indices: np.ndarray[Any, Any],
     *,
     batch_size: int,
 ) -> sparse.csr_matrix:
@@ -93,15 +96,15 @@ def derive_checkpoint_statistics_v4(
     store: VirtualCanonicalCountStore,
     plan: G00CSamplerPlanV4,
     trace: pd.DataFrame,
-    ordered_training_rows: np.ndarray,
-    validation_rows: np.ndarray,
-    feature_indices: np.ndarray,
+    ordered_training_rows: np.ndarray[Any, Any],
+    validation_rows: np.ndarray[Any, Any],
+    feature_indices: np.ndarray[Any, Any],
     schedule: G00CRefitSeedScheduleV1,
     *,
     candidate_kind: str,
     batch_size: int = 4096,
     access_callback: AccessCallback | None = None,
-) -> tuple[np.ndarray, np.ndarray, tuple[str, ...], str, str]:
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], tuple[str, ...], str, str]:
     """Derive [draw,candidate,checkpoint,gene] counts from verified source rows."""
 
     candidates = tuple(
@@ -142,9 +145,9 @@ def derive_checkpoint_statistics_v4(
             raise IntegrityError("Dev37 refit trace differs from its frozen entry size.")
         if access_callback is not None:
             access_callback("refit_training_fit", row_ids)
-        matrix = _read_selected_rows(
-            store, row_ids, feature_indices, batch_size=batch_size
-        ).astype(np.int64)
+        matrix = _read_selected_rows(store, row_ids, feature_indices, batch_size=batch_size).astype(
+            np.int64
+        )
         checkpoints = _checkpoint_codes(store, row_ids)
         counts, thinning_hash = _thin_and_accumulate(
             matrix,
@@ -173,8 +176,7 @@ def derive_checkpoint_statistics_v4(
         validation[draw] = counts
         thinning_digest.update(bytes.fromhex(thinning_hash))
     if candidate_kind == "feature_count" and not all(
-        np.array_equal(training[:, 0], training[:, index])
-        for index in range(1, len(candidates))
+        np.array_equal(training[:, 0], training[:, index]) for index in range(1, len(candidates))
     ):
         raise IntegrityError("Dev37 feature statistics differ before prefix collapse.")
     return (
@@ -198,8 +200,8 @@ def _targets(records: pd.DataFrame, receipt: G00CRefitReplayReceiptV4) -> pd.Dat
 def recompute_refit_rows_v4(
     records: pd.DataFrame,
     receipt: G00CRefitReplayReceiptV4,
-    training: np.ndarray,
-    validation: np.ndarray,
+    training: np.ndarray[Any, Any],
+    validation: np.ndarray[Any, Any],
 ) -> pd.DataFrame:
     """Replay checkpoint-specific common-support intercepts from derived arrays."""
 
@@ -249,9 +251,9 @@ def verify_g00c_refit_replay_v4(
     store: VirtualCanonicalCountStore,
     plan: G00CSamplerPlanV4,
     trace: pd.DataFrame,
-    ordered_training_rows: np.ndarray,
-    validation_rows: np.ndarray,
-    feature_indices: np.ndarray,
+    ordered_training_rows: np.ndarray[Any, Any],
+    validation_rows: np.ndarray[Any, Any],
+    feature_indices: np.ndarray[Any, Any],
     *,
     access_callback: AccessCallback | None = None,
     additional_plan_trace: tuple[G00CSamplerPlanV4, pd.DataFrame] | None = None,

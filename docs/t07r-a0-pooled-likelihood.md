@@ -104,10 +104,10 @@ that failure.
 
 ## Evidence and reproduction
 
-The dev27 evidence authority is
-[`credo_v4_renz_t07r_a0_v2_20260816/`](../../credo_v4_renz_t07r_a0_v2_20260816/).
-The dev26 predecessor remains at
-[`credo_v4_renz_t07r_a0_20260816/`](../../credo_v4_renz_t07r_a0_20260816/).
+The dev27 evidence authority was recorded at workspace-relative path
+`credo_v4_renz_t07r_a0_v2_20260816/`. The dev26 predecessor was recorded at
+`credo_v4_renz_t07r_a0_20260816/`. These historical external artifacts are not
+shipped in this repository; resolve them through the project evidence index.
 
 ```bash
 credo-v4 correct-pooled-reaction \

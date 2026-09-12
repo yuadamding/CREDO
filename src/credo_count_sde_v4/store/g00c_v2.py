@@ -76,12 +76,12 @@ def _path(root: Path, artifact: ArtifactRef) -> Path:
     return path
 
 
-def _row_set_hash(values: np.ndarray) -> str:
+def _row_set_hash(values: np.ndarray[Any, Any]) -> str:
     ordered = np.sort(np.asarray(values, dtype="<i8"), kind="stable")
     return hashlib.sha256(ordered.tobytes(order="C")).hexdigest()
 
 
-def _ordered_row_hash(values: np.ndarray) -> str:
+def _ordered_row_hash(values: np.ndarray[Any, Any]) -> str:
     return hashlib.sha256(np.asarray(values, dtype="<i8").tobytes(order="C")).hexdigest()
 
 
@@ -95,7 +95,7 @@ def _verify_row_roles(
     store: VirtualCanonicalCountStore,
     contract: FoldNativeCompactViewContractV3,
     bundle: G00CExecutionBundleV2,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray[Any, Any]]:
     table = pd.read_parquet(_path(root, bundle.row_roles))
     expected_columns = (
         "row_id",
@@ -254,7 +254,7 @@ def sample_size_decision_v2(
     *,
     grid_stage: str,
     candidates: tuple[int, ...],
-    p95: np.ndarray,
+    p95: np.ndarray[Any, Any],
     epsilon: float,
 ) -> tuple[str, int | None]:
     """Return the frozen Dev33 base/extension decision without a self-reference pass."""
@@ -281,7 +281,7 @@ def _verify_feature_selection(
     *,
     store_feature_width: int,
     replay_refit: RefitReplayExecutor | None,
-) -> tuple[list[str], np.ndarray]:
+) -> tuple[list[str], np.ndarray[Any, Any]]:
     result = bundle.feature_selection
     protocol = contract.feature_selection
     if (
@@ -376,10 +376,10 @@ def verify_sample_size_selection_v2(
     root: Path,
     contract: FoldNativeCompactViewContractV3,
     bundle: G00CExecutionBundleV2,
-    role_rows: dict[str, np.ndarray],
+    role_rows: dict[str, np.ndarray[Any, Any]],
     *,
     replay_refit: RefitReplayExecutor | None,
-) -> np.ndarray | None:
+) -> np.ndarray[Any, Any] | None:
     """Verify the base/extension decision; ``None`` is the required base-grid stop."""
 
     result = bundle.sample_size_selection
@@ -481,8 +481,8 @@ def verify_sample_size_selection_v2(
 
 
 def _expected_physical_order(
-    store: VirtualCanonicalCountStore, row_ids: np.ndarray
-) -> tuple[np.ndarray, int]:
+    store: VirtualCanonicalCountStore, row_ids: np.ndarray[Any, Any]
+) -> tuple[np.ndarray[Any, Any], int]:
     locator_ids, source_indices, source_rows = store._locator()
     positions = np.searchsorted(locator_ids, row_ids)
     if np.any(positions >= len(locator_ids)) or not np.array_equal(locator_ids[positions], row_ids):
@@ -531,10 +531,10 @@ def _verify_compact_payload_streaming(
     store: VirtualCanonicalCountStore,
     contract: FoldNativeCompactViewContractV3,
     bundle: G00CExecutionBundleV2,
-    role_rows: dict[str, np.ndarray],
-    selected_training_rows: np.ndarray,
+    role_rows: dict[str, np.ndarray[Any, Any]],
+    selected_training_rows: np.ndarray[Any, Any],
     selected_feature_ids: list[str],
-    selected_feature_indices: np.ndarray,
+    selected_feature_indices: np.ndarray[Any, Any],
 ) -> None:
     payload_path = _path(root, bundle.compact_payload)
     expected_set = np.concatenate(

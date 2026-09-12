@@ -368,9 +368,7 @@ def validate_contract(path: Path) -> dict[str, Any]:
         "credo.program_null_contract": ProgramNullContract,
         "credo.program_qualification_protocol": ProgramQualificationProtocol,
         "credo.program_simulation_contract": ProgramSimulationContract,
-        "credo.biological_program_qualification_bundle": (
-            BiologicalProgramQualificationBundle
-        ),
+        "credo.biological_program_qualification_bundle": (BiologicalProgramQualificationBundle),
     }
     if payload.get("schema_id") in evidence_contracts:
         selected = evidence_contracts[str(payload["schema_id"])]

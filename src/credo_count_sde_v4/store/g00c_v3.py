@@ -117,7 +117,7 @@ class MaterializedPassVerifier(Protocol):
         root: Path,
         bundle: G00CExecutionBundleV3,
         selected_feature_ids: tuple[str, ...],
-        selected_training_rows: np.ndarray,
+        selected_training_rows: np.ndarray[Any, Any],
     ) -> None: ...
 
 
@@ -139,16 +139,16 @@ def _read_model(root: Path, artifact: ArtifactRef, model: type[Any]) -> Any:
         ) from exc
 
 
-def _row_set_hash(values: np.ndarray) -> str:
+def _row_set_hash(values: np.ndarray[Any, Any]) -> str:
     ordered = np.sort(np.asarray(values, dtype="<i8"), kind="stable")
     return hashlib.sha256(ordered.tobytes(order="C")).hexdigest()
 
 
-def _ordered_row_hash(values: np.ndarray) -> str:
+def _ordered_row_hash(values: np.ndarray[Any, Any]) -> str:
     return hashlib.sha256(np.asarray(values, dtype="<i8").tobytes(order="C")).hexdigest()
 
 
-def _hash_int64(values: np.ndarray) -> str:
+def _hash_int64(values: np.ndarray[Any, Any]) -> str:
     return hashlib.sha256(np.asarray(values, dtype="<i8").tobytes(order="C")).hexdigest()
 
 
@@ -637,7 +637,7 @@ def _verify_sample_size_selection_v3(
     result: G00CSampleSizeSelectionResultV3,
     schedule: G00CRefitSeedScheduleV1,
     support_eligible_override: tuple[bool, ...] | None = None,
-) -> np.ndarray | None:
+) -> np.ndarray[Any, Any] | None:
     if (
         result.parent_feature_selection_result_sha256 != bundle.feature_selection_result.sha256
         or result.selected_feature_count != feature_result.selected_feature_count

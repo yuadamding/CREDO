@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "ScientificScope": {
+      "additionalProperties": false,
+      "description": "Exact scope that must agree across a result and every supporting claim.",
+      "properties": {
+        "comparison": {
+          "minLength": 1,
+          "title": "Comparison",
+          "type": "string"
+        },
+        "entity_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entity Scope",
+          "type": "array"
+        },
+        "population": {
+          "minLength": 1,
+          "title": "Population",
+          "type": "string"
+        },
+        "sample_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sample Scope",
+          "type": "array"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "time_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Time Scope",
+          "type": "array"
+        }
+      },
+      "required": [
+        "subject",
+        "entity_scope",
+        "sample_scope",
+        "time_scope",
+        "population",
+        "comparison"
+      ],
+      "title": "ScientificScope",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/perturbation-program-effect.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Control, target, and guide-deviation program effects for one scope.",
+  "properties": {
+    "guide_deviation_activity": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "guide_efficiency": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "guide_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Guide Ids",
+      "type": "array"
+    },
+    "perturbation_id": {
+      "minLength": 1,
+      "title": "Perturbation Id",
+      "type": "string"
+    },
+    "program_contract_id": {
+      "minLength": 1,
+      "title": "Program Contract Id",
+      "type": "string"
+    },
+    "program_effect_id": {
+      "title": "Program Effect Id",
+      "type": "string"
+    },
+    "reference_activity": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "schema_id": {
+      "const": "credo.perturbation_program_effect",
+      "default": "credo.perturbation_program_effect",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scope": {
+      "$ref": "#/$defs/ScientificScope"
+    },
+    "target_activity": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "target_id": {
+      "minLength": 1,
+      "title": "Target Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "program_effect_id",
+    "program_contract_id",
+    "scope",
+    "perturbation_id",
+    "target_id",
+    "guide_ids",
+    "reference_activity",
+    "target_activity",
+    "guide_deviation_activity",
+    "guide_efficiency"
+  ],
+  "title": "PerturbationProgramEffect",
+  "type": "object"
+}

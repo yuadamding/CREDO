@@ -54,7 +54,7 @@ def _row_hash(values: Iterable[int]) -> str:
     return sha256_bytes(np.asarray(tuple(values), dtype="<i8").tobytes())
 
 
-def _sample(values: np.ndarray, maximum: int, seed: int) -> np.ndarray:
+def _sample(values: np.ndarray[Any, Any], maximum: int, seed: int) -> np.ndarray[Any, Any]:
     ordered = np.asarray(sorted(map(int, values)), dtype=np.int64)
     if len(ordered) <= maximum:
         return ordered
@@ -63,7 +63,7 @@ def _sample(values: np.ndarray, maximum: int, seed: int) -> np.ndarray:
     return ordered[np.sort(selected)]
 
 
-def _hellinger(matrix: sparse.csr_matrix) -> tuple[sparse.csr_matrix, np.ndarray]:
+def _hellinger(matrix: sparse.csr_matrix) -> tuple[sparse.csr_matrix, np.ndarray[Any, Any]]:
     values = matrix.astype(np.float32).tocsr(copy=True)
     totals = np.asarray(values.sum(axis=1), dtype=np.float64).reshape(-1)
     if np.any(totals <= 0):
@@ -73,7 +73,7 @@ def _hellinger(matrix: sparse.csr_matrix) -> tuple[sparse.csr_matrix, np.ndarray
     return values.tocsr(), totals
 
 
-def _fix_component_signs(components: np.ndarray) -> np.ndarray:
+def _fix_component_signs(components: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
     result = np.asarray(components, dtype=np.float32).copy()
     for index, row in enumerate(result):
         pivot = int(np.argmax(np.abs(row)))
@@ -82,7 +82,9 @@ def _fix_component_signs(components: np.ndarray) -> np.ndarray:
     return result
 
 
-def _fit_basis(matrix: sparse.csr_matrix, rank: int, seed: int) -> tuple[np.ndarray, np.ndarray]:
+def _fit_basis(
+    matrix: sparse.csr_matrix, rank: int, seed: int
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     hellinger, _ = _hellinger(matrix)
     center = np.sqrt(_global_frequency(matrix)).astype(np.float32)
     available = min(hellinger.shape)
@@ -113,12 +115,16 @@ def _fit_basis(matrix: sparse.csr_matrix, rank: int, seed: int) -> tuple[np.ndar
     return _fix_component_signs(basis), center
 
 
-def _encode(matrix: sparse.csr_matrix, components: np.ndarray, center: np.ndarray) -> np.ndarray:
+def _encode(
+    matrix: sparse.csr_matrix, components: np.ndarray[Any, Any], center: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     hellinger, _ = _hellinger(matrix)
     return np.asarray(hellinger @ components.T, dtype=np.float32) - (center @ components.T)[None, :]
 
 
-def _decode(z: np.ndarray, components: np.ndarray, center: np.ndarray) -> np.ndarray:
+def _decode(
+    z: np.ndarray[Any, Any], components: np.ndarray[Any, Any], center: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     reconstructed = np.asarray(center[None, :] + z @ components, dtype=np.float64)
     probabilities = np.square(reconstructed)
     probabilities += np.finfo(np.float64).tiny
@@ -126,7 +132,7 @@ def _decode(z: np.ndarray, components: np.ndarray, center: np.ndarray) -> np.nda
     return probabilities
 
 
-def _global_frequency(matrix: sparse.csr_matrix) -> np.ndarray:
+def _global_frequency(matrix: sparse.csr_matrix) -> np.ndarray[Any, Any]:
     totals = np.asarray(matrix.sum(axis=0), dtype=np.float64).reshape(-1)
     totals += 0.5
     totals /= totals.sum()
@@ -135,12 +141,12 @@ def _global_frequency(matrix: sparse.csr_matrix) -> np.ndarray:
 
 def _per_row_nll(
     matrix: sparse.csr_matrix,
-    components: np.ndarray | None,
-    global_frequency: np.ndarray,
-    center: np.ndarray | None = None,
+    components: np.ndarray[Any, Any] | None,
+    global_frequency: np.ndarray[Any, Any],
+    center: np.ndarray[Any, Any] | None = None,
     *,
     batch_size: int = 256,
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     matrix = matrix.tocsr()
     if components is not None and center is None:
         raise ValueError("A count-native decoder requires its frozen Hellinger center.")
@@ -166,7 +172,7 @@ def _per_row_nll(
     return result
 
 
-def _pearson(left: np.ndarray, right: np.ndarray) -> float:
+def _pearson(left: np.ndarray[Any, Any], right: np.ndarray[Any, Any]) -> float:
     if left.size < 2 or np.std(left) == 0 or np.std(right) == 0:
         return 0.0
     return float(np.corrcoef(left, right)[0, 1])
@@ -175,17 +181,17 @@ def _pearson(left: np.ndarray, right: np.ndarray) -> float:
 def _guide_metrics(
     frame: pd.DataFrame,
     matrix: sparse.csr_matrix,
-    components: np.ndarray,
-    center: np.ndarray,
-    global_frequency: np.ndarray,
+    components: np.ndarray[Any, Any],
+    center: np.ndarray[Any, Any],
+    global_frequency: np.ndarray[Any, Any],
     *,
     fold: str,
     half_seed: int,
     nll_max_cells_per_guide: int,
-) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
+) -> tuple[pd.DataFrame, dict[str, np.ndarray[Any, Any]]]:
     z = _encode(matrix, components, center)
     rows: list[dict[str, Any]] = []
-    centroids: dict[str, np.ndarray] = {}
+    centroids: dict[str, np.ndarray[Any, Any]] = {}
     for guide, positions in frame.groupby("guide_id", sort=True).indices.items():
         local = np.asarray(positions, dtype=np.int64)
         generator = np.random.default_rng(
@@ -231,9 +237,9 @@ def _guide_metrics(
 
 def _target_structure(
     heldout_metrics: pd.DataFrame,
-    heldout_centroids: dict[str, np.ndarray],
+    heldout_centroids: dict[str, np.ndarray[Any, Any]],
     train_frame: pd.DataFrame,
-    train_z: np.ndarray,
+    train_z: np.ndarray[Any, Any],
     *,
     seed: int,
 ) -> pd.DataFrame:
@@ -241,7 +247,7 @@ def _target_structure(
         str(guide): train_z[np.asarray(positions, dtype=np.int64)].mean(axis=0)
         for guide, positions in train_frame.groupby("guide_id", sort=True).indices.items()
     }
-    target_centroids: dict[str, np.ndarray] = {}
+    target_centroids: dict[str, np.ndarray[Any, Any]] = {}
     for target, guides in train_frame.groupby("target_id", sort=True).guide_id.unique().items():
         available = [
             train_centroids[str(guide)] for guide in guides if str(guide) in train_centroids
@@ -283,8 +289,8 @@ def _support_coverage(
     calibration: sparse.csr_matrix,
     source_query: sparse.csr_matrix,
     terminal_query: sparse.csr_matrix,
-    components: np.ndarray,
-    center: np.ndarray,
+    components: np.ndarray[Any, Any],
+    center: np.ndarray[Any, Any],
 ) -> dict[str, float]:
     reference_z = _encode(reference, components, center)
     tree = cKDTree(reference_z)
@@ -369,7 +375,7 @@ def _null_refits(
         permuted_values = np.asarray([observed_targets[guide] for guide in guides], dtype=object)
         generator.shuffle(permuted_values)
         permuted = dict(zip(guides, permuted_values, strict=True))
-        target_centroids: dict[str, np.ndarray] = {}
+        target_centroids: dict[str, np.ndarray[Any, Any]] = {}
         for target in sorted(set(permuted.values())):
             local = [centroids[guide] for guide in guides if permuted[guide] == target]
             target_centroids[target] = np.mean(local, axis=0)
@@ -501,7 +507,7 @@ def qualify_count_representation(
     target_rows: list[pd.DataFrame] = []
     support_rows: list[dict[str, Any]] = []
     selected_dimensions: dict[str, int] = {}
-    encoder_payload: dict[str, np.ndarray] = {}
+    encoder_payload: dict[str, np.ndarray[Any, Any]] = {}
     fold_index: list[dict[str, Any]] = []
     null_source_matrix: sparse.csr_matrix | None = None
     null_source_frame: pd.DataFrame | None = None

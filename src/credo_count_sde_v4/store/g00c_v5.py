@@ -142,7 +142,7 @@ def _expected_access_rows(
     *,
     root: Path,
     authority: G00CD1ExecutionAuthorityFreezeV3,
-    selected_rows: np.ndarray | None,
+    selected_rows: np.ndarray[Any, Any] | None,
 ) -> list[tuple[str, int]]:
     expected = list(accessed)
     if selected_rows is not None:
@@ -240,12 +240,10 @@ def verify_g00c_execution_v5(
 
     accessed: list[tuple[str, int]] = []
 
-    def record_access(role: str, row_ids: np.ndarray) -> None:
+    def record_access(role: str, row_ids: np.ndarray[Any, Any]) -> None:
         accessed.extend((role, int(value)) for value in row_ids)
 
-    ranking_receipt = _read_model(
-        root, bundle.feature_ranking_receipt, G00CFeatureRankingReceiptV4
-    )
+    ranking_receipt = _read_model(root, bundle.feature_ranking_receipt, G00CFeatureRankingReceiptV4)
     ranking = verify_g00c_feature_ranking_v4(
         root,
         authority,
@@ -268,16 +266,12 @@ def verify_g00c_execution_v5(
 
     sampler = _read_model(root, bundle.sampler_evidence, G00CSamplerEvidenceV4)
     plan, order, trace = verify_g00c_sampler_v4(root, authority, sampler, hierarchy)
-    sampler_restart = _read_model(
-        root, bundle.sampler_restart_receipt, G00CDurableRestartReceiptV4
-    )
+    sampler_restart = _read_model(root, bundle.sampler_restart_receipt, G00CDurableRestartReceiptV4)
     if sampler.restart_receipt != bundle.sampler_restart_receipt or (
         sampler_restart.receipt_id != sampler.restart_receipt_id
     ):
         raise IntegrityError("Dev37 sampler restart receipt is cross-wired.")
-    base_support = _read_model(
-        root, bundle.base_support_audit_receipt, G00CSupportAuditReceiptV3
-    )
+    base_support = _read_model(root, bundle.base_support_audit_receipt, G00CSupportAuditReceiptV3)
     if (
         base_support.support_contract != bundle.base_support_audit_contract
         or base_support.sampler_evidence != bundle.sampler_evidence
@@ -401,9 +395,7 @@ def verify_g00c_execution_v5(
     feature_replay = _read_model(
         root, bundle.feature_refit_replay_receipt, G00CRefitReplayReceiptV4
     )
-    sample_replay = _read_model(
-        root, bundle.sample_refit_replay_receipt, G00CRefitReplayReceiptV4
-    )
+    sample_replay = _read_model(root, bundle.sample_refit_replay_receipt, G00CRefitReplayReceiptV4)
     access_receipt = _read_model(
         root, bundle.source_access_ledger_receipt, G00CSourceAccessLedgerReceiptV4
     )
@@ -469,8 +461,7 @@ def verify_g00c_execution_v5(
             root, bundle.materialization_receipt, G00CMaterializationReceiptV4
         )
         if (
-            materialization.source_access_ledger_receipt
-            != bundle.source_access_ledger_receipt
+            materialization.source_access_ledger_receipt != bundle.source_access_ledger_receipt
             or materialization.source_access_ledger_receipt_id != access_receipt.receipt_id
             or materialization.monitor_receipt != bundle.monitor_receipt
         ):
@@ -510,11 +501,11 @@ def verify_g00c_execution_v5(
         raise IntegrityError("Dev37 full source-access ledger omits, adds, or reorders reads.")
     monitor = _read_model(root, bundle.monitor_receipt, G00CProcessTreeMonitorReceiptV4)
     monitor_trace = verify_g00c_monitor_v4(root, freeze.monitor, authority, monitor)
-    if (
-        _implementation_hash(authority, "monitor") != freeze.monitor.implementation_sha256
-        or _implementation_hash(authority, "source_access_auditor")
-        not in {item.sha256 for item in _artifact_refs(authority)}
-    ):
+    if _implementation_hash(
+        authority, "monitor"
+    ) != freeze.monitor.implementation_sha256 or _implementation_hash(
+        authority, "source_access_auditor"
+    ) not in {item.sha256 for item in _artifact_refs(authority)}:
         raise IntegrityError("Dev37 monitoring/access implementations differ from authority.")
     if len(ledger):
         first_access = int(ledger["monotonic_ns"].iloc[0])

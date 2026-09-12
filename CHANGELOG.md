@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased correction to dev40 — 2026-09-12
+
+- bind prepared access V2 to authoritative ordered guide/target/control identity
+  and explicit within-shard row permissions;
+- replace pooled gene-sign and positionally joined sister-guide metrics with
+  keyed, support-reported comparisons and separately predicted control means;
+- distinguish fitted-NB predictive likelihood from shared-dispersion mean scoring;
+- mark the legacy guide multiplier as unidentified latent scale and prevent
+  coefficient-threshold null diagnostics from promoting scientific discoveries;
+- bound the dense diagnostic head and transfer only optimization/validation batches;
+- repair repository integrity, schema, formatting, type and documentation gates,
+  and add scientific-boundary regressions without lowering coverage requirements;
+- preserve historical receipts and document pending nested-donor R48 integration
+  and remote CI in the [correction report](docs/review-789537f-corrections.md).
+
 ## 4.0.0.dev40 — 2026-08-21
 
 - seal Dev39 evidence semantics by separating evidence tier, channel,

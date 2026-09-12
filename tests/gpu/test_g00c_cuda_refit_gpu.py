@@ -77,9 +77,10 @@ def test_cuda_dev37_expanded_refit_preserves_pcg_variate_order() -> None:
         maximum_device_bytes=min(DEFAULT_MAX_DEVICE_BYTES, physical - 1024**3),
     )
     assert np.array_equal(observed.astype(np.float64), reference)
-    assert receipt.thinning_sha256 == hashlib.sha256(
-        np.asarray(thinned, dtype="<f8").tobytes(order="C")
-    ).hexdigest()
+    assert (
+        receipt.thinning_sha256
+        == hashlib.sha256(np.asarray(thinned, dtype="<f8").tobytes(order="C")).hexdigest()
+    )
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA unavailable")

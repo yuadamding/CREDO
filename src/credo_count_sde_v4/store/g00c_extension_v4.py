@@ -29,9 +29,7 @@ def verify_g00c_extension_freeze_v2(
     """Require one sealed V5 base stop and one exact 2M sampler/support surface."""
 
     base = _read_model(root, extension.base_execution_bundle, G00CExecutionBundleV5)
-    decision = _read_model(
-        root, extension.base_extension_required_receipt, G00CDecisionReceiptV5
-    )
+    decision = _read_model(root, extension.base_extension_required_receipt, G00CDecisionReceiptV5)
     seal = _read_model(root, extension.base_final_seal, G00CFinalSealV1)
     seal_root = (root / extension.base_final_seal.relative_uri).parent
     sealed_bundle, _, sealed_decision = verify_g00c_final_seal_v1(seal_root, seal)
@@ -55,8 +53,7 @@ def verify_g00c_extension_freeze_v2(
         or extension.source_binding_id != authority.source_plane.binding_id
         or extension.feature_selection_result_id != feature_result.result_id
         or extension.selected_feature_count != feature_result.selected_feature_count
-        or extension.selected_feature_order_sha256
-        != feature_result.selected_feature_order_sha256
+        or extension.selected_feature_order_sha256 != feature_result.selected_feature_order_sha256
         or extension.seed_schedule_id != authority.seed_schedule_id
         or extension.seed_schedule_artifact != authority.seed_schedule
         or extension.selected_feature_surface != feature_result.ordered_features

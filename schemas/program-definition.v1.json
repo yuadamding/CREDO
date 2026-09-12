@@ -1,0 +1,137 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/program-definition.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "One sparse signed gene program, without a biological-name claim.",
+  "properties": {
+    "l1_norm": {
+      "exclusiveMinimum": 0,
+      "title": "L1 Norm",
+      "type": "number"
+    },
+    "l2_norm": {
+      "exclusiveMinimum": 0,
+      "title": "L2 Norm",
+      "type": "number"
+    },
+    "loading_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "loading_threshold": {
+      "exclusiveMinimum": 0,
+      "title": "Loading Threshold",
+      "type": "number"
+    },
+    "negative_genes": {
+      "minimum": 0,
+      "title": "Negative Genes",
+      "type": "integer"
+    },
+    "nonzero_genes": {
+      "minimum": 0,
+      "title": "Nonzero Genes",
+      "type": "integer"
+    },
+    "positive_genes": {
+      "minimum": 0,
+      "title": "Positive Genes",
+      "type": "integer"
+    },
+    "program_contract_id": {
+      "minLength": 1,
+      "title": "Program Contract Id",
+      "type": "string"
+    },
+    "program_definition_id": {
+      "title": "Program Definition Id",
+      "type": "string"
+    },
+    "program_index": {
+      "minimum": 0,
+      "title": "Program Index",
+      "type": "integer"
+    },
+    "schema_id": {
+      "const": "credo.program_definition",
+      "default": "credo.program_definition",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "training_derived_label": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Training Derived Label"
+    }
+  },
+  "required": [
+    "program_definition_id",
+    "program_contract_id",
+    "program_index",
+    "loading_artifact",
+    "loading_threshold",
+    "nonzero_genes",
+    "positive_genes",
+    "negative_genes",
+    "l1_norm",
+    "l2_norm"
+  ],
+  "title": "ProgramDefinition",
+  "type": "object"
+}

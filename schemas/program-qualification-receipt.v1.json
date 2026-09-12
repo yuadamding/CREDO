@@ -1,0 +1,408 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "BaselineMetric": {
+      "additionalProperties": false,
+      "description": "Comparable held-out count metric for one method.",
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/BaselineName"
+        },
+        "mean_log_likelihood_per_count": {
+          "title": "Mean Log Likelihood Per Count",
+          "type": "number"
+        },
+        "mean_negative_log_likelihood_per_cell": {
+          "minimum": 0,
+          "title": "Mean Negative Log Likelihood Per Cell",
+          "type": "number"
+        }
+      },
+      "required": [
+        "baseline",
+        "mean_log_likelihood_per_count",
+        "mean_negative_log_likelihood_per_cell"
+      ],
+      "title": "BaselineMetric",
+      "type": "object"
+    },
+    "BaselineName": {
+      "description": "Frozen Dev40-B comparator set.",
+      "enum": [
+        "exact_global_gene_frequency",
+        "pseudobulk_negative_binomial",
+        "per_gene_differential_expression",
+        "gsfa_style_sparse_factors",
+        "target_average",
+        "control_only"
+      ],
+      "title": "BaselineName",
+      "type": "string"
+    },
+    "ProgramQualificationStatus": {
+      "description": "Scientific result gate; engineering execution is not a program result.",
+      "enum": [
+        "pass_scientific",
+        "fail_qualification",
+        "engineering_only"
+      ],
+      "title": "ProgramQualificationStatus",
+      "type": "string"
+    },
+    "ProgramSplitEvaluation": {
+      "additionalProperties": false,
+      "description": "One leakage-audited split and every frozen comparator.",
+      "properties": {
+        "baselines": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BaselineMetric"
+          },
+          "title": "Baselines",
+          "type": "array"
+        },
+        "eligible": {
+          "title": "Eligible",
+          "type": "boolean"
+        },
+        "evaluation_units": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evaluation Units",
+          "type": "array"
+        },
+        "fit_units": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fit Units",
+          "type": "array"
+        },
+        "gene_sign_accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gene Sign Accuracy"
+        },
+        "improvement_over_best_baseline": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Improvement Over Best Baseline"
+        },
+        "ineligibility_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ineligibility Reason"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProgramSplitKind"
+        },
+        "model_mean_log_likelihood_per_count": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Mean Log Likelihood Per Count"
+        },
+        "model_mean_negative_log_likelihood_per_cell": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Mean Negative Log Likelihood Per Cell"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "protected_expression_access_contract_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protected Expression Access Contract Id"
+        },
+        "split_id": {
+          "minLength": 1,
+          "title": "Split Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "split_id",
+        "kind",
+        "eligible",
+        "passed",
+        "fit_units",
+        "evaluation_units"
+      ],
+      "title": "ProgramSplitEvaluation",
+      "type": "object"
+    },
+    "ProgramSplitKind": {
+      "description": "Non-interchangeable outer validation splits.",
+      "enum": [
+        "heldout_donor",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_time"
+      ],
+      "title": "ProgramSplitKind",
+      "type": "string"
+    },
+    "ScientificScope": {
+      "additionalProperties": false,
+      "description": "Exact scope that must agree across a result and every supporting claim.",
+      "properties": {
+        "comparison": {
+          "minLength": 1,
+          "title": "Comparison",
+          "type": "string"
+        },
+        "entity_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entity Scope",
+          "type": "array"
+        },
+        "population": {
+          "minLength": 1,
+          "title": "Population",
+          "type": "string"
+        },
+        "sample_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sample Scope",
+          "type": "array"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "time_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Time Scope",
+          "type": "array"
+        }
+      },
+      "required": [
+        "subject",
+        "entity_scope",
+        "sample_scope",
+        "time_scope",
+        "population",
+        "comparison"
+      ],
+      "title": "ScientificScope",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/program-qualification-receipt.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Complete Dev40-B promotion gate.",
+  "properties": {
+    "donor_stability_pass": {
+      "title": "Donor Stability Pass",
+      "type": "boolean"
+    },
+    "external_pathway_concordance_available": {
+      "title": "External Pathway Concordance Available",
+      "type": "boolean"
+    },
+    "external_pathway_concordance_pass": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "External Pathway Concordance Pass"
+    },
+    "gene_sign_calibration_pass": {
+      "title": "Gene Sign Calibration Pass",
+      "type": "boolean"
+    },
+    "heldout_target_performance_pass": {
+      "title": "Heldout Target Performance Pass",
+      "type": "boolean"
+    },
+    "metrics_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "null_inclusion_calibrated": {
+      "title": "Null Inclusion Calibrated",
+      "type": "boolean"
+    },
+    "program_contract_id": {
+      "minLength": 1,
+      "title": "Program Contract Id",
+      "type": "string"
+    },
+    "qualification_protocol_id": {
+      "minLength": 1,
+      "title": "Qualification Protocol Id",
+      "type": "string"
+    },
+    "qualification_receipt_id": {
+      "title": "Qualification Receipt Id",
+      "type": "string"
+    },
+    "qualified_program_definition_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Qualified Program Definition Ids",
+      "type": "array"
+    },
+    "schema_id": {
+      "const": "credo.program_qualification_receipt",
+      "default": "credo.program_qualification_receipt",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scope": {
+      "$ref": "#/$defs/ScientificScope"
+    },
+    "seed_stability_pass": {
+      "title": "Seed Stability Pass",
+      "type": "boolean"
+    },
+    "sister_guide_consistency_pass": {
+      "title": "Sister Guide Consistency Pass",
+      "type": "boolean"
+    },
+    "software_environment_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "split_evaluations": {
+      "items": {
+        "$ref": "#/$defs/ProgramSplitEvaluation"
+      },
+      "title": "Split Evaluations",
+      "type": "array"
+    },
+    "status": {
+      "$ref": "#/$defs/ProgramQualificationStatus"
+    },
+    "training_log_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    }
+  },
+  "required": [
+    "qualification_receipt_id",
+    "program_contract_id",
+    "qualification_protocol_id",
+    "scope",
+    "status",
+    "split_evaluations",
+    "seed_stability_pass",
+    "donor_stability_pass",
+    "null_inclusion_calibrated",
+    "sister_guide_consistency_pass",
+    "heldout_target_performance_pass",
+    "gene_sign_calibration_pass",
+    "external_pathway_concordance_available",
+    "qualified_program_definition_ids",
+    "metrics_artifact",
+    "training_log_artifact",
+    "software_environment_artifact"
+  ],
+  "title": "ProgramQualificationReceipt",
+  "type": "object"
+}

@@ -8,10 +8,11 @@ import pytest
 from pydantic import ValidationError
 from scipy import sparse
 
-from credo_count_sde_v4.canonical import sha256_file
+from credo_count_sde_v4.canonical import contract_id, sha256_file
 from credo_count_sde_v4.compile.distribution_problem import compile_population_rows
 from credo_count_sde_v4.contracts.models import ArtifactRef
 from credo_count_sde_v4.data.prepared_shards import (
+    GuideCatalogBinding,
     PreparedAccess,
     PreparedShard,
     PreparedShardReader,
@@ -34,6 +35,15 @@ def artifact(root: Path, name: str) -> ArtifactRef:
 
 @pytest.fixture
 def prepared(tmp_path):
+    catalog = pd.DataFrame(
+        {
+            "guide_index": [0, 1, 2],
+            "guide_id": ["g0", "g1", "absent"],
+            "target_id": ["target", "control-target", "target"],
+            "is_control": [False, True, False],
+        }
+    )
+    catalog.to_parquet(tmp_path / "catalog.parquet", index=False)
     records = []
     for index, values in enumerate(([[2, 0, 4], [0, 2, 8]], [[3, 1, 0], [1, 3, 2]])):
         matrix = sparse.csr_matrix(np.array(values, dtype=np.uint32))
@@ -62,6 +72,10 @@ def prepared(tmp_path):
         parent_view_sha256="c" * 64,
         amendment_sha256="d" * 64,
         feature_order_sha256="e" * 64,
+        guide_catalog=GuideCatalogBinding(
+            artifact=artifact(tmp_path, "catalog.parquet"),
+            ordered_catalog_sha256=contract_id(catalog.to_dict("records")),
+        ),
         n_features=3,
         task_id="endpoint",
         role="representation_fit",
@@ -120,6 +134,38 @@ def test_empty_rows_are_sparse(prepared):
     root, access = prepared
     batch = PreparedShardReader(root, access).read_rows([])
     assert batch.matrix.shape == (0, 3) and batch.cells.empty
+
+
+def test_metadata_and_catalog_preflight_before_payload_decode(prepared, monkeypatch):
+    import pyarrow.parquet as pq
+
+    root, access = prepared
+
+    def no_decode(*args, **kwargs):
+        pytest.fail("Allocation preflight must reject before decoding parquet payloads")
+
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", no_decode)
+    reader = PreparedShardReader(root, access, max_cached_bytes=1)
+    with pytest.raises(ContractError, match="allocation estimate"):
+        reader.metadata("source", 0)
+    with pytest.raises(ContractError, match="allocation estimate"):
+        reader.guide_catalog()
+
+
+@pytest.mark.parametrize("rows", [(True,), ("0",), (1, 0), (0, 0), (2,), ()])
+def test_row_allowlist_is_strict_and_canonical(prepared, rows):
+    _, access = prepared
+    with pytest.raises(ValidationError):
+        PreparedShard.model_validate({**access.shards[0].model_dump(), "allowed_rows": rows})
+
+
+def test_access_v1_cannot_silently_upgrade_without_biological_binding(prepared):
+    _, access = prepared
+    historical = access.model_dump()
+    historical["schema_version"] = 1
+    historical.pop("guide_catalog")
+    with pytest.raises(ValidationError):
+        PreparedAccess.model_validate(historical)
 
 
 def test_same_size_corruption_rejected_before_decoding(prepared):
@@ -203,11 +249,63 @@ def test_population_index_denominator_and_capacity(prepared):
     root, access = prepared
     reader = PreparedShardReader(root, access)
     with pytest.raises(ContractError, match="complete authorized source"):
-        compile_population_rows(reader, "source", ("g",), np.array([2]))
+        compile_population_rows(reader, "source", ("g0", "g1", "absent"), np.array([2, 0, 0]))
     with pytest.raises(ContractError, match="guide support"):
-        compile_population_rows(reader, "source", ("g0", "g1", "g2"), np.array([1, 3, 0]))
+        compile_population_rows(reader, "source", ("g0", "g1", "absent"), np.array([1, 3, 0]))
     with pytest.raises(ContractError, match="memory budget"):
-        compile_population_rows(reader, "source", ("g0", "g1"), np.array([3, 1]), max_index_bytes=1)
+        compile_population_rows(
+            reader, "source", ("g0", "g1", "absent"), np.array([3, 1, 0]), max_index_bytes=1
+        )
+
+
+def test_crosswired_guide_labels_fail_before_cell_reads(prepared, monkeypatch):
+    root, access = prepared
+    reader = PreparedShardReader(root, access)
+    monkeypatch.setattr(reader, "metadata", lambda *_: pytest.fail("Cell metadata was opened"))
+    with pytest.raises(ContractError, match="authoritative ordered catalog"):
+        compile_population_rows(reader, "source", ("g1", "g0", "absent"), np.array([3, 1, 0]))
+
+
+@pytest.mark.parametrize("column,value", [("target_id", "wrong"), ("is_control", True)])
+def test_crosswired_catalog_mapping_rejected(prepared, column, value):
+    root, access = prepared
+    table = pd.read_parquet(root / "catalog.parquet")
+    table.loc[0, column] = value
+    table.to_parquet(root / "catalog.parquet", index=False)
+    # Even an updated byte artifact cannot silently retain the original semantic binding.
+    payload = access.model_dump()
+    payload["guide_catalog"]["artifact"] = artifact(root, "catalog.parquet").model_dump()
+    reader = PreparedShardReader(root, PreparedAccess.model_validate(payload))
+    with pytest.raises(ContractError, match="catalog binding mismatch"):
+        reader.guide_catalog()
+
+
+def test_catalog_storage_order_is_not_guide_order(prepared):
+    root, access = prepared
+    table = pd.read_parquet(root / "catalog.parquet").iloc[::-1]
+    table.to_parquet(root / "catalog.parquet", index=False)
+    payload = access.model_dump()
+    payload["guide_catalog"]["artifact"] = artifact(root, "catalog.parquet").model_dump()
+    catalog = PreparedShardReader(root, PreparedAccess.model_validate(payload)).guide_catalog()
+    assert catalog.guide_id.tolist() == ["g0", "g1", "absent"]
+
+
+def test_row_restriction_denies_read_and_streams_only_authorized_rows(prepared):
+    root, access = prepared
+    payload = access.model_dump()
+    for shard in payload["shards"]:
+        shard["allowed_rows"] = (1,)
+    restricted = PreparedAccess.model_validate(payload)
+    reader = PreparedShardReader(root, restricted)
+    with pytest.raises(ContractError, match="Unauthorized row"):
+        reader.read_rows([address(0, 0)])
+    batches = list(reader.iterate_rows(batch_size=2))
+    assert sorted(b.cells.cell_id.iloc[0] for _, b in batches) == ["cell1", "cell3"]
+    assert reader.metadata("source", 0).row_in_shard.tolist() == [1]
+    index = compile_population_rows(reader, "source", ("g0", "g1", "absent"), np.array([1, 1, 0]))
+    assert index.coordinates[:, 1].tolist() == [1, 1]
+    assert index.target_ids == ("target", "control-target", "target")
+    assert index.is_control == (False, True, False)
 
 
 @pytest.mark.parametrize(

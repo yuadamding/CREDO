@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -36,7 +37,9 @@ def _close(observed: float, expected: float) -> bool:
     return math.isclose(observed, expected, rel_tol=0.0, abs_tol=1e-12)
 
 
-def _slope_interval(times: np.ndarray, values: np.ndarray) -> tuple[float, float]:
+def _slope_interval(
+    times: np.ndarray[Any, Any], values: np.ndarray[Any, Any]
+) -> tuple[float, float]:
     if len(times) < 3 or not np.all(np.diff(times) > 0):
         raise IntegrityError("G00D memory trace requires at least three increasing timestamps.")
     centered = times - times.mean()

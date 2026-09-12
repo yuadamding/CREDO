@@ -1,0 +1,171 @@
+{
+  "schema_version": 1,
+  "record_type": "local_engineering_validation_not_scientific_qualification",
+  "status": "passed_local_composed_checks_remote_matrix_pending",
+  "timestamp_utc": "2026-09-12T14:30:47.351212+00:00",
+  "base_commit": "789537fef0ec26e2af814867f78642fa9f02cfcd",
+  "source_tree_sha256": "5a93dccefc4c27d53c259e9e71213a4f50b9bc5a5be69d7eacecee6d80fc570a",
+  "validation_input_paths": [
+    "src/credo_count_sde_v4",
+    "tests",
+    "scripts",
+    "pyproject.toml",
+    ".github/workflows/ci.yml"
+  ],
+  "validation_inventory_sha256": "c7a1ec724131732009110b5a7de0c4eca9312529151ab59ad2058d7705d7ac57",
+  "validation_inventory_files": 161,
+  "environment": {
+    "schema_version": 2,
+    "python": {
+      "implementation": "CPython",
+      "version": "3.13.2",
+      "cache_tag": "cpython-313"
+    },
+    "platform": {
+      "system": "Linux",
+      "machine": "x86_64"
+    },
+    "execution_image_digest": null,
+    "packages": {
+      "h5py": "3.14.0",
+      "numpy": "2.2.6",
+      "pandas": "3.0.3",
+      "pyarrow": "21.0.0",
+      "pydantic": "2.12.5",
+      "PyYAML": "6.0.2",
+      "scipy": "1.18.0",
+      "torch": "2.9.1"
+    },
+    "torch": {
+      "version": "2.9.1+cu128",
+      "cuda_runtime": "12.8",
+      "cudnn": 91002
+    }
+  },
+  "tested_commit": null,
+  "commit_binding_note": "Base commit plus corrected source and validation-input hashes; not a claim that base HEAD contains these changes. No correction commit or push was performed.",
+  "validation_inventory_algorithm": "credo canonical contract_id of sorted [{path,sha256}] for git ls-files -- validation_input_paths; working-tree regular-file bytes; docs and this receipt excluded to avoid self-reference.",
+  "review_attachment_sha256": "f708e7cf10afe9979511a23260bffdfa5ab27cc98fa2eefb4428535583061d0a",
+  "frozen_credo_commit": "6f4f57c114606476cb6e93c6d52dc34628173a4d",
+  "preserved_historical_validation_sha256": "f2d494c5d7087a90707c1177099ade917cb4ac408b0122b720bb65a7f5492c0f",
+  "tooling": {
+    "pytest": "8.4.2",
+    "coverage": "7.13.0",
+    "ruff": "0.13.1",
+    "mypy": "2.3.1",
+    "build_setuptools": "84.0.0",
+    "build_wheel": "0.48.0"
+  },
+  "execution": {
+    "device": "cpu",
+    "CUDA_VISIBLE_DEVICES": "",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "python_executable": "/home/yding1995/miniforge3/envs/ml1/bin/python",
+    "PYTHONPATH": "src"
+  },
+  "checks": {
+    "frozen_dependency_audit": "passed",
+    "ruff_format": {
+      "status": "passed",
+      "python_files": 158
+    },
+    "ruff_check": "passed",
+    "mypy": {
+      "status": "passed",
+      "source_files": 99
+    },
+    "generated_schemas": "passed",
+    "documentation_links": "passed",
+    "repository_manifest": "regenerated from staged intended inventory; final publication must include this new receipt and recheck both manifest commands",
+    "full_cpu_suite_attempt1": {
+      "passed": 509,
+      "skipped": 4,
+      "warnings": 1,
+      "elapsed_seconds": 1008.28,
+      "exit_code": 1,
+      "failure": "coverage below unchanged 85 percent threshold; no test failures",
+      "combined_statement_branch_percent": 84.50774405182078,
+      "command": "python -m pytest -q --import-mode=importlib -p no:cacheprovider --cov=credo_count_sde_v4 --cov-report=term-missing --cov-fail-under=85"
+    },
+    "added_boundary_validation": {
+      "module": "tests/unit/test_evidence_framework.py",
+      "passed": 34,
+      "new_cases": 17,
+      "exit_code": 0,
+      "elapsed_seconds": 6.57,
+      "command": "python -m pytest -q -p no:cacheprovider tests/unit/test_evidence_framework.py --cov=credo_count_sde_v4 --cov-append --cov-report=term --cov-fail-under=85",
+      "post_format_repeat": {
+        "passed": 34,
+        "warnings": 0,
+        "elapsed_seconds": 0.83
+      }
+    },
+    "combined_coverage": {
+      "status": "passed",
+      "measurement": "full suite followed by expanded module, same unchanged package source",
+      "percent": 85.14304696258772,
+      "required_percent": 85,
+      "covered_lines": 16750,
+      "statements": 18705,
+      "covered_branches": 3755,
+      "branches": 5378,
+      "branch_only_percent": 69.8214949795463,
+      "final_collected_tests": 530,
+      "distinct_cpu_tests_exercised": 526,
+      "cuda_skips": 4,
+      "single_full_run_after_test_expansion": false
+    },
+    "access_metric_focused": {
+      "passed": 51
+    },
+    "external_adapter": {
+      "passed": 10
+    },
+    "package_build_and_wheel_audit": "passed",
+    "wheel_only_lifecycle": {
+      "status": "passed",
+      "source_import": "wheel installation outside checkout",
+      "environment_note": "Fresh wheel venv uses existing ml1 dependency site-packages, not a fresh dependency resolution",
+      "synthetic_updates": 4,
+      "synthetic_cells": 192,
+      "sealed_id": "ddc5ea6a5c005a6be2bed0fb24a6929666d1e430ffebd751f12aaf6cc4ac2a54",
+      "verification_level": "full",
+      "initial_wheel_sha256": "d73a06c1ba835d32bfacd79f1d6f9d89828cc1dde454c9f9aac770cd5ba3fd50",
+      "final_wheel_sha256": "f87fbab8816a2e06a439e6a9e674207f4cf5869a88488e9f07df5425cd3b19b4",
+      "final_wheel_reload_verified": true
+    }
+  },
+  "real_access_canary": {
+    "receipt_sha256": "be71fface28c1597f9095ef234e6ad3aff51dc126d44495aecf902db4e683242",
+    "receipt_external_path": "../credo_full_cohort_20260912/access_qualification_a2/ACCESS_QUALIFICATION.json",
+    "guide_catalog_size": 26504,
+    "control_guides": 992,
+    "real_shards_read": 5,
+    "unauthorized_query_sources_rejected": 11,
+    "elapsed_seconds": 44.17409206693992,
+    "controller_peak_rss_KiB": 1220944,
+    "protected_endpoint_expression_read": false,
+    "model_fitted": false
+  },
+  "remote_ci": {
+    "status": "not_run_for_correction_tree",
+    "base_workflow_id": 34674172587,
+    "base_matrix_conclusions": {
+      "3.11": "failed_manifest",
+      "3.12": "failed_manifest",
+      "3.13": "failed_manifest",
+      "wheel": "passed"
+    },
+    "correction_pushed": false
+  },
+  "remaining": [
+    "Commit-bound Python 3.11/3.12/3.13 and wheel CI qualification",
+    "Connected first R48 baseline plus independent evaluator",
+    "Fold-fitted count encoder and distributional state integration",
+    "Claim-specific qualification profiles",
+    "Effect-scale discovery calibration with matched factual/null selection",
+    "Condition/branch-aware static program successor",
+    "Worker isolation, measured peak memory/throughput and optimizer-level restart qualification"
+  ]
+}

@@ -1,0 +1,203 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "ScientificScope": {
+      "additionalProperties": false,
+      "description": "Exact scope that must agree across a result and every supporting claim.",
+      "properties": {
+        "comparison": {
+          "minLength": 1,
+          "title": "Comparison",
+          "type": "string"
+        },
+        "entity_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entity Scope",
+          "type": "array"
+        },
+        "population": {
+          "minLength": 1,
+          "title": "Population",
+          "type": "string"
+        },
+        "sample_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sample Scope",
+          "type": "array"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "time_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Time Scope",
+          "type": "array"
+        }
+      },
+      "required": [
+        "subject",
+        "entity_scope",
+        "sample_scope",
+        "time_scope",
+        "population",
+        "comparison"
+      ],
+      "title": "ScientificScope",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/program-uncertainty.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Seed/donor stability and calibrated inclusion uncertainty.",
+  "properties": {
+    "donor_count": {
+      "minimum": 0,
+      "title": "Donor Count",
+      "type": "integer"
+    },
+    "donor_loading_stability_artifact": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "donor_stability_available": {
+      "title": "Donor Stability Available",
+      "type": "boolean"
+    },
+    "inclusion_probability_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "median_donor_loading_correlation": {
+      "anyOf": [
+        {
+          "maximum": 1,
+          "minimum": -1,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Median Donor Loading Correlation"
+    },
+    "median_seed_loading_correlation": {
+      "maximum": 1,
+      "minimum": -1,
+      "title": "Median Seed Loading Correlation",
+      "type": "number"
+    },
+    "null_inclusion_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "null_inclusion_rate": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Null Inclusion Rate",
+      "type": "number"
+    },
+    "program_contract_id": {
+      "minLength": 1,
+      "title": "Program Contract Id",
+      "type": "string"
+    },
+    "schema_id": {
+      "const": "credo.program_uncertainty",
+      "default": "credo.program_uncertainty",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "scope": {
+      "$ref": "#/$defs/ScientificScope"
+    },
+    "seed_count": {
+      "minimum": 3,
+      "title": "Seed Count",
+      "type": "integer"
+    },
+    "seed_loading_stability_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    },
+    "uncertainty_id": {
+      "title": "Uncertainty Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "uncertainty_id",
+    "program_contract_id",
+    "scope",
+    "seed_count",
+    "donor_count",
+    "seed_loading_stability_artifact",
+    "inclusion_probability_artifact",
+    "null_inclusion_artifact",
+    "median_seed_loading_correlation",
+    "donor_stability_available",
+    "null_inclusion_rate"
+  ],
+  "title": "ProgramUncertainty",
+  "type": "object"
+}

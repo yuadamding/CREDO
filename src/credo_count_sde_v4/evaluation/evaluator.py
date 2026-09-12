@@ -85,8 +85,8 @@ def _interaction_advancement_pass(
 
 
 def _series_means(
-    records: tuple[SeriesRecord, ...], row_ids: np.ndarray, latents: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
+    records: tuple[SeriesRecord, ...], row_ids: np.ndarray[Any, Any], latents: np.ndarray[Any, Any]
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     lookup = {int(row): index for index, row in enumerate(row_ids)}
     source = np.asarray(
         [latents[[lookup[row] for row in record.source_rows]].mean(axis=0) for record in records],
@@ -99,12 +99,14 @@ def _series_means(
     return source, terminal
 
 
-def _observed_gene_compositions(records: tuple[SeriesRecord, ...], store: CountStore) -> np.ndarray:
+def _observed_gene_compositions(
+    records: tuple[SeriesRecord, ...], store: CountStore
+) -> np.ndarray[Any, Any]:
     row_ids = np.asarray(
         [row for record in records for row in record.terminal_rows], dtype=np.int64
     )
     batch = store.rows(row_ids).matrix
-    compositions: list[np.ndarray] = []
+    compositions: list[np.ndarray[Any, Any]] = []
     cursor = 0
     for record in records:
         end = cursor + len(record.terminal_rows)
@@ -115,11 +117,13 @@ def _observed_gene_compositions(records: tuple[SeriesRecord, ...], store: CountS
     return np.asarray(compositions, dtype=np.float32)
 
 
-def _rmse(predicted: np.ndarray, terminal: np.ndarray) -> float:
+def _rmse(predicted: np.ndarray[Any, Any], terminal: np.ndarray[Any, Any]) -> float:
     return float(np.sqrt(np.mean(np.square(predicted - terminal))))
 
 
-def _safe_correlation(kind: str, left: np.ndarray, right: np.ndarray) -> float | None:
+def _safe_correlation(
+    kind: str, left: np.ndarray[Any, Any], right: np.ndarray[Any, Any]
+) -> float | None:
     if np.std(left) == 0 or np.std(right) == 0:
         return None
     value = (
@@ -130,10 +134,10 @@ def _safe_correlation(kind: str, left: np.ndarray, right: np.ndarray) -> float |
 
 def _population_metrics(
     frame: pd.DataFrame,
-    terminal: np.ndarray,
-    source: np.ndarray,
-    predictions: dict[str, np.ndarray],
-    mask: np.ndarray,
+    terminal: np.ndarray[Any, Any],
+    source: np.ndarray[Any, Any],
+    predictions: dict[str, np.ndarray[Any, Any]],
+    mask: np.ndarray[Any, Any],
 ) -> dict[str, Any]:
     if not np.any(mask):
         return {"series": 0, "evaluable": False}
@@ -167,8 +171,8 @@ def _population_metrics(
     )
     result["v4_delta_cosine_mean"] = float(np.nanmean(cosine)) if valid_cosine.any() else None
     result["v4_delta_cosine_median"] = float(np.nanmedian(cosine)) if valid_cosine.any() else None
-    observed_residuals: list[np.ndarray] = []
-    predicted_residuals: list[np.ndarray] = []
+    observed_residuals: list[np.ndarray[Any, Any]] = []
+    predicted_residuals: list[np.ndarray[Any, Any]] = []
     for value in np.unique(target):
         local = target == value
         if local.sum() < 2:
@@ -190,14 +194,14 @@ def _population_metrics(
 
 
 def _target_balanced_bootstrap_differences(
-    model: np.ndarray,
-    baseline: np.ndarray,
-    terminal: np.ndarray,
-    target_indices: np.ndarray,
+    model: np.ndarray[Any, Any],
+    baseline: np.ndarray[Any, Any],
+    terminal: np.ndarray[Any, Any],
+    target_indices: np.ndarray[Any, Any],
     *,
     seed: int,
     draws: int,
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     """Bootstrap targets while preserving the target-balanced RMSE estimand."""
 
     unique_targets = np.unique(target_indices)
@@ -224,7 +228,9 @@ def _target_balanced_bootstrap_differences(
     )
 
 
-def _target_balanced_rms(displacement: np.ndarray, target_indices: np.ndarray) -> float:
+def _target_balanced_rms(
+    displacement: np.ndarray[Any, Any], target_indices: np.ndarray[Any, Any]
+) -> float:
     target_mse = [
         float(np.mean(np.square(displacement[target_indices == value])))
         for value in np.unique(target_indices)
@@ -233,8 +239,10 @@ def _target_balanced_rms(displacement: np.ndarray, target_indices: np.ndarray) -
 
 
 def _target_balanced_mean(
-    values: np.ndarray, target_indices: np.ndarray, controls: np.ndarray
-) -> np.ndarray:
+    values: np.ndarray[Any, Any],
+    target_indices: np.ndarray[Any, Any],
+    controls: np.ndarray[Any, Any],
+) -> np.ndarray[Any, Any]:
     targeting = ~controls
     selected_targets = np.unique(target_indices[targeting])
     if not len(selected_targets):
@@ -246,20 +254,20 @@ def _target_balanced_mean(
 
 def _independent_shrunk_target_prediction(
     *,
-    train_terminal: np.ndarray,
-    train_target: np.ndarray,
-    train_control: np.ndarray,
-    evaluation_target: np.ndarray,
-    evaluation_control: np.ndarray,
+    train_terminal: np.ndarray[Any, Any],
+    train_target: np.ndarray[Any, Any],
+    train_control: np.ndarray[Any, Any],
+    evaluation_target: np.ndarray[Any, Any],
+    evaluation_control: np.ndarray[Any, Any],
     maximum_weight: float,
     scalar_ridge: float,
-) -> tuple[np.ndarray, float]:
+) -> tuple[np.ndarray[Any, Any], float]:
     """Materialize M1 independently of whichever family was deployed."""
 
     global_terminal = _target_balanced_mean(train_terminal, train_target, train_control)
     numerators: list[float] = []
     denominators: list[float] = []
-    offsets: dict[int, np.ndarray] = {}
+    offsets: dict[int, np.ndarray[Any, Any]] = {}
     for target_value in np.unique(train_target[~train_control]):
         local = (train_target == target_value) & ~train_control
         local_terminal = train_terminal[local]
@@ -293,12 +301,12 @@ def _independent_shrunk_target_prediction(
 
 def _empirical_bayes_target_prediction(
     *,
-    train_terminal: np.ndarray,
-    train_target: np.ndarray,
-    train_control: np.ndarray,
-    evaluation_target: np.ndarray,
-    evaluation_control: np.ndarray,
-) -> tuple[np.ndarray, dict[int, float]]:
+    train_terminal: np.ndarray[Any, Any],
+    train_target: np.ndarray[Any, Any],
+    train_control: np.ndarray[Any, Any],
+    evaluation_target: np.ndarray[Any, Any],
+    evaluation_control: np.ndarray[Any, Any],
+) -> tuple[np.ndarray[Any, Any], dict[int, float]]:
     """Training-only multiplicity/dispersion-aware target shrinkage."""
 
     global_terminal = _target_balanced_mean(train_terminal, train_target, train_control)
@@ -325,14 +333,14 @@ def _empirical_bayes_target_prediction(
 
 def _linear_source_target_prediction(
     *,
-    train_source: np.ndarray,
-    train_terminal: np.ndarray,
-    train_target: np.ndarray,
-    train_control: np.ndarray,
-    evaluation_source: np.ndarray,
-    evaluation_target: np.ndarray,
+    train_source: np.ndarray[Any, Any],
+    train_terminal: np.ndarray[Any, Any],
+    train_target: np.ndarray[Any, Any],
+    train_control: np.ndarray[Any, Any],
+    evaluation_source: np.ndarray[Any, Any],
+    evaluation_target: np.ndarray[Any, Any],
     ridge: float,
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     """Regularized additive source-plus-target comparator with no interaction."""
 
     primary = ~train_control
@@ -440,8 +448,8 @@ def _evaluate_bound_outer(
     global_terminal = _target_balanced_mean(train_terminal, train_target, train_control)
     target_indices = np.asarray([record.target_index for record in records], dtype=np.int64)
     evaluation_control = np.asarray([record.is_control for record in records], dtype=bool)
-    target_delta_rows: list[np.ndarray] = []
-    target_terminal_rows: list[np.ndarray] = []
+    target_delta_rows: list[np.ndarray[Any, Any]] = []
+    target_terminal_rows: list[np.ndarray[Any, Any]] = []
     for row, target_value in zip(source, target_indices, strict=True):
         local = train_target == target_value
         target_delta_rows.append(
@@ -451,7 +459,7 @@ def _evaluate_bound_outer(
         target_terminal_rows.append(
             train_terminal[local].mean(axis=0) if local.any() else global_terminal
         )
-    predictions: dict[str, np.ndarray] = {
+    predictions: dict[str, np.ndarray[Any, Any]] = {
         "persistence": source,
         "global_delta": source + global_delta,
         "control_delta": source + control_delta,

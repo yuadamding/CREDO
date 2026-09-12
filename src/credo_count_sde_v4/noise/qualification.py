@@ -65,14 +65,16 @@ def _implementation_identity() -> tuple[str, dict[str, str]]:
     return sha256_bytes(canonical_json_bytes(files)), files
 
 
-def _quantile(values: pd.Series | np.ndarray, probability: float) -> float:
+def _quantile(values: pd.Series | np.ndarray[Any, Any], probability: float) -> float:
     array = np.asarray(values, dtype=np.float64)
     if array.size == 0 or not np.isfinite(array).all():
         raise ContractError("T02A quantiles require a nonempty finite sample.")
     return float(np.quantile(array, probability, method="linear"))
 
 
-def _rowwise_correlation(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+def _rowwise_correlation(
+    left: np.ndarray[Any, Any], right: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     left_centered = left - left.mean(axis=1, keepdims=True)
     right_centered = right - right.mean(axis=1, keepdims=True)
     numerator = np.sum(left_centered * right_centered, axis=1)
@@ -89,7 +91,9 @@ def _rowwise_correlation(left: np.ndarray, right: np.ndarray) -> np.ndarray:
     return np.clip(result, -1.0, 1.0)
 
 
-def _top_overlap(left: np.ndarray, right: np.ndarray, *, count: int) -> np.ndarray:
+def _top_overlap(
+    left: np.ndarray[Any, Any], right: np.ndarray[Any, Any], *, count: int
+) -> np.ndarray[Any, Any]:
     left_top = np.argpartition(left, -count, axis=1)[:, -count:]
     right_top = np.argpartition(right, -count, axis=1)[:, -count:]
     overlaps = np.empty(len(left_top), dtype=np.float64)
@@ -303,12 +307,14 @@ def _raw_split_half_metrics(
     return raw, repeat_summary, target_summary, variables
 
 
-def _rank_correlation(left: np.ndarray, right: np.ndarray) -> float:
+def _rank_correlation(left: np.ndarray[Any, Any], right: np.ndarray[Any, Any]) -> float:
     value = float(spearmanr(left, right).statistic)
     return value if math.isfinite(value) else 0.0
 
 
-def _set_overlap(left: np.ndarray, right: np.ndarray, *, k: int, largest: bool) -> float:
+def _set_overlap(
+    left: np.ndarray[Any, Any], right: np.ndarray[Any, Any], *, k: int, largest: bool
+) -> float:
     if largest:
         left_index = np.argpartition(left, -k)[-k:]
         right_index = np.argpartition(right, -k)[-k:]

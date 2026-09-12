@@ -13,8 +13,12 @@ from credo_count_sde_v4.claims import (
 )
 from credo_count_sde_v4.contracts import (
     AbsoluteCountBasis,
+    AbundanceCalibration,
+    AbundanceComponentEvidence,
     AbundanceEntity,
+    AbundanceObservationModel,
     AbundanceProcess,
+    AbundanceResult,
     AbundanceScale,
     ArtifactRef,
     CausalStatus,
@@ -29,6 +33,8 @@ from credo_count_sde_v4.contracts import (
     EvidenceSemanticRole,
     EvidenceTier,
     LineageEvidenceLevel,
+    LineageResultSemantics,
+    ObservedCheckpoint,
     ScientificCapability,
     ScientificClaimKind,
     ScientificClaimRequest,
@@ -38,6 +44,7 @@ from credo_count_sde_v4.contracts import (
     StudyEntityCounts,
     StudyEvidenceContract,
     StudyField,
+    TrajectoryResult,
     derive_dataset_capabilities,
     freeze_study_evidence_contract,
     validate_dataset_capabilities,
@@ -84,9 +91,7 @@ def _descriptor(channel: EvidenceChannel) -> EvidenceDescriptor:
         EvidenceChannel.INTERVENTION: EvidenceTier.E4_ORTHOGONAL_INTERVENTION,
         EvidenceChannel.RESCUE: EvidenceTier.E4_ORTHOGONAL_INTERVENTION,
         EvidenceChannel.EPISTASIS: EvidenceTier.E4_ORTHOGONAL_INTERVENTION,
-        EvidenceChannel.ORTHOGONAL_COMPONENT_ASSAY: (
-            EvidenceTier.E4_ORTHOGONAL_INTERVENTION
-        ),
+        EvidenceChannel.ORTHOGONAL_COMPONENT_ASSAY: (EvidenceTier.E4_ORTHOGONAL_INTERVENTION),
         EvidenceChannel.PROLIFERATION_ASSAY: EvidenceTier.E4_ORTHOGONAL_INTERVENTION,
         EvidenceChannel.DEATH_ASSAY: EvidenceTier.E4_ORTHOGONAL_INTERVENTION,
         EvidenceChannel.MIGRATION_ASSAY: EvidenceTier.E4_ORTHOGONAL_INTERVENTION,
@@ -316,8 +321,7 @@ def _sections(
             result_scope=(_scope() if section == DossierSectionName.BIOLOGICAL_PROGRAMS else None),
             evidence=(
                 (_descriptor(EvidenceChannel.HELDOUT_TARGET),)
-                if section == DossierSectionName.BIOLOGICAL_PROGRAMS
-                and result_id is not None
+                if section == DossierSectionName.BIOLOGICAL_PROGRAMS and result_id is not None
                 else ()
             ),
             artifact=(artifact if section == DossierSectionName.BIOLOGICAL_PROGRAMS else None),
@@ -368,9 +372,7 @@ def test_positive_typed_claim_builds_scope_exact_dossier(tmp_path: Path) -> None
 def test_abundance_scale_entity_and_process_are_orthogonal() -> None:
     capabilities = derive_dataset_capabilities(_rich_study())
     relative = capabilities.abundance_profile(AbundanceScale.RELATIVE_WITHIN_POOL)
-    absolute = capabilities.abundance_profile(
-        AbundanceScale.CAPTURE_CALIBRATED_SAMPLED_COMPARTMENT
-    )
+    absolute = capabilities.abundance_profile(AbundanceScale.CAPTURE_CALIBRATED_SAMPLED_COMPARTMENT)
     assert relative is not None and absolute is not None
     assert AbundanceEntity.CLONE in relative.entities
     assert AbundanceEntity.CLONE in absolute.entities
@@ -408,9 +410,7 @@ def test_barcode_channel_cannot_authorize_proliferation() -> None:
         abundance_process=AbundanceProcess.PROLIFERATION,
         system_boundary="recovered sampled compartment",
     )
-    decision = adjudicate_scientific_claim(
-        study, derive_dataset_capabilities(study), request
-    )
+    decision = adjudicate_scientific_claim(study, derive_dataset_capabilities(study), request)
     assert decision.decision == ClaimDecision.BLOCKED
     assert any("component-specific assay" in reason for reason in decision.blocking_reasons)
 
@@ -447,9 +447,7 @@ def test_evidence_hash_with_unrelated_semantic_role_is_blocked() -> None:
         abundance_process=AbundanceProcess.RELATIVE_SELECTION,
         system_boundary="declared physical pool denominator",
     )
-    decision = adjudicate_scientific_claim(
-        study, derive_dataset_capabilities(study), request
-    )
+    decision = adjudicate_scientific_claim(study, derive_dataset_capabilities(study), request)
     assert decision.decision == ClaimDecision.BLOCKED
     assert any("semantic role" in reason for reason in decision.blocking_reasons)
 
@@ -496,9 +494,7 @@ def test_requested_unicode_prose_is_never_the_permitted_wording() -> None:
         role=EvidenceSemanticRole.PROGRAM_COUNT_PREDICTION,
         requested_free_text="This саuses prоliferation and mediates lineage.",
     )
-    decision = adjudicate_scientific_claim(
-        study, derive_dataset_capabilities(study), request
-    )
+    decision = adjudicate_scientific_claim(study, derive_dataset_capabilities(study), request)
     assert decision.decision == ClaimDecision.PERMITTED
     assert decision.permitted_wording != request.requested_free_text
     assert decision.permitted_wording is not None
@@ -576,3 +572,296 @@ def test_design_gate_ablation_disables_only_dependent_layer(
     capabilities = derive_dataset_capabilities(ablated)
     assert not capabilities.supports(capability)
     assert capabilities.supports(ScientificCapability.PERTURBATION_PROGRAMS)
+
+
+def _abundance_result(scale=AbundanceScale.RELATIVE_WITHIN_POOL):
+    study = _rich_study()
+    capabilities = derive_dataset_capabilities(study)
+    profile = capabilities.abundance_profile(scale)
+    boundary = profile.system_boundary if profile else "declared tissue boundary"
+    relative = scale == AbundanceScale.RELATIVE_WITHIN_POOL
+    calibration = (
+        None
+        if relative
+        else AbundanceCalibration(
+            system_boundary=boundary,
+            calibration_basis="synthetic direct measurements",
+            calibration_timepoints=("0h", "8h"),
+            capture_fraction_model="synthetic capture model",
+            total_count_artifact=_artifact("a", "totals"),
+            uncertainty_artifact=_artifact("b", "uncertainty"),
+        )
+    )
+    component = AbundanceComponentEvidence(
+        process=(
+            AbundanceProcess.RELATIVE_SELECTION
+            if relative
+            else AbundanceProcess.ABSOLUTE_NET_CHANGE
+        ),
+        evidence=(
+            _descriptor(
+                EvidenceChannel.MODEL_FIT if relative else EvidenceChannel.ABSOLUTE_CELL_COUNT
+            ),
+        ),
+        artifact=_artifact("c", "component"),
+    )
+    model = {
+        AbundanceScale.RELATIVE_WITHIN_POOL: (
+            AbundanceObservationModel.DIRICHLET_MULTINOMIAL_RELATIVE
+        ),
+        AbundanceScale.CAPTURE_CALIBRATED_SAMPLED_COMPARTMENT: (
+            AbundanceObservationModel.DIRICHLET_MULTINOMIAL_PLUS_CAPTURE_NB
+        ),
+        AbundanceScale.ABSOLUTE_TISSUE: AbundanceObservationModel.ABSOLUTE_TOTAL_NEGATIVE_BINOMIAL,
+    }[scale]
+    return _identified(
+        AbundanceResult,
+        dict(
+            study_id=study.study_id,
+            capability_assessment_id=capabilities.capability_assessment_id,
+            scope=_scope(),
+            scale=scale,
+            entity=AbundanceEntity.GUIDE,
+            system_boundary=boundary,
+            observation_model=model,
+            components=(component,),
+            calibration=calibration,
+        ),
+        "abundance_result_id",
+    )
+
+
+def _trajectory_result():
+    study = _rich_study()
+    return _identified(
+        TrajectoryResult,
+        dict(
+            study_id=study.study_id,
+            capability_assessment_id=derive_dataset_capabilities(study).capability_assessment_id,
+            scope=_scope(),
+            evidence=(_descriptor(EvidenceChannel.HELDOUT_TIME),),
+            lineage_level=LineageEvidenceLevel.L0_DESTRUCTIVE_SNAPSHOTS,
+            semantics=LineageResultSemantics.POPULATION_TRANSITION_ONLY,
+            observed_checkpoints=(
+                ObservedCheckpoint(checkpoint_id="0h", physical_time=0),
+                ObservedCheckpoint(checkpoint_id="8h", physical_time=8),
+            ),
+            predicted_finite_measures=_artifact("a", "measures"),
+            transition_kernels=_artifact("b", "kernels"),
+            uncertainty=_artifact("c", "trajectory_uncertainty"),
+        ),
+        "trajectory_result_id",
+    )
+
+
+@pytest.mark.parametrize("scale", tuple(AbundanceScale))
+def test_abundance_scale_observation_model_and_identity_roundtrip(scale):
+    result = _abundance_result(scale)
+    assert AbundanceResult.model_validate_json(result.model_dump_json()) == result
+    assert result.identity(id_field="abundance_result_id") == result.abundance_result_id
+    payload = result.model_dump()
+    payload["abundance_result_id"] = "crosswired"
+    with pytest.raises(ValidationError, match="mismatch"):
+        AbundanceResult.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "change,reason",
+    [
+        ({"components": ()}, "processes"),
+        (
+            {"observation_model": AbundanceObservationModel.ABSOLUTE_TOTAL_NEGATIVE_BINOMIAL},
+            "scale",
+        ),
+    ],
+)
+def test_relative_abundance_rejects_missing_process_or_absolute_likelihood(change, reason):
+    with pytest.raises(ValidationError, match=reason):
+        AbundanceResult.model_validate({**_abundance_result().model_dump(), **change})
+
+
+def test_abundance_calibration_and_component_evidence_cannot_be_substituted():
+    absolute = _abundance_result(AbundanceScale.CAPTURE_CALIBRATED_SAMPLED_COMPARTMENT)
+    relative = _abundance_result()
+    with pytest.raises(ValidationError, match="only relative selection"):
+        AbundanceResult.model_validate({**relative.model_dump(), "components": absolute.components})
+    with pytest.raises(ValidationError, match="cannot carry absolute"):
+        AbundanceResult.model_validate(
+            {**relative.model_dump(), "calibration": absolute.calibration}
+        )
+    assert absolute.calibration is not None
+    for calibration in (None, absolute.calibration.model_copy(update={"system_boundary": "other"})):
+        with pytest.raises(ValidationError, match="boundary-matched"):
+            AbundanceResult.model_validate({**absolute.model_dump(), "calibration": calibration})
+    with pytest.raises(ValidationError, match="capture-fraction"):
+        AbundanceResult.model_validate(
+            {
+                **absolute.model_dump(),
+                "calibration": absolute.calibration.model_copy(
+                    update={"capture_fraction_model": None}
+                ),
+            }
+        )
+    for times in (("0h",), ("0h", "0h"), ("8h", "0h")):
+        with pytest.raises(ValidationError, match="unique timepoints"):
+            AbundanceCalibration.model_validate(
+                {**absolute.calibration.model_dump(), "calibration_timepoints": times}
+            )
+    with pytest.raises(ValidationError, match="processes"):
+        AbundanceResult.model_validate(
+            {**relative.model_dump(), "components": relative.components * 2}
+        )
+
+
+@pytest.mark.parametrize(
+    "process,assay",
+    [
+        (AbundanceProcess.PROLIFERATION, EvidenceChannel.PROLIFERATION_ASSAY),
+        (AbundanceProcess.DEATH, EvidenceChannel.DEATH_ASSAY),
+        (AbundanceProcess.MIGRATION_OR_COMPARTMENT_LOSS, EvidenceChannel.MIGRATION_ASSAY),
+    ],
+)
+def test_component_separation_requires_orthogonal_intervention(process, assay):
+    payload = dict(process=process, artifact=_artifact("a", "assay"))
+    direct = _descriptor(EvidenceChannel.ABSOLUTE_CELL_COUNT)
+    for evidence in ((), (direct, direct)):
+        with pytest.raises(ValidationError, match="nonempty and unique"):
+            AbundanceComponentEvidence(**payload, evidence=evidence)
+    with pytest.raises(ValidationError, match="lacks required evidence"):
+        AbundanceComponentEvidence(**payload, evidence=(direct,))
+    with pytest.raises(ValidationError, match="intervention evidence"):
+        AbundanceComponentEvidence(**payload, evidence=(direct, _descriptor(assay)))
+    result = AbundanceComponentEvidence(
+        **payload, evidence=(direct, _descriptor(assay), _descriptor(EvidenceChannel.INTERVENTION))
+    )
+    assert result.process == process
+
+
+@pytest.mark.parametrize("time", [float("nan"), float("inf"), -float("inf")])
+def test_trajectory_rejects_nonfinite_physical_time(time):
+    with pytest.raises(ValidationError, match="finite"):
+        ObservedCheckpoint(checkpoint_id="invalid", physical_time=time)
+
+
+def test_population_trajectory_does_not_claim_lineage_and_roundtrips():
+    result = _trajectory_result()
+    assert TrajectoryResult.model_validate_json(result.model_dump_json()) == result
+    assert not result.individual_cell_paths_claimed
+    payload = result.model_dump()
+    changes = [
+        ({"observed_checkpoints": result.observed_checkpoints[:1]}, "unique observed"),
+        ({"observed_checkpoints": result.observed_checkpoints[:1] * 2}, "unique observed"),
+        ({"observed_checkpoints": tuple(reversed(result.observed_checkpoints))}, "increasing"),
+        (
+            {
+                "observed_checkpoints": (
+                    ObservedCheckpoint(checkpoint_id="Rest", physical_time=8),
+                    ObservedCheckpoint(checkpoint_id="Stim8hr", physical_time=8),
+                    ObservedCheckpoint(checkpoint_id="Stim48hr", physical_time=48),
+                )
+            },
+            "increasing",
+        ),
+        ({"evidence": ()}, "nonempty and unique"),
+        ({"evidence": result.evidence * 2}, "nonempty and unique"),
+        ({"evidence": (_descriptor(EvidenceChannel.ENGINEERING_TEST),)}, "predictive evidence"),
+        ({"semantics": LineageResultSemantics.CLONE_RESOLVED_FATE}, "lineage evidence level"),
+        ({"lineage_evaluation": _artifact("a", "lineage")}, "lineage evaluation"),
+        ({"individual_cell_paths_claimed": True}, "Individual-cell paths"),
+        ({"semigroup_evaluation": _artifact("a", "semigroup")}, "three checkpoints"),
+        ({"trajectory_result_id": "crosswired"}, "mismatch"),
+    ]
+    for change, reason in changes:
+        with pytest.raises(ValidationError, match=reason):
+            TrajectoryResult.model_validate({**payload, **change})
+
+
+@pytest.mark.parametrize(
+    "semantics,level,channel",
+    [
+        (
+            LineageResultSemantics.CLONE_RESOLVED_FATE,
+            LineageEvidenceLevel.L1_STABLE_CLONE_BARCODES,
+            EvidenceChannel.STABLE_CLONE_BARCODE,
+        ),
+        (
+            LineageResultSemantics.ANCESTRAL_TREE,
+            LineageEvidenceLevel.L2_HERITABLE_BARCODES,
+            EvidenceChannel.EVOLVING_BARCODE,
+        ),
+        (
+            LineageResultSemantics.DIRECT_CELL_PATH_VALIDATION,
+            LineageEvidenceLevel.L3_LIVE_OR_PAIRED_CELLS,
+            EvidenceChannel.LIVE_CELL_TRACKING,
+        ),
+    ],
+)
+def test_lineage_claims_require_matching_direct_measurement_and_evaluation(
+    semantics, level, channel
+):
+    payload = dict(_trajectory_result())
+    payload.update(
+        semantics=semantics,
+        lineage_level=level,
+        individual_cell_paths_claimed=semantics
+        == LineageResultSemantics.DIRECT_CELL_PATH_VALIDATION,
+    )
+    with pytest.raises(ValidationError, match="evidence"):
+        TrajectoryResult.model_validate(payload)
+    payload["evidence"] = (_descriptor(channel),)
+    with pytest.raises(ValidationError, match="lineage evaluation"):
+        TrajectoryResult.model_validate(payload)
+    payload["lineage_evaluation"] = _artifact("d", "lineage")
+    result = _identified(TrajectoryResult, payload, "trajectory_result_id")
+    assert result.semantics == semantics
+
+
+def test_dossier_binds_trajectory_and_abundance_to_study_and_calibrated_boundary():
+    study = _rich_study()
+    trajectory = _trajectory_result()
+    abundance = _abundance_result(AbundanceScale.CAPTURE_CALIBRATED_SAMPLED_COMPARTMENT)
+    sections = tuple(
+        DossierSection(
+            section=name,
+            status=DossierSectionStatus.NOT_RUN,
+            interpretation="No qualified program claimed.",
+        )
+        for name in DossierSectionName
+    )
+    kwargs = dict(
+        study=study,
+        perturbation_id="test",
+        sections=sections,
+        claim_requests=(),
+        trajectory=trajectory,
+        abundance=abundance,
+    )
+    dossier = assemble_perturbation_dossier(**kwargs)
+    assert dossier.trajectory == trajectory and dossier.abundance == abundance
+    for key, result, id_field in (
+        ("trajectory", trajectory, "trajectory_result_id"),
+        ("abundance", abundance, "abundance_result_id"),
+    ):
+        for field, reason in (
+            ("study_id", "another study"),
+            ("capability_assessment_id", "another capability"),
+        ):
+            bad = _identified(type(result), {**dict(result), field: "other"}, id_field)
+            with pytest.raises(ValidationError, match=reason):
+                assemble_perturbation_dossier(**{**kwargs, key: bad})
+    assert abundance.calibration is not None
+    bad = _identified(
+        AbundanceResult,
+        {
+            **dict(abundance),
+            "system_boundary": "outside",
+            "calibration": abundance.calibration.model_copy(update={"system_boundary": "outside"}),
+        },
+        "abundance_result_id",
+    )
+    with pytest.raises(ValidationError, match="calibrated system boundary"):
+        assemble_perturbation_dossier(**{**kwargs, "abundance": bad})
+    with pytest.raises(ValidationError, match="scale/entity"):
+        assemble_perturbation_dossier(
+            **{**kwargs, "abundance": _abundance_result(AbundanceScale.ABSOLUTE_TISSUE)}
+        )

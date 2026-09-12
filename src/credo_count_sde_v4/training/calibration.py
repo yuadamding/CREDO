@@ -103,7 +103,7 @@ def optimizer_fingerprint(config: Any) -> str:
 
 def _prepared_problem(
     config_path: Path,
-) -> tuple[Any, Any, SemanticStudySnapshot, dict[str, np.ndarray]]:
+) -> tuple[Any, Any, SemanticStudySnapshot, dict[str, np.ndarray[Any, Any]]]:
     from ..compile.compiler import _lookup_means
 
     config = load_config(config_path)
@@ -138,7 +138,7 @@ def _prepared_problem(
     return config, prepared, snapshot, arrays
 
 
-def _nonidentity_permutation(size: int, generator: np.random.Generator) -> np.ndarray:
+def _nonidentity_permutation(size: int, generator: np.random.Generator) -> np.ndarray[Any, Any]:
     if size <= 1:
         return np.arange(size)
     identity = np.arange(size)
@@ -150,8 +150,8 @@ def _nonidentity_permutation(size: int, generator: np.random.Generator) -> np.nd
 
 
 def _global_target_main_null(
-    arrays: dict[str, np.ndarray], seed: int
-) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    arrays: dict[str, np.ndarray[Any, Any]], seed: int
+) -> tuple[dict[str, np.ndarray[Any, Any]], dict[str, Any]]:
     """Permute terminal target blocks within equal-multiplicity strata."""
 
     result = {name: value.copy() for name, value in arrays.items()}
@@ -201,8 +201,8 @@ def _global_target_main_null(
 
 
 def _conditional_interaction_null(
-    arrays: dict[str, np.ndarray], seed: int
-) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    arrays: dict[str, np.ndarray[Any, Any]], seed: int
+) -> tuple[dict[str, np.ndarray[Any, Any]], dict[str, Any]]:
     """Permute guide source states within target while retaining target means."""
 
     result = {name: value.copy() for name, value in arrays.items()}
@@ -210,9 +210,7 @@ def _conditional_interaction_null(
     target = arrays["target_index"].astype(np.int64, copy=False)
     control = arrays["is_control"].astype(bool, copy=False)
     mapping: list[dict[str, Any]] = []
-    for target_value, is_control in sorted(
-        set(zip(target.tolist(), control.tolist(), strict=True))
-    ):
+    for target_value, is_control in sorted(set(zip(list(target), list(control), strict=True))):
         local = np.where((target == target_value) & (control == is_control))[0]
         permutation = _nonidentity_permutation(len(local), generator)
         result["source_z"][local] = arrays["source_z"][local[permutation]]
@@ -228,8 +226,8 @@ def _conditional_interaction_null(
 
 
 def _null_problem(
-    arrays: dict[str, np.ndarray], family: NullFamily, seed: int
-) -> tuple[dict[str, np.ndarray], str]:
+    arrays: dict[str, np.ndarray[Any, Any]], family: NullFamily, seed: int
+) -> tuple[dict[str, np.ndarray[Any, Any]], str]:
     if family == "global_target_main":
         result, mapping = _global_target_main_null(arrays, seed)
     elif family == "conditional_interaction":
@@ -246,7 +244,7 @@ def _null_problem(
 
 
 def _fit_one_null(
-    arrays: dict[str, np.ndarray],
+    arrays: dict[str, np.ndarray[Any, Any]],
     config: Any,
     *,
     family: NullFamily,

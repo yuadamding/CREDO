@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import torch
@@ -25,9 +26,9 @@ DEFAULT_MAX_DEVICE_BYTES = 30 * 1024**3
 class CompactSampledRows:
     """Stable row multiplicities replacing duplicate source reads."""
 
-    row_ids: np.ndarray
-    multiplicities: np.ndarray
-    inverse_probability_weights: np.ndarray
+    row_ids: np.ndarray[Any, Any]
+    multiplicities: np.ndarray[Any, Any]
+    inverse_probability_weights: np.ndarray[Any, Any]
 
 
 @dataclass(frozen=True)
@@ -78,7 +79,7 @@ class CudaResidentCompactReduction:
     output: torch.Tensor
     maximum_device_bytes: int
 
-    def accumulate(self, *, seed: int) -> np.ndarray:
+    def accumulate(self, *, seed: int) -> np.ndarray[Any, Any]:
         """Run one restart-exact CUDA-native thinning and integer reduction."""
 
         generator = torch.Generator(device=self.device)
@@ -97,8 +98,8 @@ class CudaResidentCompactReduction:
 
 
 def compact_sampled_rows(
-    row_ids: np.ndarray,
-    inverse_probability_weights: np.ndarray,
+    row_ids: np.ndarray[Any, Any],
+    inverse_probability_weights: np.ndarray[Any, Any],
 ) -> CompactSampledRows:
     """Collapse repeated draws while retaining exact integer draw mass."""
 
@@ -129,9 +130,9 @@ def compact_sampled_rows(
 
 def _validate_inputs(
     matrix: sparse.csr_matrix,
-    checkpoint_codes: np.ndarray,
+    checkpoint_codes: np.ndarray[Any, Any],
     compact: CompactSampledRows,
-) -> tuple[sparse.csr_matrix, np.ndarray]:
+) -> tuple[sparse.csr_matrix, np.ndarray[Any, Any]]:
     canonical = matrix.copy().tocsr()
     canonical.sum_duplicates()
     canonical.sort_indices()
@@ -155,7 +156,7 @@ def _thinned_blocks(
     *,
     seed: int,
     row_block_size: int,
-) -> Iterator[tuple[np.ndarray, np.ndarray, np.ndarray, str]]:
+) -> Iterator[tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any], str]]:
     rng = np.random.Generator(np.random.PCG64DXSM(seed))
     digest = hashlib.sha256()
     for row_start in range(0, matrix.shape[0], row_block_size):
@@ -180,12 +181,12 @@ def _thinned_blocks(
 
 def accumulate_checkpoint_counts_cpu_compact(
     matrix: sparse.csr_matrix,
-    checkpoint_codes: np.ndarray,
+    checkpoint_codes: np.ndarray[Any, Any],
     compact: CompactSampledRows,
     *,
     seed: int,
     row_block_size: int = 4096,
-) -> tuple[np.ndarray, str]:
+) -> tuple[np.ndarray[Any, Any], str]:
     """Reference implementation for CUDA equivalence tests."""
 
     canonical, checkpoints = _validate_inputs(matrix, checkpoint_codes, compact)
@@ -203,14 +204,14 @@ def accumulate_checkpoint_counts_cpu_compact(
 
 def accumulate_checkpoint_counts_cuda(
     matrix: sparse.csr_matrix,
-    checkpoint_codes: np.ndarray,
+    checkpoint_codes: np.ndarray[Any, Any],
     compact: CompactSampledRows,
     *,
     seed: int,
     device: str | torch.device = "cuda",
     maximum_device_bytes: int = DEFAULT_MAX_DEVICE_BYTES,
     row_block_size: int = 4096,
-) -> tuple[np.ndarray, CudaAccumulationReceipt]:
+) -> tuple[np.ndarray[Any, Any], CudaAccumulationReceipt]:
     """Reduce compact thinned counts on CUDA under a new RNG-stream contract."""
 
     selected = torch.device(device)
@@ -224,9 +225,7 @@ def accumulate_checkpoint_counts_cuda(
         raise RuntimeError("G00C CUDA ceiling must retain physical-device headroom.")
 
     torch.cuda.reset_peak_memory_stats(selected)
-    output = torch.zeros(
-        3 * canonical.shape[1], dtype=torch.int64, device=selected
-    )
+    output = torch.zeros(3 * canonical.shape[1], dtype=torch.int64, device=selected)
     thinning_sha256 = hashlib.sha256().hexdigest()
     for local_rows, features, thinned, digest_sha256 in _thinned_blocks(
         canonical, compact, seed=seed, row_block_size=row_block_size
@@ -241,9 +240,7 @@ def accumulate_checkpoint_counts_cuda(
         for start in range(0, len(flat), chunk_items):
             end = min(start + chunk_items, len(flat))
             index = torch.as_tensor(flat[start:end], dtype=torch.int64, device=selected)
-            values = torch.as_tensor(
-                contributions[start:end], dtype=torch.int64, device=selected
-            )
+            values = torch.as_tensor(contributions[start:end], dtype=torch.int64, device=selected)
             output.index_add_(0, index, values)
             del index, values
         if torch.cuda.max_memory_allocated(selected) > maximum_device_bytes:
@@ -269,14 +266,14 @@ def accumulate_checkpoint_counts_cuda(
 
 def accumulate_checkpoint_counts_cuda_dev37(
     matrix: sparse.csr_matrix,
-    checkpoint_codes: np.ndarray,
-    inverse_probability_weights: np.ndarray,
+    checkpoint_codes: np.ndarray[Any, Any],
+    inverse_probability_weights: np.ndarray[Any, Any],
     *,
     seed: int,
     device: str | torch.device = "cuda",
     maximum_device_bytes: int = DEFAULT_MAX_DEVICE_BYTES,
     row_block_size: int = 4096,
-) -> tuple[np.ndarray, Dev37CudaAccumulationReceipt]:
+) -> tuple[np.ndarray[Any, Any], Dev37CudaAccumulationReceipt]:
     """Preserve Dev37 PCG64DXSM variate order and offload only int64 reduction."""
 
     selected = torch.device(device)
@@ -322,12 +319,11 @@ def accumulate_checkpoint_counts_cuda_dev37(
             np.arange(row_start, row_end, dtype=np.int64),
             np.diff(canonical.indptr[row_start : row_end + 1]),
         )
-        flat = (
-            checkpoints[local_rows] * canonical.shape[1]
-            + canonical.indices[data_start:data_end].astype(np.int64, copy=False)
-        )
-        contributions = (
-            thinned_integer[data_start:data_end] * integer_weights[local_rows].astype(np.int64)
+        flat = checkpoints[local_rows] * canonical.shape[1] + canonical.indices[
+            data_start:data_end
+        ].astype(np.int64, copy=False)
+        contributions = thinned_integer[data_start:data_end] * integer_weights[local_rows].astype(
+            np.int64
         )
         index = torch.as_tensor(flat, dtype=torch.int64, device=selected)
         values = torch.as_tensor(contributions, dtype=torch.int64, device=selected)
@@ -353,7 +349,7 @@ def accumulate_checkpoint_counts_cuda_dev37(
 
 def prepare_resident_checkpoint_counts_cuda(
     matrix: sparse.csr_matrix,
-    checkpoint_codes: np.ndarray,
+    checkpoint_codes: np.ndarray[Any, Any],
     compact: CompactSampledRows,
     *,
     device: str | torch.device = "cuda",

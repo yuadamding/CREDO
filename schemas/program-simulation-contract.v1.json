@@ -1,0 +1,139 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/program-simulation-contract.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Fixed-truth count simulation for positive, null, and ablation tests.",
+  "properties": {
+    "cells": {
+      "minimum": 100,
+      "title": "Cells",
+      "type": "integer"
+    },
+    "checkpoints": {
+      "minimum": 2,
+      "title": "Checkpoints",
+      "type": "integer"
+    },
+    "controls": {
+      "minimum": 2,
+      "title": "Controls",
+      "type": "integer"
+    },
+    "donors": {
+      "minimum": 3,
+      "title": "Donors",
+      "type": "integer"
+    },
+    "genes": {
+      "minimum": 20,
+      "title": "Genes",
+      "type": "integer"
+    },
+    "guides_per_target": {
+      "minimum": 2,
+      "title": "Guides Per Target",
+      "type": "integer"
+    },
+    "null_program_indices": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Null Program Indices",
+      "type": "array"
+    },
+    "programs": {
+      "minimum": 2,
+      "title": "Programs",
+      "type": "integer"
+    },
+    "schema_id": {
+      "const": "credo.program_simulation_contract",
+      "default": "credo.program_simulation_contract",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "seed": {
+      "minimum": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "simulation_contract_id": {
+      "title": "Simulation Contract Id",
+      "type": "string"
+    },
+    "targets": {
+      "minimum": 3,
+      "title": "Targets",
+      "type": "integer"
+    },
+    "truth_artifact": {
+      "$ref": "#/$defs/ArtifactRef"
+    }
+  },
+  "required": [
+    "simulation_contract_id",
+    "seed",
+    "cells",
+    "genes",
+    "programs",
+    "donors",
+    "checkpoints",
+    "targets",
+    "guides_per_target",
+    "controls",
+    "null_program_indices",
+    "truth_artifact"
+  ],
+  "title": "ProgramSimulationContract",
+  "type": "object"
+}

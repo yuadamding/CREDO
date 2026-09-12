@@ -132,7 +132,7 @@ def _full_tensors(catalog: pd.DataFrame) -> dict[str, torch.Tensor]:
     }
 
 
-def _active_mask(catalog: pd.DataFrame, folds: tuple[int, ...]) -> np.ndarray:
+def _active_mask(catalog: pd.DataFrame, folds: tuple[int, ...]) -> np.ndarray[Any, Any]:
     return _ordered(catalog).held_out_fold.isin(folds).to_numpy(dtype=bool)
 
 
@@ -228,7 +228,7 @@ def _fit_and_select(catalog: pd.DataFrame) -> tuple[int, pd.DataFrame]:
 def _direct_reference(
     catalog: pd.DataFrame,
     folds: tuple[int, ...],
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     """Independently solve the conditional physical-pool objective with SciPy."""
 
     ordered = _ordered(catalog)
@@ -240,7 +240,7 @@ def _direct_reference(
     target_count = int(target.max()) + 1
     active_targets = np.asarray(sorted(set(target[mask]) - {0}), dtype=np.int64)
 
-    def objective(values: np.ndarray) -> tuple[float, np.ndarray]:
+    def objective(values: np.ndarray[Any, Any]) -> tuple[float, np.ndarray[Any, Any]]:
         raw = np.zeros(target_count, dtype=np.float64)
         raw[active_targets] = values
         logits = np.log(source) + raw[target]
@@ -266,9 +266,9 @@ def _direct_reference(
         score_sum = float(weighted_score.sum())
         logits_score = -probability * score_sum
         logits_score[mask] += weighted_score
-        target_gradient = np.bincount(target, weights=-logits_score, minlength=target_count)[
-            active_targets
-        ]
+        target_gradient: np.ndarray[Any, Any] = np.bincount(
+            target, weights=-logits_score, minlength=target_count
+        )[active_targets]
         target_gradient = target_gradient / total + _RIDGE * values / len(active_targets)
         loss = -log_probability / total + 0.5 * _RIDGE * float(np.mean(np.square(values)))
         return float(loss), target_gradient
@@ -287,7 +287,7 @@ def _direct_reference(
     return effects
 
 
-def _probabilities(catalog: pd.DataFrame, effects: np.ndarray) -> np.ndarray:
+def _probabilities(catalog: pd.DataFrame, effects: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
     ordered = _ordered(catalog)
     logits = np.log(ordered.source_count.to_numpy(dtype=np.float64) + _SOURCE_SMOOTHING)
     logits += effects[ordered.target_index.to_numpy(dtype=np.int64)]
@@ -295,12 +295,12 @@ def _probabilities(catalog: pd.DataFrame, effects: np.ndarray) -> np.ndarray:
     return probability / probability.sum()
 
 
-def _production_probabilities(model: CountSDEModel, catalog: pd.DataFrame) -> np.ndarray:
+def _production_probabilities(model: CountSDEModel, catalog: pd.DataFrame) -> np.ndarray[Any, Any]:
     with torch.no_grad():
         return _full_probabilities(model, catalog).numpy()
 
 
-def _dm_nll_from_alpha(counts: np.ndarray, alpha: np.ndarray) -> float:
+def _dm_nll_from_alpha(counts: np.ndarray[Any, Any], alpha: np.ndarray[Any, Any]) -> float:
     counts64 = np.asarray(counts, dtype=np.float64)
     alpha64 = np.asarray(alpha, dtype=np.float64)
     total = float(counts64.sum())
@@ -315,7 +315,9 @@ def _dm_nll_from_alpha(counts: np.ndarray, alpha: np.ndarray) -> float:
     return float(-value / total)
 
 
-def _score(catalog: pd.DataFrame, folds: tuple[int, ...], probability: np.ndarray) -> float:
+def _score(
+    catalog: pd.DataFrame, folds: tuple[int, ...], probability: np.ndarray[Any, Any]
+) -> float:
     ordered = _ordered(catalog)
     mask = ordered.held_out_fold.isin(folds).to_numpy(dtype=bool)
     return _dm_nll_from_alpha(

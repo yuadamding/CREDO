@@ -11,7 +11,7 @@ from __future__ import annotations
 import copy
 from collections import Counter, defaultdict
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal, cast
 
 import numpy as np
 import torch
@@ -31,7 +31,7 @@ def _labels(values: Sequence[str], size: int, name: str) -> tuple[str, ...]:
     return result
 
 
-def _real(values: np.ndarray, name: str) -> np.ndarray:
+def _real(values: np.ndarray[Any, Any], name: str) -> np.ndarray[Any, Any]:
     array = np.asarray(values)
     if not (np.issubdtype(array.dtype, np.integer) or np.issubdtype(array.dtype, np.floating)):
         raise ContractError(f"{name} requires real, non-boolean numbers.")
@@ -41,7 +41,7 @@ def _real(values: np.ndarray, name: str) -> np.ndarray:
     return result
 
 
-def _normalized_weights(values: np.ndarray, size: int) -> np.ndarray:
+def _normalized_weights(values: np.ndarray[Any, Any], size: int) -> np.ndarray[Any, Any]:
     weights = _real(values, "weights")
     if weights.shape != (size,) or np.any(weights < 0) or not np.any(weights > 0):
         raise ContractError("Weights must align, be nonnegative and have positive total weight.")
@@ -65,7 +65,7 @@ def _seed_ids(values: Sequence[int], name: str) -> tuple[int, ...]:
 
 def strict_seed_aggregate(
     seed_ids: Sequence[int], values: Sequence[float | None], *, expected_seeds: Sequence[int]
-) -> dict:
+) -> dict[str, Any]:
     """Require every prespecified seed to be present and finite for any summary.
 
     Missing, None, NaN and infinite scores make mean/std/min/max all None. The
@@ -124,9 +124,9 @@ def hierarchical_cell_weights(
     target_ids: Sequence[str],
     guide_ids: Sequence[str],
     *,
-    is_control: np.ndarray | None = None,
+    is_control: np.ndarray[Any, Any] | None = None,
     role: Literal["targeting", "controls"] = "targeting",
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     """Weights equal donor, checkpoint, target, guide, then cell; sum one.
 
     Only the chosen role receives nonzero weights. Controls are a separate
@@ -182,8 +182,8 @@ def hierarchical_cell_weights(
 
 
 def score_matched_composition(
-    counts: sparse.csr_matrix, weights: np.ndarray, *, uniform_mixture: float = 1e-8
-) -> np.ndarray:
+    counts: sparse.csr_matrix, weights: np.ndarray[Any, Any], *, uniform_mixture: float = 1e-8
+) -> np.ndarray[Any, Any]:
     """Weighted mean cell RNA compositions, with fixed uniform full-gene support.
 
     This is not UMI-pooled gene frequency. Positive-weight zero-depth rows make
@@ -212,7 +212,7 @@ def score_matched_composition(
     return probability / probability.sum()
 
 
-def _composition(values: np.ndarray, features: int | None = None) -> np.ndarray:
+def _composition(values: np.ndarray[Any, Any], features: int | None = None) -> np.ndarray[Any, Any]:
     probability = _real(values, "composition")
     if (
         probability.ndim != 1
@@ -228,10 +228,10 @@ def _composition(values: np.ndarray, features: int | None = None) -> np.ndarray:
 def smoothed_reference_delta_components(
     first_counts: sparse.csr_matrix,
     heldback_counts: sparse.csr_matrix,
-    prior: np.ndarray,
+    prior: np.ndarray[Any, Any],
     *,
     prior_total_umi: float = 64.0,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray[Any, Any]]:
     """Exact missing-A/detected-A contributions to CE(smoothed A)-CE(prior).
 
     Outputs are per B UMI. Missing-A contribution is its B mass fraction times
@@ -317,9 +317,14 @@ class CountCompositionModel(nn.Module):
     the same frozen conditional-multinomial observation treatment to every model.
     """
 
+    base_log_composition: Tensor
+    force_latent_ablation: Tensor
+    encoder: nn.Module
+    decoder: nn.Module
+
     def __init__(
         self,
-        base_composition: np.ndarray,
+        base_composition: np.ndarray[Any, Any],
         *,
         family: Literal["M0", "M1", "M2"] = "M0",
         latent_dim: int = 8,
@@ -365,7 +370,7 @@ class CountCompositionModel(nn.Module):
                 nn.GELU(),
                 nn.Linear(self.hidden_dim, self.features, bias=False),
             )
-            nn.init.zeros_(self.decoder[-1].weight)
+            nn.init.zeros_(cast(nn.Linear, self.decoder[-1]).weight)
 
     def _count_input(self, counts: Tensor) -> Tensor:
         if (
@@ -426,7 +431,7 @@ class CountCompositionModel(nn.Module):
     def intercept_probabilities(self) -> Tensor:
         return torch.softmax(self.base_log_composition + self.intercept_offset, dim=-1)
 
-    def optimizer_parameter_groups(self, weight_decay: float = 1e-4) -> list[dict]:
+    def optimizer_parameter_groups(self, weight_decay: float = 1e-4) -> list[dict[str, Any]]:
         """AdamW-style groups; the common intercept is never weight-decayed."""
         if (
             isinstance(weight_decay, bool)
@@ -459,7 +464,7 @@ class CountCompositionModel(nn.Module):
         model.eval()
         return model
 
-    def configuration(self) -> dict:
+    def configuration(self) -> dict[str, Any]:
         """Pure metadata; enclosing persisted model/receipt must hash its bytes."""
         return {
             "schema_version": 1,

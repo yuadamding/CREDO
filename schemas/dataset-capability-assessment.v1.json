@@ -1,14 +1,74 @@
 {
   "$defs": {
-    "AbundanceSemantics": {
-      "description": "Observation gauge attached to every abundance result.",
+    "AbundanceCapabilityProfile": {
+      "additionalProperties": false,
+      "description": "One structurally supported scale with its entity/process resolution.",
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/AbundanceEntity"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "processes": {
+          "items": {
+            "$ref": "#/$defs/AbundanceProcess"
+          },
+          "title": "Processes",
+          "type": "array"
+        },
+        "scale": {
+          "$ref": "#/$defs/AbundanceScale"
+        },
+        "system_boundary": {
+          "minLength": 1,
+          "title": "System Boundary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scale",
+        "entities",
+        "processes",
+        "system_boundary"
+      ],
+      "title": "AbundanceCapabilityProfile",
+      "type": "object"
+    },
+    "AbundanceEntity": {
+      "description": "Biological entity whose abundance is estimated.",
+      "enum": [
+        "guide",
+        "target",
+        "perturbation",
+        "clone",
+        "cell_state",
+        "clone_state"
+      ],
+      "title": "AbundanceEntity",
+      "type": "string"
+    },
+    "AbundanceProcess": {
+      "description": "Process identified by the observation and component evidence.",
+      "enum": [
+        "relative_selection",
+        "absolute_net_change",
+        "proliferation",
+        "death",
+        "migration_or_compartment_loss"
+      ],
+      "title": "AbundanceProcess",
+      "type": "string"
+    },
+    "AbundanceScale": {
+      "description": "Measurement scale, independent of the entity being counted.",
       "enum": [
         "relative_within_pool",
-        "capture_calibrated_cells",
-        "absolute_tissue_cells",
-        "clone_resolved_abundance"
+        "capture_calibrated_sampled_compartment",
+        "absolute_tissue"
       ],
-      "title": "AbundanceSemantics",
+      "title": "AbundanceScale",
       "type": "string"
     },
     "CapabilityDecision": {
@@ -73,7 +133,9 @@
         "supports_strict_heldout_time",
         "supports_relative_abundance",
         "supports_absolute_abundance",
-        "supports_ecology",
+        "supports_physical_context_association",
+        "supports_ecological_counterfactual",
+        "supports_ecological_intervention",
         "supports_clone_lineage",
         "supports_ancestral_lineage",
         "supports_direct_cell_path"
@@ -82,7 +144,7 @@
       "type": "string"
     },
     "StudyField": {
-      "description": "Fields that may unlock a scientific result layer.",
+      "description": "Physically observed fields that may unlock a scientific result layer.",
       "enum": [
         "biological_sample_id",
         "physical_pool_id",
@@ -93,6 +155,7 @@
         "guide_id",
         "target_id",
         "cell_id",
+        "cell_state",
         "clone_id",
         "lineage_parent_id",
         "live_cell_track_id",
@@ -114,8 +177,15 @@
   "$id": "https://credo.local/schemas/dataset-capability-assessment.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Content-addressed, fail-closed capability assessment for one study.",
+  "description": "Content-addressed, fail-closed structural assessment for one study.",
   "properties": {
+    "abundance_profiles": {
+      "items": {
+        "$ref": "#/$defs/AbundanceCapabilityProfile"
+      },
+      "title": "Abundance Profiles",
+      "type": "array"
+    },
     "capability_assessment_id": {
       "title": "Capability Assessment Id",
       "type": "string"
@@ -158,20 +228,13 @@
       "minLength": 1,
       "title": "Study Contract Id",
       "type": "string"
-    },
-    "supported_abundance_semantics": {
-      "items": {
-        "$ref": "#/$defs/AbundanceSemantics"
-      },
-      "title": "Supported Abundance Semantics",
-      "type": "array"
     }
   },
   "required": [
     "capability_assessment_id",
     "study_contract_id",
     "decisions",
-    "supported_abundance_semantics",
+    "abundance_profiles",
     "maximum_lineage_level"
   ],
   "title": "DatasetCapabilityAssessment",

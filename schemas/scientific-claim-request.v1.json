@@ -1,43 +1,289 @@
 {
   "$defs": {
-    "AbundanceSemantics": {
-      "description": "Observation gauge attached to every abundance result.",
+    "AbundanceEntity": {
+      "description": "Biological entity whose abundance is estimated.",
       "enum": [
-        "relative_within_pool",
-        "capture_calibrated_cells",
-        "absolute_tissue_cells",
-        "clone_resolved_abundance"
+        "guide",
+        "target",
+        "perturbation",
+        "clone",
+        "cell_state",
+        "clone_state"
       ],
-      "title": "AbundanceSemantics",
+      "title": "AbundanceEntity",
       "type": "string"
     },
-    "EvidenceSupport": {
-      "description": "Typed evidence channels that justify an assigned tier.",
+    "AbundanceProcess": {
+      "description": "Process identified by the observation and component evidence.",
+      "enum": [
+        "relative_selection",
+        "absolute_net_change",
+        "proliferation",
+        "death",
+        "migration_or_compartment_loss"
+      ],
+      "title": "AbundanceProcess",
+      "type": "string"
+    },
+    "AbundanceScale": {
+      "description": "Measurement scale, independent of the entity being counted.",
+      "enum": [
+        "relative_within_pool",
+        "capture_calibrated_sampled_compartment",
+        "absolute_tissue"
+      ],
+      "title": "AbundanceScale",
+      "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "CausalStatus": {
+      "description": "Claim status fixed independently of prose.",
+      "enum": [
+        "predictive_association",
+        "model_attribution",
+        "causal_under_intervention"
+      ],
+      "title": "CausalStatus",
+      "type": "string"
+    },
+    "EffectDirection": {
+      "description": "Direction of one atomic estimand.",
+      "enum": [
+        "increase",
+        "decrease",
+        "mixed",
+        "null_compatible"
+      ],
+      "title": "EffectDirection",
+      "type": "string"
+    },
+    "EvidenceChannel": {
+      "description": "What was measured or withheld; channels are claim-specific.",
       "enum": [
         "engineering_test",
         "model_fit",
-        "held_out_donor",
-        "held_out_guide",
-        "held_out_target",
-        "held_out_time",
+        "heldout_donor",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_time",
         "independent_cohort",
-        "intervention",
-        "rescue",
-        "epistasis",
-        "orthogonal_plasticity_assay",
         "absolute_cell_count",
+        "stable_clone_barcode",
+        "evolving_barcode",
+        "live_cell_tracking",
+        "orthogonal_component_assay",
         "proliferation_assay",
         "death_assay",
         "migration_assay",
-        "clone_barcode",
-        "ancestral_barcode",
-        "live_imaging"
+        "intervention",
+        "rescue",
+        "epistasis",
+        "spatial_colocalization"
       ],
-      "title": "EvidenceSupport",
+      "title": "EvidenceChannel",
+      "type": "string"
+    },
+    "EvidenceDescriptor": {
+      "additionalProperties": false,
+      "description": "Independent evidence axes; no claim is authorized from tier alone.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/EvidenceChannel"
+        },
+        "independence": {
+          "$ref": "#/$defs/EvidenceIndependence"
+        },
+        "multiplicity_family": {
+          "minLength": 1,
+          "title": "Multiplicity Family",
+          "type": "string"
+        },
+        "prospective_or_exposed_status": {
+          "$ref": "#/$defs/EvidenceExposureStatus"
+        },
+        "tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "unit_of_replication": {
+          "minLength": 1,
+          "title": "Unit Of Replication",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tier",
+        "channel",
+        "independence",
+        "unit_of_replication",
+        "prospective_or_exposed_status",
+        "multiplicity_family"
+      ],
+      "title": "EvidenceDescriptor",
+      "type": "object"
+    },
+    "EvidenceExposureStatus": {
+      "description": "Whether analysis choices were frozen before evidence was inspected.",
+      "enum": [
+        "prospective",
+        "exposed",
+        "not_applicable"
+      ],
+      "title": "EvidenceExposureStatus",
+      "type": "string"
+    },
+    "EvidenceIndependence": {
+      "description": "Independence from the data and decisions used to fit the result.",
+      "enum": [
+        "same_data",
+        "in_sample_resampling",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_donor",
+        "heldout_time",
+        "independent_cohort",
+        "orthogonal_same_study",
+        "external_intervention",
+        "direct_observation"
+      ],
+      "title": "EvidenceIndependence",
+      "type": "string"
+    },
+    "EvidenceLink": {
+      "additionalProperties": false,
+      "description": "Semantic, scope-exact link from one artifact and result to one claim.",
+      "properties": {
+        "artifact_ref": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/EvidenceDescriptor"
+        },
+        "evidence_study_id": {
+          "minLength": 1,
+          "title": "Evidence Study Id",
+          "type": "string"
+        },
+        "metric_or_statistic_id": {
+          "minLength": 1,
+          "title": "Metric Or Statistic Id",
+          "type": "string"
+        },
+        "result_id": {
+          "minLength": 1,
+          "title": "Result Id",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "semantic_role": {
+          "$ref": "#/$defs/EvidenceSemanticRole"
+        },
+        "split_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Split Id"
+        },
+        "study_id": {
+          "minLength": 1,
+          "title": "Study Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "result_id",
+        "artifact_ref",
+        "semantic_role",
+        "study_id",
+        "evidence_study_id",
+        "scope",
+        "metric_or_statistic_id",
+        "descriptor"
+      ],
+      "title": "EvidenceLink",
+      "type": "object"
+    },
+    "EvidenceSemanticRole": {
+      "description": "Scientific role played by one artifact for one atomic claim.",
+      "enum": [
+        "engineering_qualification",
+        "program_count_prediction",
+        "program_stability",
+        "guide_target_consistency",
+        "gene_effect",
+        "relative_abundance",
+        "absolute_net_change",
+        "proliferation_component",
+        "death_component",
+        "migration_or_loss_component",
+        "population_transition",
+        "clone_fate",
+        "ancestral_lineage",
+        "direct_cell_path",
+        "context_association",
+        "ecological_intervention",
+        "generator_attribution",
+        "external_concordance"
+      ],
+      "title": "EvidenceSemanticRole",
       "type": "string"
     },
     "EvidenceTier": {
-      "description": "Highest evidence class actually bound to one result or claim.",
+      "description": "Reporting class; deliberately not a universal scalar ordering.",
       "enum": [
         "E0_engineering",
         "E1_in_sample",
@@ -61,18 +307,19 @@
       "type": "string"
     },
     "ScientificClaimKind": {
-      "description": "Biological claim classes with distinct capability requirements.",
+      "description": "Atomic claim classes with distinct evidence conjunctions.",
       "enum": [
         "perturbation_program_association",
         "population_transition",
         "relative_selection",
-        "absolute_net_growth",
+        "absolute_net_change",
         "proliferation_component",
         "death_component",
         "migration_or_compartment_loss",
         "diffusion_attribution",
         "biological_plasticity",
-        "ecological_association",
+        "physical_context_association",
+        "ecological_counterfactual",
         "ecological_mechanism",
         "clone_fate",
         "ancestral_lineage",
@@ -81,24 +328,179 @@
       ],
       "title": "ScientificClaimKind",
       "type": "string"
+    },
+    "ScientificEstimand": {
+      "additionalProperties": false,
+      "description": "One atomic estimand from which publishable wording is rendered.",
+      "properties": {
+        "abundance_entity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbundanceEntity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "abundance_process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbundanceProcess"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "abundance_scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbundanceScale"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "causal_status": {
+          "$ref": "#/$defs/CausalStatus"
+        },
+        "direction": {
+          "$ref": "#/$defs/EffectDirection"
+        },
+        "effect_measure": {
+          "minLength": 1,
+          "title": "Effect Measure",
+          "type": "string"
+        },
+        "estimand": {
+          "minLength": 1,
+          "title": "Estimand",
+          "type": "string"
+        },
+        "mechanism_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mechanism Type"
+        },
+        "outcome": {
+          "minLength": 1,
+          "title": "Outcome",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "system_boundary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Boundary"
+        },
+        "trajectory_semantics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineageResultSemantics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "uncertainty_result_id": {
+          "minLength": 1,
+          "title": "Uncertainty Result Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scope",
+        "outcome",
+        "estimand",
+        "direction",
+        "effect_measure",
+        "causal_status",
+        "uncertainty_result_id"
+      ],
+      "title": "ScientificEstimand",
+      "type": "object"
+    },
+    "ScientificScope": {
+      "additionalProperties": false,
+      "description": "Exact scope that must agree across a result and every supporting claim.",
+      "properties": {
+        "comparison": {
+          "minLength": 1,
+          "title": "Comparison",
+          "type": "string"
+        },
+        "entity_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entity Scope",
+          "type": "array"
+        },
+        "population": {
+          "minLength": 1,
+          "title": "Population",
+          "type": "string"
+        },
+        "sample_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sample Scope",
+          "type": "array"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "time_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Time Scope",
+          "type": "array"
+        }
+      },
+      "required": [
+        "subject",
+        "entity_scope",
+        "sample_scope",
+        "time_scope",
+        "population",
+        "comparison"
+      ],
+      "title": "ScientificScope",
+      "type": "object"
     }
   },
   "$id": "https://credo.local/schemas/scientific-claim-request.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Requested wording plus exact evidence, before capability adjudication.",
+  "description": "Typed atomic claim plus semantically linked evidence; prose is non-authoritative.",
   "properties": {
-    "abundance_semantics": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/AbundanceSemantics"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
     "claim_id": {
       "minLength": 1,
       "title": "Claim Id",
@@ -108,19 +510,30 @@
       "title": "Claim Request Id",
       "type": "string"
     },
-    "evidence_sha256s": {
-      "items": {
-        "pattern": "^[0-9a-f]{64}$",
-        "type": "string"
-      },
-      "title": "Evidence Sha256S",
-      "type": "array"
+    "estimand": {
+      "$ref": "#/$defs/ScientificEstimand"
     },
-    "evidence_tier": {
-      "$ref": "#/$defs/EvidenceTier"
+    "evidence_links": {
+      "items": {
+        "$ref": "#/$defs/EvidenceLink"
+      },
+      "title": "Evidence Links",
+      "type": "array"
     },
     "kind": {
       "$ref": "#/$defs/ScientificClaimKind"
+    },
+    "requested_free_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Requested Free Text"
     },
     "schema_id": {
       "const": "credo.scientific_claim_request",
@@ -133,39 +546,14 @@
       "default": 1,
       "title": "Schema Version",
       "type": "integer"
-    },
-    "supports": {
-      "items": {
-        "$ref": "#/$defs/EvidenceSupport"
-      },
-      "title": "Supports",
-      "type": "array"
-    },
-    "trajectory_semantics": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/LineageResultSemantics"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null
-    },
-    "wording": {
-      "minLength": 1,
-      "title": "Wording",
-      "type": "string"
     }
   },
   "required": [
     "claim_request_id",
     "claim_id",
     "kind",
-    "wording",
-    "evidence_tier",
-    "supports",
-    "evidence_sha256s"
+    "estimand",
+    "evidence_links"
   ],
   "title": "ScientificClaimRequest",
   "type": "object"

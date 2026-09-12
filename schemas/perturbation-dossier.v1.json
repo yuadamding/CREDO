@@ -1,72 +1,217 @@
 {
   "$defs": {
+    "AbsoluteAbundanceDesignContract": {
+      "additionalProperties": false,
+      "description": "System boundary and repeated calibration for non-relative counts.",
+      "properties": {
+        "absolute_design_id": {
+          "title": "Absolute Design Id",
+          "type": "string"
+        },
+        "basis": {
+          "$ref": "#/$defs/AbsoluteCountBasis"
+        },
+        "calibration_timepoints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Calibration Timepoints",
+          "type": "array"
+        },
+        "capture_fraction_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Fraction Model"
+        },
+        "system_boundary": {
+          "minLength": 1,
+          "title": "System Boundary",
+          "type": "string"
+        },
+        "total_count_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "uncertainty_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "absolute_design_id",
+        "basis",
+        "system_boundary",
+        "calibration_timepoints",
+        "total_count_artifact",
+        "uncertainty_artifact"
+      ],
+      "title": "AbsoluteAbundanceDesignContract",
+      "type": "object"
+    },
     "AbsoluteCountBasis": {
-      "description": "Physical calibration behind an absolute abundance capability.",
+      "description": "Physical calibration scale, not an inferred biological process.",
       "enum": [
-        "none",
-        "capture_calibrated",
+        "capture_calibrated_sampled_compartment",
         "absolute_tissue"
       ],
       "title": "AbsoluteCountBasis",
       "type": "string"
     },
-    "AbundanceComponent": {
-      "description": "Biological component that an abundance result may populate.",
-      "enum": [
-        "relative_selection",
-        "absolute_net_growth",
-        "proliferation_component",
-        "death_component",
-        "migration_or_compartment_loss",
-        "clone_resolved_abundance"
+    "AbundanceCalibration": {
+      "additionalProperties": false,
+      "description": "Exact system boundary and artifacts behind non-relative abundance.",
+      "properties": {
+        "calibration_basis": {
+          "minLength": 1,
+          "title": "Calibration Basis",
+          "type": "string"
+        },
+        "calibration_timepoints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Calibration Timepoints",
+          "type": "array"
+        },
+        "capture_fraction_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Fraction Model"
+        },
+        "system_boundary": {
+          "minLength": 1,
+          "title": "System Boundary",
+          "type": "string"
+        },
+        "total_count_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "uncertainty_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "system_boundary",
+        "calibration_basis",
+        "calibration_timepoints",
+        "total_count_artifact",
+        "uncertainty_artifact"
       ],
-      "title": "AbundanceComponent",
-      "type": "string"
+      "title": "AbundanceCalibration",
+      "type": "object"
+    },
+    "AbundanceCapabilityProfile": {
+      "additionalProperties": false,
+      "description": "One structurally supported scale with its entity/process resolution.",
+      "properties": {
+        "entities": {
+          "items": {
+            "$ref": "#/$defs/AbundanceEntity"
+          },
+          "title": "Entities",
+          "type": "array"
+        },
+        "processes": {
+          "items": {
+            "$ref": "#/$defs/AbundanceProcess"
+          },
+          "title": "Processes",
+          "type": "array"
+        },
+        "scale": {
+          "$ref": "#/$defs/AbundanceScale"
+        },
+        "system_boundary": {
+          "minLength": 1,
+          "title": "System Boundary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "scale",
+        "entities",
+        "processes",
+        "system_boundary"
+      ],
+      "title": "AbundanceCapabilityProfile",
+      "type": "object"
     },
     "AbundanceComponentEvidence": {
       "additionalProperties": false,
-      "description": "One component and the exact evidence supporting it.",
+      "description": "One abundance process and its claim-specific measurement descriptors.",
       "properties": {
         "artifact": {
           "$ref": "#/$defs/ArtifactRef"
         },
-        "component": {
-          "$ref": "#/$defs/AbundanceComponent"
-        },
-        "evidence_tier": {
-          "$ref": "#/$defs/EvidenceTier"
-        },
-        "supports": {
+        "evidence": {
           "items": {
-            "$ref": "#/$defs/EvidenceSupport"
+            "$ref": "#/$defs/EvidenceDescriptor"
           },
-          "title": "Supports",
+          "title": "Evidence",
           "type": "array"
+        },
+        "process": {
+          "$ref": "#/$defs/AbundanceProcess"
         }
       },
       "required": [
-        "component",
-        "evidence_tier",
-        "supports",
+        "process",
+        "evidence",
         "artifact"
       ],
       "title": "AbundanceComponentEvidence",
       "type": "object"
     },
+    "AbundanceEntity": {
+      "description": "Biological entity whose abundance is estimated.",
+      "enum": [
+        "guide",
+        "target",
+        "perturbation",
+        "clone",
+        "cell_state",
+        "clone_state"
+      ],
+      "title": "AbundanceEntity",
+      "type": "string"
+    },
     "AbundanceObservationModel": {
-      "description": "Likelihood family used for the declared abundance gauge.",
+      "description": "Likelihood family attached to the measurement scale.",
       "enum": [
         "dirichlet_multinomial_relative",
         "dirichlet_multinomial_plus_capture_nb",
-        "absolute_total_negative_binomial",
-        "clone_fate_dirichlet_multinomial"
+        "absolute_total_negative_binomial"
       ],
       "title": "AbundanceObservationModel",
       "type": "string"
     },
+    "AbundanceProcess": {
+      "description": "Process identified by the observation and component evidence.",
+      "enum": [
+        "relative_selection",
+        "absolute_net_change",
+        "proliferation",
+        "death",
+        "migration_or_compartment_loss"
+      ],
+      "title": "AbundanceProcess",
+      "type": "string"
+    },
     "AbundanceResult": {
       "additionalProperties": false,
-      "description": "Hash-bound abundance result with a non-negotiable observation gauge.",
+      "description": "Hash-bound abundance result with orthogonal scale/entity/process axes.",
       "properties": {
         "abundance_result_id": {
           "title": "Abundance Result Id",
@@ -75,7 +220,7 @@
         "calibration": {
           "anyOf": [
             {
-              "$ref": "#/$defs/ArtifactRef"
+              "$ref": "#/$defs/AbundanceCalibration"
             },
             {
               "type": "null"
@@ -95,12 +240,14 @@
           "title": "Components",
           "type": "array"
         },
+        "entity": {
+          "$ref": "#/$defs/AbundanceEntity"
+        },
         "observation_model": {
           "$ref": "#/$defs/AbundanceObservationModel"
         },
-        "pool_wide_growth_offset_identified": {
-          "title": "Pool Wide Growth Offset Identified",
-          "type": "boolean"
+        "scale": {
+          "$ref": "#/$defs/AbundanceScale"
         },
         "schema_id": {
           "const": "credo.abundance_result",
@@ -114,30 +261,42 @@
           "title": "Schema Version",
           "type": "integer"
         },
-        "semantics": {
-          "$ref": "#/$defs/AbundanceSemantics"
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "study_id": {
+          "minLength": 1,
+          "title": "Study Id",
+          "type": "string"
+        },
+        "system_boundary": {
+          "minLength": 1,
+          "title": "System Boundary",
+          "type": "string"
         }
       },
       "required": [
         "abundance_result_id",
+        "study_id",
         "capability_assessment_id",
-        "semantics",
+        "scope",
+        "scale",
+        "entity",
+        "system_boundary",
         "observation_model",
-        "components",
-        "pool_wide_growth_offset_identified"
+        "components"
       ],
       "title": "AbundanceResult",
       "type": "object"
     },
-    "AbundanceSemantics": {
-      "description": "Observation gauge attached to every abundance result.",
+    "AbundanceScale": {
+      "description": "Measurement scale, independent of the entity being counted.",
       "enum": [
         "relative_within_pool",
-        "capture_calibrated_cells",
-        "absolute_tissue_cells",
-        "clone_resolved_abundance"
+        "capture_calibrated_sampled_compartment",
+        "absolute_tissue"
       ],
-      "title": "AbundanceSemantics",
+      "title": "AbundanceScale",
       "type": "string"
     },
     "ArtifactRef": {
@@ -180,6 +339,150 @@
         "relative_uri"
       ],
       "title": "ArtifactRef",
+      "type": "object"
+    },
+    "BaselineMetric": {
+      "additionalProperties": false,
+      "description": "Comparable held-out count metric for one method.",
+      "properties": {
+        "baseline": {
+          "$ref": "#/$defs/BaselineName"
+        },
+        "mean_log_likelihood_per_count": {
+          "title": "Mean Log Likelihood Per Count",
+          "type": "number"
+        },
+        "mean_negative_log_likelihood_per_cell": {
+          "minimum": 0,
+          "title": "Mean Negative Log Likelihood Per Cell",
+          "type": "number"
+        }
+      },
+      "required": [
+        "baseline",
+        "mean_log_likelihood_per_count",
+        "mean_negative_log_likelihood_per_cell"
+      ],
+      "title": "BaselineMetric",
+      "type": "object"
+    },
+    "BaselineName": {
+      "description": "Frozen Dev40-B comparator set.",
+      "enum": [
+        "exact_global_gene_frequency",
+        "pseudobulk_negative_binomial",
+        "per_gene_differential_expression",
+        "gsfa_style_sparse_factors",
+        "target_average",
+        "control_only"
+      ],
+      "title": "BaselineName",
+      "type": "string"
+    },
+    "BiologicalProgramQualificationBundle": {
+      "additionalProperties": false,
+      "description": "Complete program result surface admitted to a perturbation dossier.",
+      "properties": {
+        "capability_assessment_id": {
+          "minLength": 1,
+          "title": "Capability Assessment Id",
+          "type": "string"
+        },
+        "contract": {
+          "$ref": "#/$defs/CountLinkedProgramContract"
+        },
+        "gene_effects": {
+          "items": {
+            "$ref": "#/$defs/GeneLevelEffect"
+          },
+          "title": "Gene Effects",
+          "type": "array"
+        },
+        "guide_target_consistency": {
+          "$ref": "#/$defs/GuideTargetConsistency"
+        },
+        "model_state_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "null_contract": {
+          "$ref": "#/$defs/ProgramNullContract"
+        },
+        "perturbation_effects": {
+          "items": {
+            "$ref": "#/$defs/PerturbationProgramEffect"
+          },
+          "title": "Perturbation Effects",
+          "type": "array"
+        },
+        "program_bundle_id": {
+          "title": "Program Bundle Id",
+          "type": "string"
+        },
+        "program_definitions": {
+          "items": {
+            "$ref": "#/$defs/ProgramDefinition"
+          },
+          "title": "Program Definitions",
+          "type": "array"
+        },
+        "qualification": {
+          "$ref": "#/$defs/ProgramQualificationReceipt"
+        },
+        "qualification_protocol": {
+          "$ref": "#/$defs/ProgramQualificationProtocol"
+        },
+        "schema_id": {
+          "const": "credo.biological_program_qualification_bundle",
+          "default": "credo.biological_program_qualification_bundle",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "simulation_contract": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProgramSimulationContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "study_id": {
+          "minLength": 1,
+          "title": "Study Id",
+          "type": "string"
+        },
+        "uncertainty": {
+          "$ref": "#/$defs/ProgramUncertainty"
+        }
+      },
+      "required": [
+        "program_bundle_id",
+        "study_id",
+        "capability_assessment_id",
+        "contract",
+        "qualification_protocol",
+        "scope",
+        "program_definitions",
+        "perturbation_effects",
+        "gene_effects",
+        "guide_target_consistency",
+        "uncertainty",
+        "qualification",
+        "null_contract",
+        "model_state_artifact"
+      ],
+      "title": "BiologicalProgramQualificationBundle",
       "type": "object"
     },
     "CapabilityDecision": {
@@ -225,9 +528,19 @@
       "title": "CapabilityDecision",
       "type": "object"
     },
+    "CausalStatus": {
+      "description": "Claim status fixed independently of prose.",
+      "enum": [
+        "predictive_association",
+        "model_attribution",
+        "causal_under_intervention"
+      ],
+      "title": "CausalStatus",
+      "type": "string"
+    },
     "ClaimAdjudication": {
       "additionalProperties": false,
-      "description": "Machine-readable permitted scope for one exact claim request.",
+      "description": "Machine-readable authorization and deterministic rendered wording.",
       "properties": {
         "adjudication_id": {
           "title": "Adjudication Id",
@@ -245,6 +558,11 @@
           "title": "Capability Assessment Id",
           "type": "string"
         },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
         "claim_request_id": {
           "minLength": 1,
           "title": "Claim Request Id",
@@ -253,14 +571,18 @@
         "decision": {
           "$ref": "#/$defs/ClaimDecision"
         },
-        "evidence_tier": {
-          "$ref": "#/$defs/EvidenceTier"
-        },
-        "forbidden_wording": {
+        "evidence_channels": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/EvidenceChannel"
           },
-          "title": "Forbidden Wording",
+          "title": "Evidence Channels",
+          "type": "array"
+        },
+        "evidence_tiers": {
+          "items": {
+            "$ref": "#/$defs/EvidenceTier"
+          },
+          "title": "Evidence Tiers",
           "type": "array"
         },
         "permitted_wording": {
@@ -290,18 +612,19 @@
       },
       "required": [
         "adjudication_id",
+        "claim_id",
         "claim_request_id",
         "capability_assessment_id",
         "decision",
-        "evidence_tier",
-        "blocking_reasons",
-        "forbidden_wording"
+        "evidence_tiers",
+        "evidence_channels",
+        "blocking_reasons"
       ],
       "title": "ClaimAdjudication",
       "type": "object"
     },
     "ClaimDecision": {
-      "description": "Fail-closed disposition for one requested claim.",
+      "description": "Fail-closed disposition for one typed claim.",
       "enum": [
         "permitted",
         "model_attribution_only",
@@ -310,10 +633,333 @@
       "title": "ClaimDecision",
       "type": "string"
     },
+    "CloneObservationContract": {
+      "additionalProperties": false,
+      "description": "Quality gates for stable and evolving barcode interpretations.",
+      "properties": {
+        "assignment_confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Assignment Confidence",
+          "type": "number"
+        },
+        "audit_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "biological_replicates": {
+          "minimum": 1,
+          "title": "Biological Replicates",
+          "type": "integer"
+        },
+        "clone_observation_id": {
+          "title": "Clone Observation Id",
+          "type": "string"
+        },
+        "collision_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Collision Rate",
+          "type": "number"
+        },
+        "cross_time_continuity_verified": {
+          "title": "Cross Time Continuity Verified",
+          "type": "boolean"
+        },
+        "dropout_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Dropout Rate",
+          "type": "number"
+        },
+        "evolving_barcode_history_observed": {
+          "default": false,
+          "title": "Evolving Barcode History Observed",
+          "type": "boolean"
+        },
+        "maximum_collision_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Maximum Collision Rate",
+          "type": "number"
+        },
+        "maximum_dropout_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Maximum Dropout Rate",
+          "type": "number"
+        },
+        "minimum_assignment_confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Assignment Confidence",
+          "type": "number"
+        },
+        "minimum_clone_support": {
+          "minimum": 2,
+          "title": "Minimum Clone Support",
+          "type": "integer"
+        },
+        "observation_model": {
+          "minLength": 1,
+          "title": "Observation Model",
+          "type": "string"
+        },
+        "parent_relationship_directly_observed": {
+          "default": false,
+          "title": "Parent Relationship Directly Observed",
+          "type": "boolean"
+        },
+        "parent_tree_inferred_only": {
+          "default": false,
+          "title": "Parent Tree Inferred Only",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "clone_observation_id",
+        "cross_time_continuity_verified",
+        "collision_rate",
+        "maximum_collision_rate",
+        "dropout_rate",
+        "maximum_dropout_rate",
+        "minimum_clone_support",
+        "assignment_confidence",
+        "minimum_assignment_confidence",
+        "biological_replicates",
+        "observation_model",
+        "audit_artifact"
+      ],
+      "title": "CloneObservationContract",
+      "type": "object"
+    },
+    "CountLinkedProgramContract": {
+      "additionalProperties": false,
+      "description": "Static/checkpoint-conditional head, deliberately uncoupled from dynamics.",
+      "properties": {
+        "checkpoint_dependence_enabled": {
+          "title": "Checkpoint Dependence Enabled",
+          "type": "boolean"
+        },
+        "checkpoint_schema_modified": {
+          "const": false,
+          "default": false,
+          "title": "Checkpoint Schema Modified",
+          "type": "boolean"
+        },
+        "checkpoint_time_semantics": {
+          "const": "linear_continuous_physical_time",
+          "default": "linear_continuous_physical_time",
+          "title": "Checkpoint Time Semantics",
+          "type": "string"
+        },
+        "checkpoint_time_values": {
+          "items": {
+            "type": "number"
+          },
+          "title": "Checkpoint Time Values",
+          "type": "array"
+        },
+        "checkpoints": {
+          "exclusiveMinimum": 0,
+          "title": "Checkpoints",
+          "type": "integer"
+        },
+        "control_guide_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Control Guide Indices",
+          "type": "array"
+        },
+        "control_reference_centered": {
+          "const": true,
+          "default": true,
+          "title": "Control Reference Centered",
+          "type": "boolean"
+        },
+        "count_likelihood": {
+          "$ref": "#/$defs/NegativeBinomialSemantics"
+        },
+        "donor_or_sample_effects_enabled": {
+          "title": "Donor Or Sample Effects Enabled",
+          "type": "boolean"
+        },
+        "dynamics_coupled": {
+          "const": false,
+          "default": false,
+          "title": "Dynamics Coupled",
+          "type": "boolean"
+        },
+        "equation": {
+          "const": "log_mu=log_library+sample_gene+state_gene+W@(reference+target+efficacy*guide)",
+          "default": "log_mu=log_library+sample_gene+state_gene+W@(reference+target+efficacy*guide)",
+          "title": "Equation",
+          "type": "string"
+        },
+        "feature_order_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Feature Order Sha256",
+          "type": "string"
+        },
+        "fit_row_ids_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Fit Row Ids Sha256",
+          "type": "string"
+        },
+        "gene_specific_dispersion": {
+          "const": true,
+          "default": true,
+          "title": "Gene Specific Dispersion",
+          "type": "boolean"
+        },
+        "genes": {
+          "exclusiveMinimum": 1,
+          "title": "Genes",
+          "type": "integer"
+        },
+        "guide_deviation_l2_weight": {
+          "exclusiveMinimum": 0,
+          "title": "Guide Deviation L2 Weight",
+          "type": "number"
+        },
+        "guide_target_map_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Guide Target Map Sha256",
+          "type": "string"
+        },
+        "guides": {
+          "exclusiveMinimum": 0,
+          "title": "Guides",
+          "type": "integer"
+        },
+        "heldout_target_mode": {
+          "$ref": "#/$defs/HeldoutTargetMode"
+        },
+        "hierarchy_equation": {
+          "const": "a_ref+a_target+q_guide*a_guide",
+          "default": "a_ref+a_target+q_guide*a_guide",
+          "title": "Hierarchy Equation",
+          "type": "string"
+        },
+        "library_size_semantics": {
+          "$ref": "#/$defs/LibrarySizeSemantics"
+        },
+        "loading_l1_weight": {
+          "exclusiveMinimum": 0,
+          "title": "Loading L1 Weight",
+          "type": "number"
+        },
+        "program_contract_id": {
+          "title": "Program Contract Id",
+          "type": "string"
+        },
+        "programs": {
+          "exclusiveMinimum": 0,
+          "title": "Programs",
+          "type": "integer"
+        },
+        "raw_nonnegative_integer_counts_required": {
+          "const": true,
+          "default": true,
+          "title": "Raw Nonnegative Integer Counts Required",
+          "type": "boolean"
+        },
+        "samples": {
+          "exclusiveMinimum": 0,
+          "title": "Samples",
+          "type": "integer"
+        },
+        "schema_id": {
+          "const": "credo.count_linked_program_contract",
+          "default": "credo.count_linked_program_contract",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sparse_loading_prior": {
+          "$ref": "#/$defs/SparseLoadingPrior"
+        },
+        "state_dependence_enabled": {
+          "title": "State Dependence Enabled",
+          "type": "boolean"
+        },
+        "state_dimension": {
+          "minimum": 0,
+          "title": "State Dimension",
+          "type": "integer"
+        },
+        "target_descriptor_artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "target_effect_l2_weight": {
+          "exclusiveMinimum": 0,
+          "title": "Target Effect L2 Weight",
+          "type": "number"
+        },
+        "target_guide_hierarchy_enabled": {
+          "const": true,
+          "default": true,
+          "title": "Target Guide Hierarchy Enabled",
+          "type": "boolean"
+        },
+        "targets": {
+          "exclusiveMinimum": 0,
+          "title": "Targets",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "program_contract_id",
+        "count_likelihood",
+        "library_size_semantics",
+        "sparse_loading_prior",
+        "state_dependence_enabled",
+        "checkpoint_dependence_enabled",
+        "checkpoint_time_values",
+        "donor_or_sample_effects_enabled",
+        "heldout_target_mode",
+        "feature_order_sha256",
+        "guide_target_map_sha256",
+        "fit_row_ids_sha256",
+        "genes",
+        "programs",
+        "state_dimension",
+        "samples",
+        "checkpoints",
+        "targets",
+        "guides",
+        "control_guide_indices",
+        "loading_l1_weight",
+        "guide_deviation_l2_weight",
+        "target_effect_l2_weight"
+      ],
+      "title": "CountLinkedProgramContract",
+      "type": "object"
+    },
     "DatasetCapabilityAssessment": {
       "additionalProperties": false,
-      "description": "Content-addressed, fail-closed capability assessment for one study.",
+      "description": "Content-addressed, fail-closed structural assessment for one study.",
       "properties": {
+        "abundance_profiles": {
+          "items": {
+            "$ref": "#/$defs/AbundanceCapabilityProfile"
+          },
+          "title": "Abundance Profiles",
+          "type": "array"
+        },
         "capability_assessment_id": {
           "title": "Capability Assessment Id",
           "type": "string"
@@ -356,20 +1002,13 @@
           "minLength": 1,
           "title": "Study Contract Id",
           "type": "string"
-        },
-        "supported_abundance_semantics": {
-          "items": {
-            "$ref": "#/$defs/AbundanceSemantics"
-          },
-          "title": "Supported Abundance Semantics",
-          "type": "array"
         }
       },
       "required": [
         "capability_assessment_id",
         "study_contract_id",
         "decisions",
-        "supported_abundance_semantics",
+        "abundance_profiles",
         "maximum_lineage_level"
       ],
       "title": "DatasetCapabilityAssessment",
@@ -377,7 +1016,7 @@
     },
     "DossierSection": {
       "additionalProperties": false,
-      "description": "Available or explicitly unavailable report section.",
+      "description": "One result binding or an explicit non-result state.",
       "properties": {
         "artifact": {
           "anyOf": [
@@ -390,26 +1029,52 @@
           ],
           "default": null
         },
-        "available": {
-          "title": "Available",
-          "type": "boolean"
-        },
-        "evidence_tier": {
-          "$ref": "#/$defs/EvidenceTier"
+        "evidence": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/EvidenceDescriptor"
+          },
+          "title": "Evidence",
+          "type": "array"
         },
         "interpretation": {
           "minLength": 1,
           "title": "Interpretation",
           "type": "string"
         },
+        "result_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Result Id"
+        },
+        "result_scope": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScientificScope"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "section": {
           "$ref": "#/$defs/DossierSectionName"
+        },
+        "status": {
+          "$ref": "#/$defs/DossierSectionStatus"
         }
       },
       "required": [
         "section",
-        "available",
-        "evidence_tier",
+        "status",
         "interpretation"
       ],
       "title": "DossierSection",
@@ -429,33 +1094,216 @@
       "title": "DossierSectionName",
       "type": "string"
     },
-    "EvidenceSupport": {
-      "description": "Typed evidence channels that justify an assigned tier.",
+    "DossierSectionStatus": {
+      "description": "Availability is orthogonal to evidence strength.",
+      "enum": [
+        "available",
+        "structurally_unavailable",
+        "not_run",
+        "failed_validation",
+        "not_applicable",
+        "withheld_by_claim_policy"
+      ],
+      "title": "DossierSectionStatus",
+      "type": "string"
+    },
+    "EffectDirection": {
+      "description": "Direction of one atomic estimand.",
+      "enum": [
+        "increase",
+        "decrease",
+        "mixed",
+        "null_compatible"
+      ],
+      "title": "EffectDirection",
+      "type": "string"
+    },
+    "EvidenceChannel": {
+      "description": "What was measured or withheld; channels are claim-specific.",
       "enum": [
         "engineering_test",
         "model_fit",
-        "held_out_donor",
-        "held_out_guide",
-        "held_out_target",
-        "held_out_time",
+        "heldout_donor",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_time",
         "independent_cohort",
-        "intervention",
-        "rescue",
-        "epistasis",
-        "orthogonal_plasticity_assay",
         "absolute_cell_count",
+        "stable_clone_barcode",
+        "evolving_barcode",
+        "live_cell_tracking",
+        "orthogonal_component_assay",
         "proliferation_assay",
         "death_assay",
         "migration_assay",
-        "clone_barcode",
-        "ancestral_barcode",
-        "live_imaging"
+        "intervention",
+        "rescue",
+        "epistasis",
+        "spatial_colocalization"
       ],
-      "title": "EvidenceSupport",
+      "title": "EvidenceChannel",
+      "type": "string"
+    },
+    "EvidenceDescriptor": {
+      "additionalProperties": false,
+      "description": "Independent evidence axes; no claim is authorized from tier alone.",
+      "properties": {
+        "channel": {
+          "$ref": "#/$defs/EvidenceChannel"
+        },
+        "independence": {
+          "$ref": "#/$defs/EvidenceIndependence"
+        },
+        "multiplicity_family": {
+          "minLength": 1,
+          "title": "Multiplicity Family",
+          "type": "string"
+        },
+        "prospective_or_exposed_status": {
+          "$ref": "#/$defs/EvidenceExposureStatus"
+        },
+        "tier": {
+          "$ref": "#/$defs/EvidenceTier"
+        },
+        "unit_of_replication": {
+          "minLength": 1,
+          "title": "Unit Of Replication",
+          "type": "string"
+        }
+      },
+      "required": [
+        "tier",
+        "channel",
+        "independence",
+        "unit_of_replication",
+        "prospective_or_exposed_status",
+        "multiplicity_family"
+      ],
+      "title": "EvidenceDescriptor",
+      "type": "object"
+    },
+    "EvidenceExposureStatus": {
+      "description": "Whether analysis choices were frozen before evidence was inspected.",
+      "enum": [
+        "prospective",
+        "exposed",
+        "not_applicable"
+      ],
+      "title": "EvidenceExposureStatus",
+      "type": "string"
+    },
+    "EvidenceIndependence": {
+      "description": "Independence from the data and decisions used to fit the result.",
+      "enum": [
+        "same_data",
+        "in_sample_resampling",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_donor",
+        "heldout_time",
+        "independent_cohort",
+        "orthogonal_same_study",
+        "external_intervention",
+        "direct_observation"
+      ],
+      "title": "EvidenceIndependence",
+      "type": "string"
+    },
+    "EvidenceLink": {
+      "additionalProperties": false,
+      "description": "Semantic, scope-exact link from one artifact and result to one claim.",
+      "properties": {
+        "artifact_ref": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "claim_id": {
+          "minLength": 1,
+          "title": "Claim Id",
+          "type": "string"
+        },
+        "descriptor": {
+          "$ref": "#/$defs/EvidenceDescriptor"
+        },
+        "evidence_study_id": {
+          "minLength": 1,
+          "title": "Evidence Study Id",
+          "type": "string"
+        },
+        "metric_or_statistic_id": {
+          "minLength": 1,
+          "title": "Metric Or Statistic Id",
+          "type": "string"
+        },
+        "result_id": {
+          "minLength": 1,
+          "title": "Result Id",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "semantic_role": {
+          "$ref": "#/$defs/EvidenceSemanticRole"
+        },
+        "split_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Split Id"
+        },
+        "study_id": {
+          "minLength": 1,
+          "title": "Study Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "claim_id",
+        "result_id",
+        "artifact_ref",
+        "semantic_role",
+        "study_id",
+        "evidence_study_id",
+        "scope",
+        "metric_or_statistic_id",
+        "descriptor"
+      ],
+      "title": "EvidenceLink",
+      "type": "object"
+    },
+    "EvidenceSemanticRole": {
+      "description": "Scientific role played by one artifact for one atomic claim.",
+      "enum": [
+        "engineering_qualification",
+        "program_count_prediction",
+        "program_stability",
+        "guide_target_consistency",
+        "gene_effect",
+        "relative_abundance",
+        "absolute_net_change",
+        "proliferation_component",
+        "death_component",
+        "migration_or_loss_component",
+        "population_transition",
+        "clone_fate",
+        "ancestral_lineage",
+        "direct_cell_path",
+        "context_association",
+        "ecological_intervention",
+        "generator_attribution",
+        "external_concordance"
+      ],
+      "title": "EvidenceSemanticRole",
       "type": "string"
     },
     "EvidenceTier": {
-      "description": "Highest evidence class actually bound to one result or claim.",
+      "description": "Reporting class; deliberately not a universal scalar ordering.",
       "enum": [
         "E0_engineering",
         "E1_in_sample",
@@ -465,6 +1313,152 @@
         "E5_direct_measurement"
       ],
       "title": "EvidenceTier",
+      "type": "string"
+    },
+    "GeneLevelEffect": {
+      "additionalProperties": false,
+      "description": "Signed gene effect reconstructed through the sparse program hierarchy.",
+      "properties": {
+        "decomposition_identity_max_abs_error": {
+          "minimum": 0,
+          "title": "Decomposition Identity Max Abs Error",
+          "type": "number"
+        },
+        "gene_effect_id": {
+          "title": "Gene Effect Id",
+          "type": "string"
+        },
+        "log_fold_change_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "program_contract_id": {
+          "minLength": 1,
+          "title": "Program Contract Id",
+          "type": "string"
+        },
+        "program_effect_id": {
+          "minLength": 1,
+          "title": "Program Effect Id",
+          "type": "string"
+        },
+        "schema_id": {
+          "const": "credo.gene_level_effect",
+          "default": "credo.gene_level_effect",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "sign_probability_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "standard_error_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "gene_effect_id",
+        "program_contract_id",
+        "program_effect_id",
+        "scope",
+        "log_fold_change_artifact",
+        "standard_error_artifact",
+        "sign_probability_artifact",
+        "decomposition_identity_max_abs_error"
+      ],
+      "title": "GeneLevelEffect",
+      "type": "object"
+    },
+    "GuideTargetConsistency": {
+      "additionalProperties": false,
+      "description": "Sister-guide agreement and target/guide variance decomposition.",
+      "properties": {
+        "consistency_id": {
+          "title": "Consistency Id",
+          "type": "string"
+        },
+        "inconsistent_target_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Inconsistent Target Fraction",
+          "type": "number"
+        },
+        "median_sister_guide_correlation": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Median Sister Guide Correlation",
+          "type": "number"
+        },
+        "minimum_sister_guides": {
+          "minimum": 2,
+          "title": "Minimum Sister Guides",
+          "type": "integer"
+        },
+        "per_target_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "program_contract_id": {
+          "minLength": 1,
+          "title": "Program Contract Id",
+          "type": "string"
+        },
+        "schema_id": {
+          "const": "credo.guide_target_consistency",
+          "default": "credo.guide_target_consistency",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "target_variance_fraction": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Target Variance Fraction",
+          "type": "number"
+        }
+      },
+      "required": [
+        "consistency_id",
+        "program_contract_id",
+        "scope",
+        "per_target_artifact",
+        "median_sister_guide_correlation",
+        "target_variance_fraction",
+        "inconsistent_target_fraction",
+        "minimum_sister_guides"
+      ],
+      "title": "GuideTargetConsistency",
+      "type": "object"
+    },
+    "HeldoutTargetMode": {
+      "description": "Whether an unseen target has legal predictive information.",
+      "enum": [
+        "identifier_only_not_eligible",
+        "predeclared_target_descriptors"
+      ],
+      "title": "HeldoutTargetMode",
+      "type": "string"
+    },
+    "LibrarySizeSemantics": {
+      "description": "The library term is observed exposure, never a fitted biological effect.",
+      "enum": [
+        "observed_total_count_log_offset"
+      ],
+      "title": "LibrarySizeSemantics",
       "type": "string"
     },
     "LineageEvidenceLevel": {
@@ -489,6 +1483,14 @@
       "title": "LineageResultSemantics",
       "type": "string"
     },
+    "NegativeBinomialSemantics": {
+      "description": "Frozen NB parameterization used by the program head.",
+      "enum": [
+        "nb2_gene_dispersion_var_mu_plus_mu_squared_over_theta"
+      ],
+      "title": "NegativeBinomialSemantics",
+      "type": "string"
+    },
     "ObservedCheckpoint": {
       "additionalProperties": false,
       "description": "One observed checkpoint on a physical-time scale.",
@@ -510,6 +1512,1056 @@
       "title": "ObservedCheckpoint",
       "type": "object"
     },
+    "PerturbationProgramEffect": {
+      "additionalProperties": false,
+      "description": "Control, target, and guide-deviation program effects for one scope.",
+      "properties": {
+        "guide_deviation_activity": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "guide_efficiency": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "guide_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Guide Ids",
+          "type": "array"
+        },
+        "perturbation_id": {
+          "minLength": 1,
+          "title": "Perturbation Id",
+          "type": "string"
+        },
+        "program_contract_id": {
+          "minLength": 1,
+          "title": "Program Contract Id",
+          "type": "string"
+        },
+        "program_effect_id": {
+          "title": "Program Effect Id",
+          "type": "string"
+        },
+        "reference_activity": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "schema_id": {
+          "const": "credo.perturbation_program_effect",
+          "default": "credo.perturbation_program_effect",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "target_activity": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "target_id": {
+          "minLength": 1,
+          "title": "Target Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "program_effect_id",
+        "program_contract_id",
+        "scope",
+        "perturbation_id",
+        "target_id",
+        "guide_ids",
+        "reference_activity",
+        "target_activity",
+        "guide_deviation_activity",
+        "guide_efficiency"
+      ],
+      "title": "PerturbationProgramEffect",
+      "type": "object"
+    },
+    "PhysicalContextDesignContract": {
+      "additionalProperties": false,
+      "description": "Separates co-residence, counterfactual modelling, and intervention.",
+      "properties": {
+        "audit_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "context_design_id": {
+          "title": "Context Design Id",
+          "type": "string"
+        },
+        "mediator_intervention_observed": {
+          "default": false,
+          "title": "Mediator Intervention Observed",
+          "type": "boolean"
+        },
+        "perturbations_cultured_separately": {
+          "title": "Perturbations Cultured Separately",
+          "type": "boolean"
+        },
+        "populations_co_resident": {
+          "title": "Populations Co Resident",
+          "type": "boolean"
+        },
+        "qualified_context_model": {
+          "default": false,
+          "title": "Qualified Context Model",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "context_design_id",
+        "populations_co_resident",
+        "perturbations_cultured_separately",
+        "audit_artifact"
+      ],
+      "title": "PhysicalContextDesignContract",
+      "type": "object"
+    },
+    "ProgramDefinition": {
+      "additionalProperties": false,
+      "description": "One sparse signed gene program, without a biological-name claim.",
+      "properties": {
+        "l1_norm": {
+          "exclusiveMinimum": 0,
+          "title": "L1 Norm",
+          "type": "number"
+        },
+        "l2_norm": {
+          "exclusiveMinimum": 0,
+          "title": "L2 Norm",
+          "type": "number"
+        },
+        "loading_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "loading_threshold": {
+          "exclusiveMinimum": 0,
+          "title": "Loading Threshold",
+          "type": "number"
+        },
+        "negative_genes": {
+          "minimum": 0,
+          "title": "Negative Genes",
+          "type": "integer"
+        },
+        "nonzero_genes": {
+          "minimum": 0,
+          "title": "Nonzero Genes",
+          "type": "integer"
+        },
+        "positive_genes": {
+          "minimum": 0,
+          "title": "Positive Genes",
+          "type": "integer"
+        },
+        "program_contract_id": {
+          "minLength": 1,
+          "title": "Program Contract Id",
+          "type": "string"
+        },
+        "program_definition_id": {
+          "title": "Program Definition Id",
+          "type": "string"
+        },
+        "program_index": {
+          "minimum": 0,
+          "title": "Program Index",
+          "type": "integer"
+        },
+        "schema_id": {
+          "const": "credo.program_definition",
+          "default": "credo.program_definition",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "training_derived_label": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Training Derived Label"
+        }
+      },
+      "required": [
+        "program_definition_id",
+        "program_contract_id",
+        "program_index",
+        "loading_artifact",
+        "loading_threshold",
+        "nonzero_genes",
+        "positive_genes",
+        "negative_genes",
+        "l1_norm",
+        "l2_norm"
+      ],
+      "title": "ProgramDefinition",
+      "type": "object"
+    },
+    "ProgramNullContract": {
+      "additionalProperties": false,
+      "description": "Frozen negative controls for false-program inclusion.",
+      "properties": {
+        "maximum_program_inclusion_rate": {
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Maximum Program Inclusion Rate",
+          "type": "number"
+        },
+        "null_contract_id": {
+          "title": "Null Contract Id",
+          "type": "string"
+        },
+        "null_families": {
+          "items": {
+            "enum": [
+              "control_label_permutation",
+              "target_within_checkpoint_permutation",
+              "negative_binomial_no_program"
+            ],
+            "type": "string"
+          },
+          "title": "Null Families",
+          "type": "array"
+        },
+        "replicate_count": {
+          "minimum": 20,
+          "title": "Replicate Count",
+          "type": "integer"
+        },
+        "schema_id": {
+          "const": "credo.program_null_contract",
+          "default": "credo.program_null_contract",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "selection_threshold_frozen_before_nulls": {
+          "const": true,
+          "default": true,
+          "title": "Selection Threshold Frozen Before Nulls",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "null_contract_id",
+        "null_families",
+        "replicate_count",
+        "maximum_program_inclusion_rate"
+      ],
+      "title": "ProgramNullContract",
+      "type": "object"
+    },
+    "ProgramQualificationProtocol": {
+      "additionalProperties": false,
+      "description": "Content-addressed Dev40-B optimization, split, and threshold freeze.",
+      "properties": {
+        "baselines": {
+          "items": {
+            "$ref": "#/$defs/BaselineName"
+          },
+          "title": "Baselines",
+          "type": "array"
+        },
+        "effect_inclusion_threshold": {
+          "exclusiveMinimum": 0,
+          "title": "Effect Inclusion Threshold",
+          "type": "number"
+        },
+        "evaluation_dispersion_semantics": {
+          "const": "training_only_method_of_moments_shared_across_candidates",
+          "default": "training_only_method_of_moments_shared_across_candidates",
+          "title": "Evaluation Dispersion Semantics",
+          "type": "string"
+        },
+        "gradient_clip_norm": {
+          "exclusiveMinimum": 0,
+          "title": "Gradient Clip Norm",
+          "type": "number"
+        },
+        "guide_deviation_l2_weight": {
+          "exclusiveMinimum": 0,
+          "title": "Guide Deviation L2 Weight",
+          "type": "number"
+        },
+        "inner_validation_fraction": {
+          "exclusiveMaximum": 0.5,
+          "exclusiveMinimum": 0,
+          "title": "Inner Validation Fraction",
+          "type": "number"
+        },
+        "learning_rate": {
+          "exclusiveMinimum": 0,
+          "title": "Learning Rate",
+          "type": "number"
+        },
+        "loading_inclusion_threshold": {
+          "exclusiveMinimum": 0,
+          "title": "Loading Inclusion Threshold",
+          "type": "number"
+        },
+        "loading_l1_weight": {
+          "exclusiveMinimum": 0,
+          "title": "Loading L1 Weight",
+          "type": "number"
+        },
+        "max_epochs": {
+          "exclusiveMinimum": 0,
+          "title": "Max Epochs",
+          "type": "integer"
+        },
+        "maximum_null_inclusion_rate": {
+          "exclusiveMaximum": 1,
+          "exclusiveMinimum": 0,
+          "title": "Maximum Null Inclusion Rate",
+          "type": "number"
+        },
+        "minibatch_size": {
+          "exclusiveMinimum": 0,
+          "title": "Minibatch Size",
+          "type": "integer"
+        },
+        "minimum_delta": {
+          "minimum": 0,
+          "title": "Minimum Delta",
+          "type": "number"
+        },
+        "minimum_donor_loading_stability": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Minimum Donor Loading Stability",
+          "type": "number"
+        },
+        "minimum_gene_sign_accuracy": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Gene Sign Accuracy",
+          "type": "number"
+        },
+        "minimum_log_likelihood_improvement": {
+          "title": "Minimum Log Likelihood Improvement",
+          "type": "number"
+        },
+        "minimum_seed_loading_stability": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Minimum Seed Loading Stability",
+          "type": "number"
+        },
+        "minimum_sister_guide_correlation": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Minimum Sister Guide Correlation",
+          "type": "number"
+        },
+        "null_fit_epochs": {
+          "exclusiveMinimum": 0,
+          "title": "Null Fit Epochs",
+          "type": "integer"
+        },
+        "null_replicates": {
+          "minimum": 20,
+          "title": "Null Replicates",
+          "type": "integer"
+        },
+        "patience": {
+          "exclusiveMinimum": 0,
+          "title": "Patience",
+          "type": "integer"
+        },
+        "qualification_protocol_id": {
+          "title": "Qualification Protocol Id",
+          "type": "string"
+        },
+        "schema_id": {
+          "const": "credo.program_qualification_protocol",
+          "default": "credo.program_qualification_protocol",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seed": {
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "sparse_factor_rank": {
+          "exclusiveMinimum": 0,
+          "title": "Sparse Factor Rank",
+          "type": "integer"
+        },
+        "split_kinds": {
+          "items": {
+            "$ref": "#/$defs/ProgramSplitKind"
+          },
+          "title": "Split Kinds",
+          "type": "array"
+        },
+        "stability_seeds": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Stability Seeds",
+          "type": "array"
+        },
+        "target_effect_l2_weight": {
+          "exclusiveMinimum": 0,
+          "title": "Target Effect L2 Weight",
+          "type": "number"
+        },
+        "weight_decay": {
+          "minimum": 0,
+          "title": "Weight Decay",
+          "type": "number"
+        }
+      },
+      "required": [
+        "qualification_protocol_id",
+        "split_kinds",
+        "baselines",
+        "stability_seeds",
+        "sparse_factor_rank",
+        "null_replicates",
+        "null_fit_epochs",
+        "minimum_log_likelihood_improvement",
+        "minimum_gene_sign_accuracy",
+        "minimum_seed_loading_stability",
+        "minimum_donor_loading_stability",
+        "minimum_sister_guide_correlation",
+        "maximum_null_inclusion_rate",
+        "effect_inclusion_threshold",
+        "loading_inclusion_threshold",
+        "inner_validation_fraction",
+        "seed",
+        "learning_rate",
+        "weight_decay",
+        "max_epochs",
+        "patience",
+        "minimum_delta",
+        "gradient_clip_norm",
+        "minibatch_size",
+        "loading_l1_weight",
+        "guide_deviation_l2_weight",
+        "target_effect_l2_weight"
+      ],
+      "title": "ProgramQualificationProtocol",
+      "type": "object"
+    },
+    "ProgramQualificationReceipt": {
+      "additionalProperties": false,
+      "description": "Complete Dev40-B promotion gate.",
+      "properties": {
+        "donor_stability_pass": {
+          "title": "Donor Stability Pass",
+          "type": "boolean"
+        },
+        "external_pathway_concordance_available": {
+          "title": "External Pathway Concordance Available",
+          "type": "boolean"
+        },
+        "external_pathway_concordance_pass": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "External Pathway Concordance Pass"
+        },
+        "gene_sign_calibration_pass": {
+          "title": "Gene Sign Calibration Pass",
+          "type": "boolean"
+        },
+        "heldout_target_performance_pass": {
+          "title": "Heldout Target Performance Pass",
+          "type": "boolean"
+        },
+        "metrics_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "null_inclusion_calibrated": {
+          "title": "Null Inclusion Calibrated",
+          "type": "boolean"
+        },
+        "program_contract_id": {
+          "minLength": 1,
+          "title": "Program Contract Id",
+          "type": "string"
+        },
+        "qualification_protocol_id": {
+          "minLength": 1,
+          "title": "Qualification Protocol Id",
+          "type": "string"
+        },
+        "qualification_receipt_id": {
+          "title": "Qualification Receipt Id",
+          "type": "string"
+        },
+        "qualified_program_definition_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Qualified Program Definition Ids",
+          "type": "array"
+        },
+        "schema_id": {
+          "const": "credo.program_qualification_receipt",
+          "default": "credo.program_qualification_receipt",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "seed_stability_pass": {
+          "title": "Seed Stability Pass",
+          "type": "boolean"
+        },
+        "sister_guide_consistency_pass": {
+          "title": "Sister Guide Consistency Pass",
+          "type": "boolean"
+        },
+        "software_environment_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "split_evaluations": {
+          "items": {
+            "$ref": "#/$defs/ProgramSplitEvaluation"
+          },
+          "title": "Split Evaluations",
+          "type": "array"
+        },
+        "status": {
+          "$ref": "#/$defs/ProgramQualificationStatus"
+        },
+        "training_log_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "qualification_receipt_id",
+        "program_contract_id",
+        "qualification_protocol_id",
+        "scope",
+        "status",
+        "split_evaluations",
+        "seed_stability_pass",
+        "donor_stability_pass",
+        "null_inclusion_calibrated",
+        "sister_guide_consistency_pass",
+        "heldout_target_performance_pass",
+        "gene_sign_calibration_pass",
+        "external_pathway_concordance_available",
+        "qualified_program_definition_ids",
+        "metrics_artifact",
+        "training_log_artifact",
+        "software_environment_artifact"
+      ],
+      "title": "ProgramQualificationReceipt",
+      "type": "object"
+    },
+    "ProgramQualificationStatus": {
+      "description": "Scientific result gate; engineering execution is not a program result.",
+      "enum": [
+        "pass_scientific",
+        "fail_qualification",
+        "engineering_only"
+      ],
+      "title": "ProgramQualificationStatus",
+      "type": "string"
+    },
+    "ProgramSimulationContract": {
+      "additionalProperties": false,
+      "description": "Fixed-truth count simulation for positive, null, and ablation tests.",
+      "properties": {
+        "cells": {
+          "minimum": 100,
+          "title": "Cells",
+          "type": "integer"
+        },
+        "checkpoints": {
+          "minimum": 2,
+          "title": "Checkpoints",
+          "type": "integer"
+        },
+        "controls": {
+          "minimum": 2,
+          "title": "Controls",
+          "type": "integer"
+        },
+        "donors": {
+          "minimum": 3,
+          "title": "Donors",
+          "type": "integer"
+        },
+        "genes": {
+          "minimum": 20,
+          "title": "Genes",
+          "type": "integer"
+        },
+        "guides_per_target": {
+          "minimum": 2,
+          "title": "Guides Per Target",
+          "type": "integer"
+        },
+        "null_program_indices": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Null Program Indices",
+          "type": "array"
+        },
+        "programs": {
+          "minimum": 2,
+          "title": "Programs",
+          "type": "integer"
+        },
+        "schema_id": {
+          "const": "credo.program_simulation_contract",
+          "default": "credo.program_simulation_contract",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "seed": {
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "simulation_contract_id": {
+          "title": "Simulation Contract Id",
+          "type": "string"
+        },
+        "targets": {
+          "minimum": 3,
+          "title": "Targets",
+          "type": "integer"
+        },
+        "truth_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "simulation_contract_id",
+        "seed",
+        "cells",
+        "genes",
+        "programs",
+        "donors",
+        "checkpoints",
+        "targets",
+        "guides_per_target",
+        "controls",
+        "null_program_indices",
+        "truth_artifact"
+      ],
+      "title": "ProgramSimulationContract",
+      "type": "object"
+    },
+    "ProgramSplitEvaluation": {
+      "additionalProperties": false,
+      "description": "One leakage-audited split and every frozen comparator.",
+      "properties": {
+        "baselines": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BaselineMetric"
+          },
+          "title": "Baselines",
+          "type": "array"
+        },
+        "eligible": {
+          "title": "Eligible",
+          "type": "boolean"
+        },
+        "evaluation_units": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evaluation Units",
+          "type": "array"
+        },
+        "fit_units": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Fit Units",
+          "type": "array"
+        },
+        "gene_sign_accuracy": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Gene Sign Accuracy"
+        },
+        "improvement_over_best_baseline": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Improvement Over Best Baseline"
+        },
+        "ineligibility_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ineligibility Reason"
+        },
+        "kind": {
+          "$ref": "#/$defs/ProgramSplitKind"
+        },
+        "model_mean_log_likelihood_per_count": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Mean Log Likelihood Per Count"
+        },
+        "model_mean_negative_log_likelihood_per_cell": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model Mean Negative Log Likelihood Per Cell"
+        },
+        "passed": {
+          "title": "Passed",
+          "type": "boolean"
+        },
+        "protected_expression_access_contract_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protected Expression Access Contract Id"
+        },
+        "split_id": {
+          "minLength": 1,
+          "title": "Split Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "split_id",
+        "kind",
+        "eligible",
+        "passed",
+        "fit_units",
+        "evaluation_units"
+      ],
+      "title": "ProgramSplitEvaluation",
+      "type": "object"
+    },
+    "ProgramSplitKind": {
+      "description": "Non-interchangeable outer validation splits.",
+      "enum": [
+        "heldout_donor",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_time"
+      ],
+      "title": "ProgramSplitKind",
+      "type": "string"
+    },
+    "ProgramUncertainty": {
+      "additionalProperties": false,
+      "description": "Seed/donor stability and calibrated inclusion uncertainty.",
+      "properties": {
+        "donor_count": {
+          "minimum": 0,
+          "title": "Donor Count",
+          "type": "integer"
+        },
+        "donor_loading_stability_artifact": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArtifactRef"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "donor_stability_available": {
+          "title": "Donor Stability Available",
+          "type": "boolean"
+        },
+        "inclusion_probability_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "median_donor_loading_correlation": {
+          "anyOf": [
+            {
+              "maximum": 1,
+              "minimum": -1,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Median Donor Loading Correlation"
+        },
+        "median_seed_loading_correlation": {
+          "maximum": 1,
+          "minimum": -1,
+          "title": "Median Seed Loading Correlation",
+          "type": "number"
+        },
+        "null_inclusion_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "null_inclusion_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Null Inclusion Rate",
+          "type": "number"
+        },
+        "program_contract_id": {
+          "minLength": 1,
+          "title": "Program Contract Id",
+          "type": "string"
+        },
+        "schema_id": {
+          "const": "credo.program_uncertainty",
+          "default": "credo.program_uncertainty",
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "seed_count": {
+          "minimum": 3,
+          "title": "Seed Count",
+          "type": "integer"
+        },
+        "seed_loading_stability_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "uncertainty_id": {
+          "title": "Uncertainty Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uncertainty_id",
+        "program_contract_id",
+        "scope",
+        "seed_count",
+        "donor_count",
+        "seed_loading_stability_artifact",
+        "inclusion_probability_artifact",
+        "null_inclusion_artifact",
+        "median_seed_loading_correlation",
+        "donor_stability_available",
+        "null_inclusion_rate"
+      ],
+      "title": "ProgramUncertainty",
+      "type": "object"
+    },
+    "ProtectedExpressionAccessContract": {
+      "additionalProperties": false,
+      "description": "Leakage firewall for every decision that could inspect protected expression.",
+      "properties": {
+        "audit_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "batch_correction_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Batch Correction Accessed",
+          "type": "boolean"
+        },
+        "feature_selection_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Feature Selection Accessed",
+          "type": "boolean"
+        },
+        "metric_threshold_selection_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Metric Threshold Selection Accessed",
+          "type": "boolean"
+        },
+        "model_selection_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Model Selection Accessed",
+          "type": "boolean"
+        },
+        "normalization_estimation_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Normalization Estimation Accessed",
+          "type": "boolean"
+        },
+        "program_or_pathway_discovery_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Program Or Pathway Discovery Accessed",
+          "type": "boolean"
+        },
+        "protected_access_contract_id": {
+          "title": "Protected Access Contract Id",
+          "type": "string"
+        },
+        "protected_checkpoint_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Protected Checkpoint Ids",
+          "type": "array"
+        },
+        "representation_fit_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Representation Fit Accessed",
+          "type": "boolean"
+        },
+        "stopping_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Stopping Accessed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "protected_access_contract_id",
+        "protected_checkpoint_ids",
+        "audit_artifact"
+      ],
+      "title": "ProtectedExpressionAccessContract",
+      "type": "object"
+    },
+    "RelativeAbundanceDesignContract": {
+      "additionalProperties": false,
+      "description": "Design gates needed before guide fractions identify relative selection.",
+      "properties": {
+        "guide_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Guide Catalog Sha256",
+          "type": "string"
+        },
+        "pool_or_exposure_alignment": {
+          "const": true,
+          "default": true,
+          "title": "Pool Or Exposure Alignment",
+          "type": "boolean"
+        },
+        "relative_design_id": {
+          "title": "Relative Design Id",
+          "type": "string"
+        },
+        "replicate_identity_complete": {
+          "const": true,
+          "default": true,
+          "title": "Replicate Identity Complete",
+          "type": "boolean"
+        },
+        "sampling_uncertainty_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "stable_denominator_definition": {
+          "minLength": 1,
+          "title": "Stable Denominator Definition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_design_id",
+        "guide_catalog_sha256",
+        "stable_denominator_definition",
+        "sampling_uncertainty_artifact"
+      ],
+      "title": "RelativeAbundanceDesignContract",
+      "type": "object"
+    },
     "ScientificCapability": {
       "description": "Structurally detectable scientific capability.",
       "enum": [
@@ -518,7 +2570,9 @@
         "supports_strict_heldout_time",
         "supports_relative_abundance",
         "supports_absolute_abundance",
-        "supports_ecology",
+        "supports_physical_context_association",
+        "supports_ecological_counterfactual",
+        "supports_ecological_intervention",
         "supports_clone_lineage",
         "supports_ancestral_lineage",
         "supports_direct_cell_path"
@@ -527,18 +2581,19 @@
       "type": "string"
     },
     "ScientificClaimKind": {
-      "description": "Biological claim classes with distinct capability requirements.",
+      "description": "Atomic claim classes with distinct evidence conjunctions.",
       "enum": [
         "perturbation_program_association",
         "population_transition",
         "relative_selection",
-        "absolute_net_growth",
+        "absolute_net_change",
         "proliferation_component",
         "death_component",
         "migration_or_compartment_loss",
         "diffusion_attribution",
         "biological_plasticity",
-        "ecological_association",
+        "physical_context_association",
+        "ecological_counterfactual",
         "ecological_mechanism",
         "clone_fate",
         "ancestral_lineage",
@@ -550,19 +2605,8 @@
     },
     "ScientificClaimRequest": {
       "additionalProperties": false,
-      "description": "Requested wording plus exact evidence, before capability adjudication.",
+      "description": "Typed atomic claim plus semantically linked evidence; prose is non-authoritative.",
       "properties": {
-        "abundance_semantics": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AbundanceSemantics"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "claim_id": {
           "minLength": 1,
           "title": "Claim Id",
@@ -572,19 +2616,30 @@
           "title": "Claim Request Id",
           "type": "string"
         },
-        "evidence_sha256s": {
-          "items": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "title": "Evidence Sha256S",
-          "type": "array"
+        "estimand": {
+          "$ref": "#/$defs/ScientificEstimand"
         },
-        "evidence_tier": {
-          "$ref": "#/$defs/EvidenceTier"
+        "evidence_links": {
+          "items": {
+            "$ref": "#/$defs/EvidenceLink"
+          },
+          "title": "Evidence Links",
+          "type": "array"
         },
         "kind": {
           "$ref": "#/$defs/ScientificClaimKind"
+        },
+        "requested_free_text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Requested Free Text"
         },
         "schema_id": {
           "const": "credo.scientific_claim_request",
@@ -597,13 +2652,102 @@
           "default": 1,
           "title": "Schema Version",
           "type": "integer"
+        }
+      },
+      "required": [
+        "claim_request_id",
+        "claim_id",
+        "kind",
+        "estimand",
+        "evidence_links"
+      ],
+      "title": "ScientificClaimRequest",
+      "type": "object"
+    },
+    "ScientificEstimand": {
+      "additionalProperties": false,
+      "description": "One atomic estimand from which publishable wording is rendered.",
+      "properties": {
+        "abundance_entity": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbundanceEntity"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
-        "supports": {
-          "items": {
-            "$ref": "#/$defs/EvidenceSupport"
-          },
-          "title": "Supports",
-          "type": "array"
+        "abundance_process": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbundanceProcess"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "abundance_scale": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbundanceScale"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "causal_status": {
+          "$ref": "#/$defs/CausalStatus"
+        },
+        "direction": {
+          "$ref": "#/$defs/EffectDirection"
+        },
+        "effect_measure": {
+          "minLength": 1,
+          "title": "Effect Measure",
+          "type": "string"
+        },
+        "estimand": {
+          "minLength": 1,
+          "title": "Estimand",
+          "type": "string"
+        },
+        "mechanism_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mechanism Type"
+        },
+        "outcome": {
+          "minLength": 1,
+          "title": "Outcome",
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
+        "system_boundary": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "System Boundary"
         },
         "trajectory_semantics": {
           "anyOf": [
@@ -616,23 +2760,83 @@
           ],
           "default": null
         },
-        "wording": {
+        "uncertainty_result_id": {
           "minLength": 1,
-          "title": "Wording",
+          "title": "Uncertainty Result Id",
           "type": "string"
         }
       },
       "required": [
-        "claim_request_id",
-        "claim_id",
-        "kind",
-        "wording",
-        "evidence_tier",
-        "supports",
-        "evidence_sha256s"
+        "scope",
+        "outcome",
+        "estimand",
+        "direction",
+        "effect_measure",
+        "causal_status",
+        "uncertainty_result_id"
       ],
-      "title": "ScientificClaimRequest",
+      "title": "ScientificEstimand",
       "type": "object"
+    },
+    "ScientificScope": {
+      "additionalProperties": false,
+      "description": "Exact scope that must agree across a result and every supporting claim.",
+      "properties": {
+        "comparison": {
+          "minLength": 1,
+          "title": "Comparison",
+          "type": "string"
+        },
+        "entity_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Entity Scope",
+          "type": "array"
+        },
+        "population": {
+          "minLength": 1,
+          "title": "Population",
+          "type": "string"
+        },
+        "sample_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sample Scope",
+          "type": "array"
+        },
+        "subject": {
+          "minLength": 1,
+          "title": "Subject",
+          "type": "string"
+        },
+        "time_scope": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Time Scope",
+          "type": "array"
+        }
+      },
+      "required": [
+        "subject",
+        "entity_scope",
+        "sample_scope",
+        "time_scope",
+        "population",
+        "comparison"
+      ],
+      "title": "ScientificScope",
+      "type": "object"
+    },
+    "SparseLoadingPrior": {
+      "description": "Qualified optimization surrogate for sparse gene-program loadings.",
+      "enum": [
+        "l1_with_unit_norm_columns"
+      ],
+      "title": "SparseLoadingPrior",
+      "type": "string"
     },
     "StudyEntityCounts": {
       "additionalProperties": false,
@@ -706,11 +2910,29 @@
     },
     "StudyEvidenceContract": {
       "additionalProperties": false,
-      "description": "Observed study-design fields from which capabilities are derived.",
+      "description": "Observed study design plus auditable non-field gates.",
       "properties": {
-        "absolute_count_basis": {
-          "$ref": "#/$defs/AbsoluteCountBasis",
-          "default": "none"
+        "absolute_abundance_design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AbsoluteAbundanceDesignContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "clone_observation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CloneObservationContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "destructive_snapshots_only": {
           "default": true,
@@ -727,10 +2949,43 @@
           "title": "Observed Fields",
           "type": "array"
         },
+        "physical_context_design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PhysicalContextDesignContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "physical_pool_identity_complete": {
           "default": false,
           "title": "Physical Pool Identity Complete",
           "type": "boolean"
+        },
+        "protected_expression_access": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProtectedExpressionAccessContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "relative_abundance_design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RelativeAbundanceDesignContract"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "schema_id": {
           "const": "credo.study_evidence_contract",
@@ -752,11 +3007,6 @@
           "minLength": 1,
           "title": "Study Id",
           "type": "string"
-        },
-        "training_only_heldout_time_representation": {
-          "default": false,
-          "title": "Training Only Heldout Time Representation",
-          "type": "boolean"
         }
       },
       "required": [
@@ -769,7 +3019,7 @@
       "type": "object"
     },
     "StudyField": {
-      "description": "Fields that may unlock a scientific result layer.",
+      "description": "Physically observed fields that may unlock a scientific result layer.",
       "enum": [
         "biological_sample_id",
         "physical_pool_id",
@@ -780,6 +3030,7 @@
         "guide_id",
         "target_id",
         "cell_id",
+        "cell_state",
         "clone_id",
         "lineage_parent_id",
         "live_cell_track_id",
@@ -806,8 +3057,12 @@
           "title": "Capability Assessment Id",
           "type": "string"
         },
-        "evidence_tier": {
-          "$ref": "#/$defs/EvidenceTier"
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/EvidenceDescriptor"
+          },
+          "title": "Evidence",
+          "type": "array"
         },
         "heldout_time_evaluation": {
           "anyOf": [
@@ -861,6 +3116,9 @@
           "title": "Schema Version",
           "type": "integer"
         },
+        "scope": {
+          "$ref": "#/$defs/ScientificScope"
+        },
         "semantics": {
           "$ref": "#/$defs/LineageResultSemantics"
         },
@@ -875,12 +3133,10 @@
           ],
           "default": null
         },
-        "supports": {
-          "items": {
-            "$ref": "#/$defs/EvidenceSupport"
-          },
-          "title": "Supports",
-          "type": "array"
+        "study_id": {
+          "minLength": 1,
+          "title": "Study Id",
+          "type": "string"
         },
         "terminal_fate_probabilities": {
           "anyOf": [
@@ -906,9 +3162,10 @@
       },
       "required": [
         "trajectory_result_id",
+        "study_id",
         "capability_assessment_id",
-        "evidence_tier",
-        "supports",
+        "scope",
+        "evidence",
         "lineage_level",
         "semantics",
         "observed_checkpoints",
@@ -969,6 +3226,17 @@
       "minLength": 1,
       "title": "Perturbation Id",
       "type": "string"
+    },
+    "programs": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BiologicalProgramQualificationBundle"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schema_id": {
       "const": "credo.perturbation_dossier",

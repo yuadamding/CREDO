@@ -49,7 +49,7 @@ def _hash(value: Any) -> str:
     return sha256_bytes(canonical_json_bytes(value))
 
 
-def _problem_hash(arrays: dict[str, np.ndarray]) -> str:
+def _problem_hash(arrays: dict[str, np.ndarray[Any, Any]]) -> str:
     rows = []
     for name in sorted(arrays):
         value = np.ascontiguousarray(arrays[name])
@@ -91,7 +91,7 @@ def _verify_selection_calibration(
     implementation_hash: str,
     config: Any,
     snapshot: SemanticStudySnapshot,
-    problem_arrays: dict[str, np.ndarray],
+    problem_arrays: dict[str, np.ndarray[Any, Any]],
 ) -> None:
     artifact_path = (calibration_path.parent / calibration.results_artifact.relative_uri).resolve()
     try:
@@ -209,12 +209,12 @@ def _verify_selection_calibration(
 
 def _lookup_means(
     snapshot: SemanticStudySnapshot,
-    row_ids: np.ndarray,
-    latents: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
+    row_ids: np.ndarray[Any, Any],
+    latents: np.ndarray[Any, Any],
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     lookup = {int(row_id): index for index, row_id in enumerate(row_ids)}
-    source: list[np.ndarray] = []
-    terminal: list[np.ndarray] = []
+    source: list[np.ndarray[Any, Any]] = []
+    terminal: list[np.ndarray[Any, Any]] = []
     for series in snapshot.series:
         missing_source = [row for row in series.source_rows if row not in lookup]
         missing_terminal = [row for row in series.terminal_rows if row not in lookup]
@@ -544,13 +544,15 @@ def compile_problem(config_path: Path) -> Path:
             canonical_json_bytes(snapshot.model_dump(mode="json")) + b"\n"
         )
         with (temp / "problem.npz").open("xb") as handle:
-            np.savez(handle, **problem_arrays)  # type: ignore[arg-type]
+            np.savez(handle, **problem_arrays)
 
     publish_directory(destination, writer)
     return destination
 
 
-def load_compiled_problem(workspace: Path) -> tuple[CompiledRunContract, dict[str, np.ndarray]]:
+def load_compiled_problem(
+    workspace: Path,
+) -> tuple[CompiledRunContract, dict[str, np.ndarray[Any, Any]]]:
     root = workspace / "compiled"
     contract = CompiledRunContract.model_validate_json((root / "contract.json").read_text())
     with np.load(root / "problem.npz", allow_pickle=False) as handle:

@@ -521,9 +521,7 @@ def test_dev37_internally_verified_real_store_and_source_ranking(tmp_path: Path)
         source_plane_root=tmp_path,
         source_files_root=source_root,
     )
-    authority_for_open = G00CD1ExecutionAuthorityFreezeV3.model_construct(
-        source_plane=binding
-    )
+    authority_for_open = G00CD1ExecutionAuthorityFreezeV3.model_construct(source_plane=binding)
     reopened, reopened_feature_ids = open_verified_g00b_v4(
         authority_root,
         authority_for_open,

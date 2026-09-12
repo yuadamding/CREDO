@@ -41,14 +41,14 @@ from ..store import CountStore
 
 @dataclass
 class _GeneDecoderData:
-    row_ids: np.ndarray
-    latents: np.ndarray
+    row_ids: np.ndarray[Any, Any]
+    latents: np.ndarray[Any, Any]
     counts: sparse.csr_matrix
-    library_sizes: np.ndarray
-    validation_row_ids: np.ndarray
-    validation_latents: np.ndarray
+    library_sizes: np.ndarray[Any, Any]
+    validation_row_ids: np.ndarray[Any, Any]
+    validation_latents: np.ndarray[Any, Any]
     validation_counts: sparse.csr_matrix
-    validation_library_sizes: np.ndarray
+    validation_library_sizes: np.ndarray[Any, Any]
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class _StateSplit:
 
 
 def _state_split(
-    arrays: dict[str, np.ndarray], config: ResolvedConfig, device: torch.device
+    arrays: dict[str, np.ndarray[Any, Any]], config: ResolvedConfig, device: torch.device
 ) -> _StateSplit:
     """Create a deterministic target-stratified training-only state split."""
 
@@ -101,7 +101,7 @@ def _state_split(
     if config.training.state_validation_fraction and not len(validation_array):
         raise ValueError("The configured state validation split is empty.")
 
-    def series_hash(indices: np.ndarray) -> str:
+    def series_hash(indices: np.ndarray[Any, Any]) -> str:
         payload = "\n".join(series[indices].tolist()).encode() + b"\n"
         return sha256_bytes(payload)
 
@@ -114,7 +114,7 @@ def _state_split(
 
 
 def _all_state_split(
-    arrays: dict[str, np.ndarray], config: ResolvedConfig, device: torch.device
+    arrays: dict[str, np.ndarray[Any, Any]], config: ResolvedConfig, device: torch.device
 ) -> _StateSplit:
     """Return the post-selection refit information set: every evaluable train series."""
 
@@ -267,7 +267,9 @@ def _validate_pilot_device(config: ResolvedConfig, device: torch.device) -> None
         )
 
 
-def _tensor_problem(arrays: dict[str, np.ndarray], device: torch.device) -> dict[str, torch.Tensor]:
+def _tensor_problem(
+    arrays: dict[str, np.ndarray[Any, Any]], device: torch.device
+) -> dict[str, torch.Tensor]:
     result: dict[str, torch.Tensor] = {}
     for name, value in arrays.items():
         if value.dtype.kind in "USO":
@@ -1563,7 +1565,7 @@ def _post_selection_refit(
     workspace: Path,
     training_root: Path,
     contract: CompiledRunContract,
-    arrays: dict[str, np.ndarray],
+    arrays: dict[str, np.ndarray[Any, Any]],
     config: ResolvedConfig,
     device: torch.device,
     selection: dict[str, Any],
@@ -1865,7 +1867,7 @@ def _load_latest(
     device: torch.device,
 ) -> tuple[
     CompiledRunContract,
-    dict[str, np.ndarray],
+    dict[str, np.ndarray[Any, Any]],
     CountSDEModel,
     torch.optim.Optimizer,
     CheckpointManifest,
@@ -1997,7 +1999,7 @@ def resume_training(config_path: Path, *, device: str | torch.device | None = No
 
 def load_training_state(
     config_path: Path, *, device: str | torch.device = "cpu"
-) -> tuple[CompiledRunContract, dict[str, np.ndarray], CountSDEModel, CheckpointManifest]:
+) -> tuple[CompiledRunContract, dict[str, np.ndarray[Any, Any]], CountSDEModel, CheckpointManifest]:
     from ..prepare.pipeline import load_config
 
     config = load_config(config_path)

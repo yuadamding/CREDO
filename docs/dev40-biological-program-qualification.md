@@ -1,9 +1,11 @@
 # Dev40 static biological-program qualification
 
-Last verified: 2026-08-21 (America/Chicago)
+Original design: 2026-08-21. Interpretation corrected: 2026-09-12.
 
-Status: **implemented qualification program; cohort outcomes remain external
-receipt-bound evidence**
+Status: **bounded component diagnostic, not qualified biological programs**.
+See [the correction record](review-789537f-corrections.md). Historical receipts
+remain unchanged; newly computed metrics use revision 2. The legacy universal
+gate remains named and separate, but its null-calibration gate now fails closed.
 
 ## Decision
 
@@ -11,8 +13,9 @@ Dev40 implements Phase 2 in two parts:
 
 - Dev40-A freezes the raw-count observation model and typed program result
   contracts.
-- Dev40-B qualifies the static/checkpoint-conditional head against fixed
-  splits, baselines, stability tests, and negative controls.
+- Dev40-B evaluates the static/checkpoint-conditional head against diagnostic
+  splits, baselines, stability tests, and negative controls. That implementation
+  did not establish valid discovery calibration.
 
 It does not couple programs to the V4 SDE, add a transition loss, or modify the
 checkpoint schema. Those operations are reserved for Dev41 after a static
@@ -46,6 +49,13 @@ The target/guide hierarchy is frozen before fitting:
 a_{ij}=a_{ref}+a_{target(t_j)}+q_j a_{guide(j)}.
 \]
 
+`q_j` is an **unidentified latent guide scale**, not measured guide efficiency.
+Its product with a free deviation is rescalable without changing predictions;
+regularization does not identify biological efficacy. The historical checkpoint
+key and artifact name `guide_efficiency` remain for compatibility, with this
+restriction recorded in new metric artifacts. Within-target hard centering is
+not implemented. Do not derive an efficacy anchor from protected endpoints.
+
 With only target identifiers, unseen-target prediction is structurally
 ineligible. It becomes eligible only when predeclared target descriptors exist
 independently of protected expression and are bound as an artifact.
@@ -57,7 +67,7 @@ The immutable result surface contains:
 | Contract | Meaning |
 | --- | --- |
 | `ProgramDefinition` | Sparse signed gene loading, without an automatic pathway name |
-| `PerturbationProgramEffect` | Reference, target, guide-deviation, and guide-efficiency program activity |
+| `PerturbationProgramEffect` | Reference, target, guide-deviation, and legacy-named latent guide scale |
 | `GeneLevelEffect` | Program-reconstructed signed gene effect and uncertainty |
 | `GuideTargetConsistency` | Sister-guide agreement and target/guide variance summary |
 | `ProgramUncertainty` | Separate seed and biological-donor loading stability plus null inclusion |
@@ -68,7 +78,7 @@ Every top-level result is schema-versioned and content-addressed. Model state is
 stored as non-pickle NPZ. Publication is atomic and no-clobber; verification
 recomputes every artifact size and SHA-256.
 
-## Four outer splits
+## Four legacy split types, not four prepared outer donor folds
 
 The split kinds are not interchangeable:
 
@@ -83,8 +93,16 @@ least two fit checkpoints, one evaluation checkpoint, and a
 `ProtectedExpressionAccessContract`. Held-out target needs predeclared target
 descriptors; an identifier embedding cannot extrapolate to an unseen ID.
 
-Each outer training set is split again into fit and inner-validation rows.
-Stopping and checkpoint selection inspect only that inner validation subset.
+This component chooses the maximum donor index and a random-cell inner split.
+It does **not** consume the prepared four-outer/12-inner donor plan and must not
+be reported as that experiment. Stopping inspects only its inner subset.
+Known-target donor forecasting needs a separately qualified nested-donor
+profile, not mandatory unseen-target success under this universal diagnostic.
+
+Strictly increasing physical checkpoint times remain required. GSE314342's
+Rest/Stim8hr/Stim48hr `[8,8,48]` collection times cannot be supplied as a single
+ordered trajectory. A condition/branch-aware successor remains necessary; do
+not fabricate Rest time zero or merely relax the duplicate-time check.
 
 ## Six frozen baselines
 
@@ -99,9 +117,21 @@ this exact order:
 6. control only.
 
 Baseline fitting receives training counts, labels, and library totals only.
-Evaluation counts never affect baseline parameters. The program head must
-improve mean log likelihood per observed count over the strongest comparator
-and satisfy the frozen gene-sign threshold.
+Evaluation counts never affect baseline parameters. The common-dispersion
+mean-prediction score uses training-only method-of-moments dispersion for both
+model and baselines. Improvement uses this shared score, not the likelihood
+of the fitted NB distribution. Revision 2 also reports
+`predictive_nb_log_likelihood` using the head's fitted dispersion. Inner
+checkpoint selection uses that head's fitted-NB negative log likelihood.
+
+Gene sign is evaluated per donor/condition/guide/gene, then macro-aggregated
+over conditions, guides, targets and donors. Observed matched controls define
+truth only; model control predictions define the predicted contrast. The
+fixed informative threshold is absolute log-composition effect at least 0.05,
+with log pseudocount `1e-8`. Missing matched controls or no informative effects
+produce undefined metrics and explicit coverage losses. All reported units
+must be supported to pass the diagnostic split gate. This is a panel-composition
+metric, not absolute expression or causal knockdown validation.
 
 ## Stability and null calibration
 
@@ -111,9 +141,11 @@ donor is excluded in turn and its loading basis is aligned to the full-data
 reference. When donor identity is unavailable, donor stability is unavailable
 and promotion fails.
 
-Sister-guide consistency is computed only from guides actually observed in
-the qualification dataset. Unobserved library members cannot create artificial
-agreement.
+Sister-guide consistency intersects explicit donor/condition/gene keys for
+each pair. Equal vector length is insufficient. Pair support and missing
+comparisons are persisted; incomplete support fails the gate. Between-target
+variance is not estimated by this keyed evaluator: the legacy scalar slot is
+zero with an explicit unestimated status, not a variance-explained result.
 
 At least 20 negative-control fits cycle through three families:
 
@@ -121,8 +153,13 @@ At least 20 negative-control fits cycle through three families:
 - target/guide permutation within checkpoint; and
 - NB no-program simulation preserving checkpoint-specific library structure.
 
-The program inclusion threshold is frozen before those nulls. The aggregate
-false inclusion rate must remain below its preregistered maximum.
+These legacy runs measure raw coefficient exceedance, not false discoveries.
+They retain shortened schedules and imperfectly stratified permutations for
+historical diagnostic continuity only. Revision 2 always records
+`null_inclusion_calibrated=false`; no threshold setting can promote this route.
+An effect-scale inclusion rule, the actual factual selection/stopping procedure,
+and defensible donor/condition exchangeability remain to be implemented under
+a new qualification protocol. More null replicates alone do not solve this.
 
 ## Promotion rule
 
@@ -161,7 +198,8 @@ detection. Adversarial tests reject noninteger counts, cross-wired hierarchy,
 missing donor semantics, two-checkpoint time claims, identifier-only target
 claims, unsafe artifact changes, and incomplete baseline sets.
 
-The existence of a complete Dev40 bundle proves that the software ran. Only a
-`pass_scientific` receipt with all gates satisfied authorizes program-level
-biological interpretation. A GPU allocation, long optimization, low training
+The existence of a complete Dev40 bundle proves that the software ran. The
+corrected route cannot currently emit a new `pass_scientific` result. Historical
+numerical passes do not override the subsequently identified metric and null
+defects or authorize biological interpretation. A GPU allocation, low training
 loss, or visually sparse loading does not substitute for those gates.

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
@@ -33,7 +34,7 @@ PHYSICAL_COLUMNS = (
 )
 
 
-def _hash_int64(values: np.ndarray, *, ordered: bool) -> str:
+def _hash_int64(values: np.ndarray[Any, Any], *, ordered: bool) -> str:
     array = np.asarray(values, dtype="<i8")
     if not ordered:
         array = np.sort(array, kind="stable")
@@ -54,7 +55,7 @@ def _implementation_hash(authority: G00CD1ExecutionAuthorityFreezeV2, role: str)
 def _role_rows(
     root: Path,
     authority: G00CD1ExecutionAuthorityFreezeV2 | G00CD1ExecutionAuthorityFreezeV3,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray[Any, Any]]:
     table = pd.read_parquet(_path(root, authority.row_role_freeze))
     if tuple(table.columns) != ("row_id", "role") or table["row_id"].duplicated().any():
         raise IntegrityError("Dev36 materializer found malformed row-role authority.")
@@ -64,7 +65,9 @@ def _role_rows(
     }
 
 
-def _physical_runs(store: VirtualCanonicalCountStore, ordered_rows: np.ndarray) -> pd.DataFrame:
+def _physical_runs(
+    store: VirtualCanonicalCountStore, ordered_rows: np.ndarray[Any, Any]
+) -> pd.DataFrame:
     locator_ids, source_indices, source_rows = store._locator()
     positions = np.searchsorted(locator_ids, ordered_rows)
     if np.any(positions >= len(locator_ids)) or not np.array_equal(
@@ -121,11 +124,11 @@ def _verify_h5(
     path: Path,
     *,
     store: VirtualCanonicalCountStore,
-    expected_rows: np.ndarray,
+    expected_rows: np.ndarray[Any, Any],
     feature_ids: list[str],
-    feature_indices: np.ndarray,
-    data_dtype: np.dtype,
-    index_dtype: np.dtype,
+    feature_indices: np.ndarray[Any, Any],
+    data_dtype: np.dtype[Any],
+    index_dtype: np.dtype[Any],
     maximum_count: int,
     block_rows: int,
 ) -> None:
@@ -179,7 +182,7 @@ def verify_g00c_materialization_v3(
     receipt: G00CMaterializationReceiptV3,
     *,
     expected_selected_feature_ids: tuple[str, ...],
-    expected_selected_rows: np.ndarray,
+    expected_selected_rows: np.ndarray[Any, Any],
 ) -> None:
     """Open and compare every compact/sidecar value; no callback identity is trusted."""
 

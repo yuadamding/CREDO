@@ -1,5 +1,10 @@
 # Full-cohort successor: access foundation, not a trained-model result
 
+The [789537f correction record](review-789537f-corrections.md) supersedes the
+initial access contract with required guide/target/control binding (schema V2),
+adds row-restricted selection, and records current validation limitations.
+Historical V1 access receipts are not silently upgraded or re-certified.
+
 The 2026-09-12 successor starts a new lineage from the user's full-cohort
 specification. It does not change historical qualification records or redirect
 the existing SVD/centroid CLI to an unqualified replacement.

@@ -6,7 +6,7 @@ import hashlib
 import json
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import h5py
 import numpy as np
@@ -26,16 +26,16 @@ from ..errors import ContractError, IntegrityError
 from .csr import SparseCountBatch
 
 
-def _permutation_hash(values: np.ndarray) -> str:
+def _permutation_hash(values: np.ndarray[Any, Any]) -> str:
     permutation = np.asarray(values, dtype="<i4")
     return hashlib.sha256(permutation.tobytes(order="C")).hexdigest()
 
 
-def _int64_hash(values: np.ndarray) -> str:
+def _int64_hash(values: np.ndarray[Any, Any]) -> str:
     return hashlib.sha256(np.asarray(values, dtype="<i8").tobytes(order="C")).hexdigest()
 
 
-def _source_row_pairs_hash(source_index: int, source_rows: np.ndarray) -> str:
+def _source_row_pairs_hash(source_index: int, source_rows: np.ndarray[Any, Any]) -> str:
     digest = hashlib.sha256()
     rows = np.asarray(source_rows, dtype=np.int64)
     for start in range(0, len(rows), 1_000_000):
@@ -48,7 +48,7 @@ def _source_row_pairs_hash(source_index: int, source_rows: np.ndarray) -> str:
 
 
 def _csr_rows(
-    path: Path, source: VirtualCountSourceV2 | VirtualCountSource, rows: np.ndarray
+    path: Path, source: VirtualCountSourceV2 | VirtualCountSource, rows: np.ndarray[Any, Any]
 ) -> sparse.csr_matrix:
     requested = np.asarray(rows, dtype=np.int64)
     if np.any(requested < 0) or np.any(requested >= source.rows):
@@ -100,8 +100,10 @@ class VirtualCanonicalCountStore:
             self.manifest = VirtualCanonicalCountStoreManifestV2.model_validate_json(payload)
         else:
             raise IntegrityError(f"Unsupported virtual canonical schema version: {version}.")
-        self._locator_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
-        self._permutations: tuple[np.ndarray, ...] | None = None
+        self._locator_cache: (
+            tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any]] | None
+        ) = None
+        self._permutations: tuple[np.ndarray[Any, Any], ...] | None = None
 
     @property
     def locator_cache_bytes(self) -> int:
@@ -112,7 +114,7 @@ class VirtualCanonicalCountStore:
     def _sources(self) -> tuple[VirtualCountSource | VirtualCountSourceV2, ...]:
         return cast(tuple[VirtualCountSource | VirtualCountSourceV2, ...], self.manifest.sources)
 
-    def _locator(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _locator(self) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any]]:
         if self._locator_cache is None:
             locator_path = self.path / self.manifest.row_locator.relative_uri
             with h5py.File(locator_path, "r") as handle:
@@ -152,7 +154,10 @@ class VirtualCanonicalCountStore:
         return guide_hash, target_hash
 
     def _verify_dev30_authority_artifacts(
-        self, row_ids: np.ndarray, source_indices: np.ndarray, source_rows: np.ndarray
+        self,
+        row_ids: np.ndarray[Any, Any],
+        source_indices: np.ndarray[Any, Any],
+        source_rows: np.ndarray[Any, Any],
     ) -> None:
         if not isinstance(self.manifest, VirtualCanonicalCountStoreManifestV2):
             return
@@ -289,7 +294,7 @@ class VirtualCanonicalCountStore:
             ):
                 raise IntegrityError(f"Source derivation receipt differs for {source.source_id}.")
 
-    def _feature_permutations(self) -> tuple[np.ndarray, ...]:
+    def _feature_permutations(self) -> tuple[np.ndarray[Any, Any], ...]:
         if self._permutations is None:
             path = self.path / self.manifest.feature_permutations.relative_uri
             with np.load(path, allow_pickle=False) as archive:
@@ -357,7 +362,7 @@ class VirtualCanonicalCountStore:
         self._feature_permutations()
         return self.manifest
 
-    def rows(self, row_ids: np.ndarray) -> SparseCountBatch:
+    def rows(self, row_ids: np.ndarray[Any, Any]) -> SparseCountBatch:
         requested = np.asarray(row_ids, dtype=np.int64)
         if not len(requested):
             return SparseCountBatch(
@@ -376,7 +381,7 @@ class VirtualCanonicalCountStore:
         source_rows = locator_rows[found]
         permutations = self._feature_permutations()
         blocks: list[sparse.csr_matrix] = []
-        output_positions: list[np.ndarray] = []
+        output_positions: list[np.ndarray[Any, Any]] = []
         for source_index in np.unique(source_indices):
             positions = np.where(source_indices == source_index)[0]
             source = self.manifest.sources[int(source_index)]
@@ -396,7 +401,7 @@ class VirtualCanonicalCountStore:
         )
 
     def iter_batches(
-        self, ordered_row_ids: np.ndarray, *, batch_size: int, cursor: int = 0
+        self, ordered_row_ids: np.ndarray[Any, Any], *, batch_size: int, cursor: int = 0
     ) -> Iterator[tuple[int, SparseCountBatch]]:
         if batch_size <= 0 or cursor < 0:
             raise ValueError("batch_size must be positive and cursor nonnegative.")

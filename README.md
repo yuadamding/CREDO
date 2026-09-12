@@ -2,6 +2,7 @@
 
 New work: [full-cohort successor access foundation](docs/full-cohort-successor-foundation.md)
 (reader qualification only; successor model training remains unrun).
+Current correction: [review of 789537f and remaining promotion gates](docs/review-789537f-corrections.md).
 
 Independent count-native finite-measure SDE recipe for longitudinal
 perturbation screens. This repository implements three gated intents:
@@ -107,10 +108,12 @@ Dev39 begins an evidence-aware result layer without changing the
 finite-measure core: observed study fields derive hard capability limits,
 abundance and lineage semantics are explicit, and biological wording fails
 closed. See the [Dev39 Phase 1 evidence framework](docs/dev39-evidence-framework.md).
-Dev40 adds the separately qualified static count-linked biological-program
-head, frozen split/baseline/null gates, and immutable result bundle. It does
+Dev40 adds a static count-linked biological-program component, legacy
+split/baseline/null diagnostics, and an immutable result bundle. It does
 not couple the new head to SDE dynamics or alter checkpoint schemas. See the
 [Dev40 program qualification](docs/dev40-biological-program-qualification.md).
+The corrected evaluator does not certify biological programs: the old
+coefficient-exceedance diagnostic is not discovery calibration.
 
 ## Quick start
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 from scipy import sparse
@@ -141,7 +142,7 @@ def thin_counts_by_cell(
     return result[0], result[1]
 
 
-def _real_array(values: np.ndarray, name: str) -> np.ndarray:
+def _real_array(values: np.ndarray[Any, Any], name: str) -> np.ndarray[Any, Any]:
     raw = np.asarray(values)
     if not (np.issubdtype(raw.dtype, np.integer) or np.issubdtype(raw.dtype, np.floating)):
         raise ContractError(f"{name} must contain real, non-boolean numbers.")
@@ -154,8 +155,8 @@ def _real_array(values: np.ndarray, name: str) -> np.ndarray:
 
 
 def conditional_composition_cross_entropy(
-    heldback_counts: sparse.csr_matrix, probabilities: np.ndarray
-) -> np.ndarray:
+    heldback_counts: sparse.csr_matrix, probabilities: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     """Per-row held-back cross-entropy, in natural-log units per observed UMI.
 
     The held-back total only normalizes the score; it is not an encoder input.
@@ -190,8 +191,8 @@ def count_expression_readouts(
     *,
     scale: float = 1e6,
     log1p: bool = False,
-    library_sizes: np.ndarray | None = None,
-) -> np.ndarray:
+    library_sizes: np.ndarray[Any, Any] | None = None,
+) -> np.ndarray[Any, Any]:
     """Return fixed-scale fractions or log1p fractions, without learned scaling.
 
     With selected readout genes, ``library_sizes`` must supply the original full
@@ -225,7 +226,7 @@ def count_expression_readouts(
     return np.log1p(normalized) if log1p else normalized
 
 
-def _weights(weights: np.ndarray | None, rows: int) -> np.ndarray:
+def _weights(weights: np.ndarray[Any, Any] | None, rows: int) -> np.ndarray[Any, Any]:
     if rows == 0:
         raise ContractError("A measurement requires at least one row.")
     values = np.ones(rows) if weights is None else _real_array(weights, "weights")
@@ -236,7 +237,10 @@ def _weights(weights: np.ndarray | None, rows: int) -> np.ndarray:
 
 
 def weighted_error_decomposition(
-    observed: np.ndarray, predicted: np.ndarray, *, weights: np.ndarray | None = None
+    observed: np.ndarray[Any, Any],
+    predicted: np.ndarray[Any, Any],
+    *,
+    weights: np.ndarray[Any, Any] | None = None,
 ) -> dict[str, float]:
     """Decompose weighted MSE into squared signed bias plus centered error variance.
 
@@ -265,7 +269,7 @@ def weighted_error_decomposition(
     }
 
 
-def _readout_matrix(values: np.ndarray, name: str) -> np.ndarray:
+def _readout_matrix(values: np.ndarray[Any, Any], name: str) -> np.ndarray[Any, Any]:
     array = _real_array(values, name)
     if array.ndim == 1:
         array = array[:, None]
@@ -275,8 +279,11 @@ def _readout_matrix(values: np.ndarray, name: str) -> np.ndarray:
 
 
 def fixed_bin_occupancies(
-    values: np.ndarray, bin_edges: np.ndarray, *, weights: np.ndarray | None = None
-) -> np.ndarray:
+    values: np.ndarray[Any, Any],
+    bin_edges: np.ndarray[Any, Any],
+    *,
+    weights: np.ndarray[Any, Any] | None = None,
+) -> np.ndarray[Any, Any]:
     """Return readout-by-bin occupancy using explicit, never-fitted boundaries.
 
     Edges may be shared (one vector) or readout-specific (one row per readout),
@@ -312,13 +319,13 @@ def fixed_bin_occupancies(
 
 
 def compare_readout_distributions(
-    observed: np.ndarray,
-    predicted: np.ndarray,
-    bin_edges: np.ndarray,
+    observed: np.ndarray[Any, Any],
+    predicted: np.ndarray[Any, Any],
+    bin_edges: np.ndarray[Any, Any],
     *,
-    observed_weights: np.ndarray | None = None,
-    predicted_weights: np.ndarray | None = None,
-) -> dict[str, np.ndarray]:
+    observed_weights: np.ndarray[Any, Any] | None = None,
+    predicted_weights: np.ndarray[Any, Any] | None = None,
+) -> dict[str, np.ndarray[Any, Any]]:
     """Compare marginal means, population variances, and fixed-bin occupancies.
 
     Samples may have unequal row counts but must share identical readout axes.

@@ -146,9 +146,11 @@ from credo_count_sde_v4.contracts import (
     VirtualCanonicalCountStoreManifestV1,
     VirtualCanonicalCountStoreManifestV2,
 )
+from credo_count_sde_v4.data.prepared_shards import PreparedAccess
 from credo_count_sde_v4.reports import PerturbationDossier
 
 MODELS = {
+    "prepared-access.v2.json": PreparedAccess,
     "study-evidence-contract.v1.json": StudyEvidenceContract,
     "dataset-capability-assessment.v1.json": DatasetCapabilityAssessment,
     "abundance-result.v1.json": AbundanceResult,
@@ -166,9 +168,7 @@ MODELS = {
     "program-qualification-protocol.v1.json": ProgramQualificationProtocol,
     "program-null-contract.v1.json": ProgramNullContract,
     "program-simulation-contract.v1.json": ProgramSimulationContract,
-    "biological-program-qualification-bundle.v1.json": (
-        BiologicalProgramQualificationBundle
-    ),
+    "biological-program-qualification-bundle.v1.json": (BiologicalProgramQualificationBundle),
     "artifact-ref.v1.json": ArtifactRef,
     "semantic-snapshot.v1.json": SemanticStudySnapshot,
     "count-store.v1.json": CountStoreManifest,

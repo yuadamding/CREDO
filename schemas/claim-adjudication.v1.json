@@ -1,7 +1,7 @@
 {
   "$defs": {
     "ClaimDecision": {
-      "description": "Fail-closed disposition for one requested claim.",
+      "description": "Fail-closed disposition for one typed claim.",
       "enum": [
         "permitted",
         "model_attribution_only",
@@ -10,8 +10,34 @@
       "title": "ClaimDecision",
       "type": "string"
     },
+    "EvidenceChannel": {
+      "description": "What was measured or withheld; channels are claim-specific.",
+      "enum": [
+        "engineering_test",
+        "model_fit",
+        "heldout_donor",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_time",
+        "independent_cohort",
+        "absolute_cell_count",
+        "stable_clone_barcode",
+        "evolving_barcode",
+        "live_cell_tracking",
+        "orthogonal_component_assay",
+        "proliferation_assay",
+        "death_assay",
+        "migration_assay",
+        "intervention",
+        "rescue",
+        "epistasis",
+        "spatial_colocalization"
+      ],
+      "title": "EvidenceChannel",
+      "type": "string"
+    },
     "EvidenceTier": {
-      "description": "Highest evidence class actually bound to one result or claim.",
+      "description": "Reporting class; deliberately not a universal scalar ordering.",
       "enum": [
         "E0_engineering",
         "E1_in_sample",
@@ -27,7 +53,7 @@
   "$id": "https://credo.local/schemas/claim-adjudication.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Machine-readable permitted scope for one exact claim request.",
+  "description": "Machine-readable authorization and deterministic rendered wording.",
   "properties": {
     "adjudication_id": {
       "title": "Adjudication Id",
@@ -45,6 +71,11 @@
       "title": "Capability Assessment Id",
       "type": "string"
     },
+    "claim_id": {
+      "minLength": 1,
+      "title": "Claim Id",
+      "type": "string"
+    },
     "claim_request_id": {
       "minLength": 1,
       "title": "Claim Request Id",
@@ -53,14 +84,18 @@
     "decision": {
       "$ref": "#/$defs/ClaimDecision"
     },
-    "evidence_tier": {
-      "$ref": "#/$defs/EvidenceTier"
-    },
-    "forbidden_wording": {
+    "evidence_channels": {
       "items": {
-        "type": "string"
+        "$ref": "#/$defs/EvidenceChannel"
       },
-      "title": "Forbidden Wording",
+      "title": "Evidence Channels",
+      "type": "array"
+    },
+    "evidence_tiers": {
+      "items": {
+        "$ref": "#/$defs/EvidenceTier"
+      },
+      "title": "Evidence Tiers",
       "type": "array"
     },
     "permitted_wording": {
@@ -90,12 +125,13 @@
   },
   "required": [
     "adjudication_id",
+    "claim_id",
     "claim_request_id",
     "capability_assessment_id",
     "decision",
-    "evidence_tier",
-    "blocking_reasons",
-    "forbidden_wording"
+    "evidence_tiers",
+    "evidence_channels",
+    "blocking_reasons"
   ],
   "title": "ClaimAdjudication",
   "type": "object"

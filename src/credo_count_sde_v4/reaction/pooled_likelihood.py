@@ -196,7 +196,7 @@ def _fit_and_select(fit: pd.DataFrame, validation: pd.DataFrame) -> tuple[int, p
     return selected, curve
 
 
-def _direct_reference(frame: pd.DataFrame) -> np.ndarray:
+def _direct_reference(frame: pd.DataFrame) -> np.ndarray[Any, Any]:
     """Independently solve the same penalized DM target hierarchy with SciPy."""
 
     ordered = _ordered(frame)
@@ -206,7 +206,7 @@ def _direct_reference(frame: pd.DataFrame) -> np.ndarray:
     target_count = int(target.max()) + 1
     active = np.asarray(sorted(set(target) - {0}), dtype=np.int64)
 
-    def objective(values: np.ndarray) -> tuple[float, np.ndarray]:
+    def objective(values: np.ndarray[Any, Any]) -> tuple[float, np.ndarray[Any, Any]]:
         raw = np.zeros(target_count, dtype=np.float64)
         raw[active] = values
         logits = np.log(source) + raw[target]
@@ -250,7 +250,9 @@ def _direct_reference(frame: pd.DataFrame) -> np.ndarray:
     return effects
 
 
-def _direct_probabilities(frame: pd.DataFrame, effects: np.ndarray) -> np.ndarray:
+def _direct_probabilities(
+    frame: pd.DataFrame, effects: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     ordered = _ordered(frame)
     logits = np.log(ordered.source_count.to_numpy(dtype=np.float64) + _SOURCE_SMOOTHING)
     logits += effects[ordered.target_index.to_numpy(dtype=np.int64)]
@@ -258,7 +260,7 @@ def _direct_probabilities(frame: pd.DataFrame, effects: np.ndarray) -> np.ndarra
     return probabilities / probabilities.sum()
 
 
-def _production_probabilities(model: CountSDEModel, frame: pd.DataFrame) -> np.ndarray:
+def _production_probabilities(model: CountSDEModel, frame: pd.DataFrame) -> np.ndarray[Any, Any]:
     values = _tensors(frame)
     with torch.no_grad():
         raw = model.raw_fitness(values["target"], values["pool"], values["control"])
@@ -268,7 +270,7 @@ def _production_probabilities(model: CountSDEModel, frame: pd.DataFrame) -> np.n
     return probability.numpy()
 
 
-def _dm_nll_per_count(counts: np.ndarray, probability: np.ndarray) -> float:
+def _dm_nll_per_count(counts: np.ndarray[Any, Any], probability: np.ndarray[Any, Any]) -> float:
     counts = np.asarray(counts, dtype=np.float64)
     alpha = _CONCENTRATION * np.asarray(probability, dtype=np.float64)
     total = counts.sum()

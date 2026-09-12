@@ -4429,10 +4429,8 @@ class G00CSamplerEvidenceV4(StrictModel):
     @model_validator(mode="after")
     def validate_evidence(self) -> G00CSamplerEvidenceV4:
         if (
-            self.uninterrupted_draw_trace.relative_uri
-            == self.resumed_draw_trace.relative_uri
-            or self.uninterrupted_state_trace.relative_uri
-            == self.resumed_state_trace.relative_uri
+            self.uninterrupted_draw_trace.relative_uri == self.resumed_draw_trace.relative_uri
+            or self.uninterrupted_state_trace.relative_uri == self.resumed_state_trace.relative_uri
         ):
             raise ValueError("Dev37 sampler attempts must publish to distinct paths.")
         expected = self.identity(id_field="evidence_id")

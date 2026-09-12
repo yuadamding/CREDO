@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
@@ -32,10 +33,10 @@ RANKING_COLUMNS = (
     "detection_count",
 )
 HIERARCHY_COLUMNS = ("row_id", "source_index", "target_code", "guide_code", "is_control")
-AccessCallback = Callable[[str, np.ndarray], None]
+AccessCallback = Callable[[str, np.ndarray[Any, Any]], None]
 
 
-def _hash_array(values: np.ndarray, dtype: str) -> str:
+def _hash_array(values: np.ndarray[Any, Any], dtype: str) -> str:
     return hashlib.sha256(np.asarray(values, dtype=dtype).tobytes(order="C")).hexdigest()
 
 
@@ -49,8 +50,7 @@ def _canonical_feature_records(path: Path) -> list[dict[str, str]]:
         records = payload["features"]
         if (
             int(payload["feature_count"]) != len(records)
-            or payload["ordered_hash"]
-            != hashlib.sha256(canonical_json_bytes(records)).hexdigest()
+            or payload["ordered_hash"] != hashlib.sha256(canonical_json_bytes(records)).hexdigest()
         ):
             raise IntegrityError("Dev37 canonical feature index hash differs from its records.")
     except IntegrityError:
@@ -66,7 +66,7 @@ def _canonical_feature_records(path: Path) -> list[dict[str, str]]:
     return [{key: str(record[key]) for key in expected_keys} for record in records]
 
 
-def _source_feature_ids(path: Path) -> np.ndarray:
+def _source_feature_ids(path: Path) -> np.ndarray[Any, Any]:
     try:
         with h5py.File(path, "r") as handle:
             if "var" not in handle or "_index" not in handle["var"]:
@@ -102,8 +102,7 @@ def open_verified_source_plane_v4(
     if not isinstance(manifest, VirtualCanonicalCountStoreManifestV2):
         raise IntegrityError("Dev37 requires the accepted V2 virtual store.")
     source_bindings = tuple(
-        (item.source_id, item.checkpoint, item.source_file_sha256)
-        for item in binding.source_files
+        (item.source_id, item.checkpoint, item.source_file_sha256) for item in binding.source_files
     )
     observed_sources = tuple(
         (item.source_id, item.checkpoint, item.source_file_sha256) for item in manifest.sources
@@ -162,7 +161,7 @@ def open_verified_g00b_v4(
 
 def derive_hierarchy_from_g00b_v4(
     store: VirtualCanonicalCountStore,
-    training_row_ids: np.ndarray,
+    training_row_ids: np.ndarray[Any, Any],
 ) -> pd.DataFrame:
     """Reconstruct source, target, guide, and control fields from locator/crosswalk bytes."""
 
@@ -241,7 +240,9 @@ def verify_g00c_hierarchy_v4(
     return derived
 
 
-def _locate_source_indices(store: VirtualCanonicalCountStore, row_ids: np.ndarray) -> np.ndarray:
+def _locate_source_indices(
+    store: VirtualCanonicalCountStore, row_ids: np.ndarray[Any, Any]
+) -> np.ndarray[Any, Any]:
     sorted_ids, source_indices, _ = store._locator()
     positions = np.searchsorted(sorted_ids, row_ids)
     if np.any(positions >= len(sorted_ids)) or not np.array_equal(sorted_ids[positions], row_ids):
@@ -252,7 +253,7 @@ def _locate_source_indices(store: VirtualCanonicalCountStore, row_ids: np.ndarra
 def recompute_feature_ranking_v4(
     store: VirtualCanonicalCountStore,
     canonical_feature_ids: tuple[str, ...],
-    fit_row_ids: np.ndarray,
+    fit_row_ids: np.ndarray[Any, Any],
     *,
     puro_r_canonical_index: int,
     batch_size: int = 8192,
@@ -311,7 +312,7 @@ def recompute_feature_ranking_v4(
             )
     if np.any(total_library <= 0):
         raise IntegrityError("Dev37 feature reference lacks one frozen checkpoint.")
-    scores = np.zeros(width, dtype=np.float64)
+    scores: np.ndarray[Any, Any] = np.zeros(width, dtype=np.float64)
     for code in range(3):
         positive = totals[code] > 0
         log_probability = np.zeros(width, dtype=np.float64)

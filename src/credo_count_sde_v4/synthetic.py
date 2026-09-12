@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import yaml
@@ -64,7 +65,7 @@ def create_synthetic_project(
     pool_count = 1 if pooled else 2
     source_rows: list[int] = []
     terminal_rows: list[int] = []
-    matrices: list[np.ndarray] = []
+    matrices: list[np.ndarray[Any, Any]] = []
     series_records: list[SeriesRecord] = []
     row_cursor = 10_000
     source_abundance = [60, 60, 60, 50, 50, 50]

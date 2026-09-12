@@ -261,7 +261,7 @@ def _fit_fixed_updates(frame: pd.DataFrame, updates: int) -> tuple[CountSDEModel
     return model, maximum
 
 
-def _observed_relative_effect(frame: pd.DataFrame) -> np.ndarray:
+def _observed_relative_effect(frame: pd.DataFrame) -> np.ndarray[Any, Any]:
     ordered = frame.sort_values("series_index", kind="stable")
     result = np.empty(len(ordered), dtype=np.float64)
     for pool_index, positions in ordered.groupby("pool_index", sort=True).indices.items():

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
@@ -30,7 +31,7 @@ def _path(root: Path, artifact: ArtifactRef) -> Path:
     return path
 
 
-def _row_hash(values: np.ndarray) -> str:
+def _row_hash(values: np.ndarray[Any, Any]) -> str:
     import hashlib
 
     ordered = np.sort(np.asarray(values, dtype="<i8"), kind="stable")
@@ -42,7 +43,7 @@ def _verify_row_roles(
     store: VirtualCanonicalCountStore,
     contract: FoldNativeCompactViewContractV2,
     bundle: G00CExecutionBundle,
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray[Any, Any]]:
     table = pd.read_parquet(_path(root, bundle.row_roles))
     expected_columns = (
         "row_id",
@@ -111,7 +112,7 @@ def _verify_feature_selection(
     bundle: G00CExecutionBundle,
     *,
     store_feature_width: int,
-) -> tuple[list[str], np.ndarray]:
+) -> tuple[list[str], np.ndarray[Any, Any]]:
     result = bundle.feature_selection
     if (
         result.fit_rows_hash != contract.feature_selection.fit_rows_hash
@@ -193,8 +194,8 @@ def _verify_sample_size(
     root: Path,
     contract: FoldNativeCompactViewContractV2,
     bundle: G00CExecutionBundle,
-    role_rows: dict[str, np.ndarray],
-) -> np.ndarray:
+    role_rows: dict[str, np.ndarray[Any, Any]],
+) -> np.ndarray[Any, Any]:
     result = bundle.sample_size_selection
     curve = pd.read_parquet(_path(root, result.curve))
     draws = pd.read_parquet(_path(root, result.paired_refit_draws))
@@ -400,10 +401,10 @@ def _verify_compact_payload(
     store: VirtualCanonicalCountStore,
     contract: FoldNativeCompactViewContractV2,
     bundle: G00CExecutionBundle,
-    role_rows: dict[str, np.ndarray],
-    selected_training_rows: np.ndarray,
+    role_rows: dict[str, np.ndarray[Any, Any]],
+    selected_training_rows: np.ndarray[Any, Any],
     selected_feature_ids: list[str],
-    selected_feature_indices: np.ndarray,
+    selected_feature_indices: np.ndarray[Any, Any],
 ) -> None:
     payload_path = _path(root, bundle.compact_payload)
     expected_rows = np.concatenate(

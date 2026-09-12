@@ -36,14 +36,14 @@ class CheckpointMultinomialRefit:
 class CommonSupportPrefixFit:
     """Prefix-plus-residual fit with the same 0.5 prior per common-support gene."""
 
-    candidate_probabilities: np.ndarray
-    residual_frequencies: np.ndarray | None
-    expanded_probabilities: np.ndarray
+    candidate_probabilities: np.ndarray[Any, Any]
+    residual_frequencies: np.ndarray[Any, Any] | None
+    expanded_probabilities: np.ndarray[Any, Any]
 
 
 def checkpoint_multinomial_refit(
-    training_counts: np.ndarray,
-    validation_counts: np.ndarray,
+    training_counts: np.ndarray[Any, Any],
+    validation_counts: np.ndarray[Any, Any],
     *,
     pseudocount: float = 0.5,
 ) -> CheckpointMultinomialRefit:
@@ -86,7 +86,7 @@ def checkpoint_multinomial_refit(
 
 
 def checkpoint_multinomial_refit_common_support(
-    training_counts: np.ndarray,
+    training_counts: np.ndarray[Any, Any],
     *,
     modeled_features: int,
     per_feature_pseudocount: float = 0.5,
@@ -166,11 +166,11 @@ def derive_refit_seed_schedule(
 
 
 def expand_common_support_probabilities(
-    candidate_probabilities: np.ndarray,
-    residual_frequencies: np.ndarray | None,
+    candidate_probabilities: np.ndarray[Any, Any],
+    residual_frequencies: np.ndarray[Any, Any] | None,
     *,
     reference_feature_count: int = 4096,
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     """Expand a prefix-plus-residual distribution onto one common feature support."""
 
     candidate = np.asarray(candidate_probabilities, dtype=np.float64)
@@ -206,9 +206,9 @@ def expand_common_support_probabilities(
 
 
 def weighted_multinomial_nll_per_count(
-    validation_counts: np.ndarray,
-    probabilities: np.ndarray,
-    inverse_probability_weights: np.ndarray,
+    validation_counts: np.ndarray[Any, Any],
+    probabilities: np.ndarray[Any, Any],
+    inverse_probability_weights: np.ndarray[Any, Any],
 ) -> float:
     """Score every candidate on the same weighted count denominator."""
 
@@ -238,7 +238,7 @@ def weighted_multinomial_nll_per_count(
 def feature_selection_decision_v3(
     *,
     candidates: tuple[int, ...],
-    paired_absolute_difference_q95: np.ndarray,
+    paired_absolute_difference_q95: np.ndarray[Any, Any],
     support_eligible: tuple[bool, ...],
     epsilon: float = 0.0001,
     reference_zero_tolerance: float = 1e-12,
@@ -273,7 +273,7 @@ def sample_size_decision_v3(
     *,
     grid_stage: Literal["base", "extension"],
     candidates: tuple[int, ...],
-    paired_absolute_difference_q95: np.ndarray,
+    paired_absolute_difference_q95: np.ndarray[Any, Any],
     support_eligible: tuple[bool, ...],
     epsilon: float = 0.0001,
     reference_zero_tolerance: float = 1e-12,

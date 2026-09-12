@@ -1,0 +1,245 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "GuideCatalogBinding": {
+      "additionalProperties": false,
+      "description": "Artifact plus explicitly declared projection; never infer biological labels.",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "control_column": {
+          "default": "is_control",
+          "title": "Control Column",
+          "type": "string"
+        },
+        "guide_id_column": {
+          "default": "guide_id",
+          "title": "Guide Id Column",
+          "type": "string"
+        },
+        "index_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "guide_index",
+          "title": "Index Column"
+        },
+        "ordered_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ordered Catalog Sha256",
+          "type": "string"
+        },
+        "target_id_column": {
+          "default": "target_id",
+          "title": "Target Id Column",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact",
+        "ordered_catalog_sha256"
+      ],
+      "title": "GuideCatalogBinding",
+      "type": "object"
+    },
+    "PreparedShard": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_rows": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Rows"
+        },
+        "cells": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "counts": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "nnz": {
+          "minimum": 0,
+          "title": "Nnz",
+          "type": "integer"
+        },
+        "rows": {
+          "exclusiveMinimum": 0,
+          "title": "Rows",
+          "type": "integer"
+        },
+        "shard": {
+          "minimum": 0,
+          "title": "Shard",
+          "type": "integer"
+        },
+        "source_id": {
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "shard",
+        "rows",
+        "nnz",
+        "counts",
+        "cells"
+      ],
+      "title": "PreparedShard",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/prepared-access.v2.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Resolved, content-bound subset; changing any permission changes identity.",
+  "properties": {
+    "amendment_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Amendment Sha256",
+      "type": "string"
+    },
+    "feature_order_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Feature Order Sha256",
+      "type": "string"
+    },
+    "guide_catalog": {
+      "$ref": "#/$defs/GuideCatalogBinding"
+    },
+    "n_features": {
+      "exclusiveMinimum": 0,
+      "title": "N Features",
+      "type": "integer"
+    },
+    "package_completion_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Package Completion Sha256",
+      "type": "string"
+    },
+    "package_inventory_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Package Inventory Sha256",
+      "type": "string"
+    },
+    "parent_view_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Parent View Sha256",
+      "type": "string"
+    },
+    "role": {
+      "enum": [
+        "representation_fit",
+        "dynamics_source",
+        "dynamics_supervision",
+        "baseline_fit",
+        "query"
+      ],
+      "title": "Role",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 2,
+      "default": 2,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "shards": {
+      "items": {
+        "$ref": "#/$defs/PreparedShard"
+      },
+      "title": "Shards",
+      "type": "array"
+    },
+    "source_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Source Ids",
+      "type": "array"
+    },
+    "storage_isolation_qualified": {
+      "const": false,
+      "default": false,
+      "title": "Storage Isolation Qualified",
+      "type": "boolean"
+    },
+    "task_id": {
+      "minLength": 1,
+      "title": "Task Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "package_completion_sha256",
+    "package_inventory_sha256",
+    "parent_view_sha256",
+    "amendment_sha256",
+    "feature_order_sha256",
+    "guide_catalog",
+    "n_features",
+    "task_id",
+    "role",
+    "source_ids",
+    "shards"
+  ],
+  "title": "PreparedAccess",
+  "type": "object"
+}

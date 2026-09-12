@@ -1,0 +1,228 @@
+{
+  "$defs": {
+    "BaselineName": {
+      "description": "Frozen Dev40-B comparator set.",
+      "enum": [
+        "exact_global_gene_frequency",
+        "pseudobulk_negative_binomial",
+        "per_gene_differential_expression",
+        "gsfa_style_sparse_factors",
+        "target_average",
+        "control_only"
+      ],
+      "title": "BaselineName",
+      "type": "string"
+    },
+    "ProgramSplitKind": {
+      "description": "Non-interchangeable outer validation splits.",
+      "enum": [
+        "heldout_donor",
+        "heldout_guide_target_shared",
+        "heldout_target",
+        "heldout_time"
+      ],
+      "title": "ProgramSplitKind",
+      "type": "string"
+    }
+  },
+  "$id": "https://credo.local/schemas/program-qualification-protocol.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Content-addressed Dev40-B optimization, split, and threshold freeze.",
+  "properties": {
+    "baselines": {
+      "items": {
+        "$ref": "#/$defs/BaselineName"
+      },
+      "title": "Baselines",
+      "type": "array"
+    },
+    "effect_inclusion_threshold": {
+      "exclusiveMinimum": 0,
+      "title": "Effect Inclusion Threshold",
+      "type": "number"
+    },
+    "evaluation_dispersion_semantics": {
+      "const": "training_only_method_of_moments_shared_across_candidates",
+      "default": "training_only_method_of_moments_shared_across_candidates",
+      "title": "Evaluation Dispersion Semantics",
+      "type": "string"
+    },
+    "gradient_clip_norm": {
+      "exclusiveMinimum": 0,
+      "title": "Gradient Clip Norm",
+      "type": "number"
+    },
+    "guide_deviation_l2_weight": {
+      "exclusiveMinimum": 0,
+      "title": "Guide Deviation L2 Weight",
+      "type": "number"
+    },
+    "inner_validation_fraction": {
+      "exclusiveMaximum": 0.5,
+      "exclusiveMinimum": 0,
+      "title": "Inner Validation Fraction",
+      "type": "number"
+    },
+    "learning_rate": {
+      "exclusiveMinimum": 0,
+      "title": "Learning Rate",
+      "type": "number"
+    },
+    "loading_inclusion_threshold": {
+      "exclusiveMinimum": 0,
+      "title": "Loading Inclusion Threshold",
+      "type": "number"
+    },
+    "loading_l1_weight": {
+      "exclusiveMinimum": 0,
+      "title": "Loading L1 Weight",
+      "type": "number"
+    },
+    "max_epochs": {
+      "exclusiveMinimum": 0,
+      "title": "Max Epochs",
+      "type": "integer"
+    },
+    "maximum_null_inclusion_rate": {
+      "exclusiveMaximum": 1,
+      "exclusiveMinimum": 0,
+      "title": "Maximum Null Inclusion Rate",
+      "type": "number"
+    },
+    "minibatch_size": {
+      "exclusiveMinimum": 0,
+      "title": "Minibatch Size",
+      "type": "integer"
+    },
+    "minimum_delta": {
+      "minimum": 0,
+      "title": "Minimum Delta",
+      "type": "number"
+    },
+    "minimum_donor_loading_stability": {
+      "maximum": 1,
+      "minimum": -1,
+      "title": "Minimum Donor Loading Stability",
+      "type": "number"
+    },
+    "minimum_gene_sign_accuracy": {
+      "maximum": 1,
+      "minimum": 0,
+      "title": "Minimum Gene Sign Accuracy",
+      "type": "number"
+    },
+    "minimum_log_likelihood_improvement": {
+      "title": "Minimum Log Likelihood Improvement",
+      "type": "number"
+    },
+    "minimum_seed_loading_stability": {
+      "maximum": 1,
+      "minimum": -1,
+      "title": "Minimum Seed Loading Stability",
+      "type": "number"
+    },
+    "minimum_sister_guide_correlation": {
+      "maximum": 1,
+      "minimum": -1,
+      "title": "Minimum Sister Guide Correlation",
+      "type": "number"
+    },
+    "null_fit_epochs": {
+      "exclusiveMinimum": 0,
+      "title": "Null Fit Epochs",
+      "type": "integer"
+    },
+    "null_replicates": {
+      "minimum": 20,
+      "title": "Null Replicates",
+      "type": "integer"
+    },
+    "patience": {
+      "exclusiveMinimum": 0,
+      "title": "Patience",
+      "type": "integer"
+    },
+    "qualification_protocol_id": {
+      "title": "Qualification Protocol Id",
+      "type": "string"
+    },
+    "schema_id": {
+      "const": "credo.program_qualification_protocol",
+      "default": "credo.program_qualification_protocol",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "seed": {
+      "minimum": 0,
+      "title": "Seed",
+      "type": "integer"
+    },
+    "sparse_factor_rank": {
+      "exclusiveMinimum": 0,
+      "title": "Sparse Factor Rank",
+      "type": "integer"
+    },
+    "split_kinds": {
+      "items": {
+        "$ref": "#/$defs/ProgramSplitKind"
+      },
+      "title": "Split Kinds",
+      "type": "array"
+    },
+    "stability_seeds": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Stability Seeds",
+      "type": "array"
+    },
+    "target_effect_l2_weight": {
+      "exclusiveMinimum": 0,
+      "title": "Target Effect L2 Weight",
+      "type": "number"
+    },
+    "weight_decay": {
+      "minimum": 0,
+      "title": "Weight Decay",
+      "type": "number"
+    }
+  },
+  "required": [
+    "qualification_protocol_id",
+    "split_kinds",
+    "baselines",
+    "stability_seeds",
+    "sparse_factor_rank",
+    "null_replicates",
+    "null_fit_epochs",
+    "minimum_log_likelihood_improvement",
+    "minimum_gene_sign_accuracy",
+    "minimum_seed_loading_stability",
+    "minimum_donor_loading_stability",
+    "minimum_sister_guide_correlation",
+    "maximum_null_inclusion_rate",
+    "effect_inclusion_threshold",
+    "loading_inclusion_threshold",
+    "inner_validation_fraction",
+    "seed",
+    "learning_rate",
+    "weight_decay",
+    "max_epochs",
+    "patience",
+    "minimum_delta",
+    "gradient_clip_norm",
+    "minibatch_size",
+    "loading_l1_weight",
+    "guide_deviation_l2_weight",
+    "target_effect_l2_weight"
+  ],
+  "title": "ProgramQualificationProtocol",
+  "type": "object"
+}

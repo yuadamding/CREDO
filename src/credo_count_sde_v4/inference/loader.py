@@ -168,7 +168,7 @@ class V4Run:
     manifest: InferenceBundleManifest
     contract: CompiledRunContract
     config: ResolvedConfig
-    arrays: dict[str, np.ndarray]
+    arrays: dict[str, np.ndarray[Any, Any]]
     model: CountSDEModel
     device: torch.device
 
@@ -192,7 +192,7 @@ class V4Run:
         seed: int | None = None,
         effect_mode: str = "factual",
         context_mode: str = "source_fixed",
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any]]:
         problem = self._problem()
         requested_particles = particles or self.config.evaluation.particles
         requested_seed = self.config.evaluation.seed if seed is None else seed
@@ -232,13 +232,13 @@ class V4Run:
         mean = (z * weights.unsqueeze(-1)).sum(dim=1)
         return mean.cpu().numpy(), mass.cpu().numpy(), weights.cpu().numpy()
 
-    def decode_composition(self, state: np.ndarray) -> np.ndarray:
+    def decode_composition(self, state: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
         if not self.capabilities.decode_gene_composition:
             raise NotImplementedError(
                 "This representation has no validated gene-composition decoder."
             )
         values = torch.from_numpy(np.asarray(state, dtype=np.float32)).to(self.device)
-        rows: list[np.ndarray] = []
+        rows: list[np.ndarray[Any, Any]] = []
         with torch.no_grad():
             for start in range(0, len(values), 256):
                 logits = self.model.decode_logits(values[start : start + 256])
@@ -247,7 +247,7 @@ class V4Run:
 
     def predict(self, output: Path) -> Path:
         mean, mass, _ = self.terminal()
-        payload: dict[str, np.ndarray] = {
+        payload: dict[str, np.ndarray[Any, Any]] = {
             "series_ids": self.arrays["series_ids"],
             "terminal_mean": mean,
             "relative_mass": mass,

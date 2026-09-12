@@ -95,7 +95,7 @@ def _identifiers(value: Sequence[str], name: str, *, unique: bool = False) -> tu
     return result
 
 
-def _array(value: Any, name: str, ndim: int) -> np.ndarray:
+def _array(value: Any, name: str, ndim: int) -> np.ndarray[Any, Any]:
     try:
         raw = np.asarray(value)
         _require(raw.dtype.kind in "iuf", f"{name} must contain real numeric values.")
@@ -120,15 +120,15 @@ def _scalar(value: Any, name: str, *, positive: bool = False) -> float:
     return number
 
 
-def _array_id(array: np.ndarray) -> str:
+def _array_id(array: np.ndarray[Any, Any]) -> str:
     value = np.asarray(array, dtype="<f8", order="C")
     header = canonical_json_bytes({"dtype": "<f8", "shape": list(value.shape)})
     return hashlib.sha256(header + b"\0" + value.tobytes(order="C")).hexdigest()
 
 
 def _baseline_contract(
-    observed: np.ndarray, donors: tuple[str, ...], targets: tuple[str, ...]
-) -> tuple[dict[str, float], np.ndarray, np.ndarray]:
+    observed: np.ndarray[Any, Any], donors: tuple[str, ...], targets: tuple[str, ...]
+) -> tuple[dict[str, float], np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     _require(len(set(donors)) >= 2, "At least two training donors are required.")
     target_array, donor_array = np.asarray(targets), np.asarray(donors)
     baseline, crossfit = {}, np.empty(len(observed), dtype=np.float64)
@@ -153,8 +153,11 @@ def _baseline_contract(
 
 
 def _design(
-    source: np.ndarray, targets: tuple[str, ...], target_order: tuple[str, ...], indicators: bool
-) -> np.ndarray:
+    source: np.ndarray[Any, Any],
+    targets: tuple[str, ...],
+    target_order: tuple[str, ...],
+    indicators: bool,
+) -> np.ndarray[Any, Any]:
     _require(
         set(targets) <= set(target_order),
         "Unknown target: unseen-target prediction is unsupported.",
@@ -332,7 +335,7 @@ class TargetSourceResidual:
 
     def predict(
         self, source_features: Any, target_ids: Sequence[str], feature_names: Sequence[str]
-    ) -> np.ndarray:
+    ) -> np.ndarray[Any, Any]:
         """Predict an already-defined effect; no donor identity or future outcome is accepted."""
         payload = self.to_payload()
         names = _identifiers(feature_names, "feature_names", unique=True)

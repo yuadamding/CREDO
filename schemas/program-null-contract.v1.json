@@ -1,0 +1,61 @@
+{
+  "$id": "https://credo.local/schemas/program-null-contract.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Frozen negative controls for false-program inclusion.",
+  "properties": {
+    "maximum_program_inclusion_rate": {
+      "exclusiveMaximum": 1,
+      "exclusiveMinimum": 0,
+      "title": "Maximum Program Inclusion Rate",
+      "type": "number"
+    },
+    "null_contract_id": {
+      "title": "Null Contract Id",
+      "type": "string"
+    },
+    "null_families": {
+      "items": {
+        "enum": [
+          "control_label_permutation",
+          "target_within_checkpoint_permutation",
+          "negative_binomial_no_program"
+        ],
+        "type": "string"
+      },
+      "title": "Null Families",
+      "type": "array"
+    },
+    "replicate_count": {
+      "minimum": 20,
+      "title": "Replicate Count",
+      "type": "integer"
+    },
+    "schema_id": {
+      "const": "credo.program_null_contract",
+      "default": "credo.program_null_contract",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "selection_threshold_frozen_before_nulls": {
+      "const": true,
+      "default": true,
+      "title": "Selection Threshold Frozen Before Nulls",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "null_contract_id",
+    "null_families",
+    "replicate_count",
+    "maximum_program_inclusion_rate"
+  ],
+  "title": "ProgramNullContract",
+  "type": "object"
+}

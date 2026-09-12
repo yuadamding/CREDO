@@ -164,9 +164,7 @@ class ProgramDefinition(StrictModel):
 class PerturbationProgramEffect(StrictModel):
     """Control, target, and guide-deviation program effects for one scope."""
 
-    schema_id: Literal["credo.perturbation_program_effect"] = (
-        "credo.perturbation_program_effect"
-    )
+    schema_id: Literal["credo.perturbation_program_effect"] = "credo.perturbation_program_effect"
     schema_version: Literal[1] = 1
     program_effect_id: str
     program_contract_id: str = Field(min_length=1)
@@ -214,9 +212,7 @@ class GeneLevelEffect(StrictModel):
 class GuideTargetConsistency(StrictModel):
     """Sister-guide agreement and target/guide variance decomposition."""
 
-    schema_id: Literal["credo.guide_target_consistency"] = (
-        "credo.guide_target_consistency"
-    )
+    schema_id: Literal["credo.guide_target_consistency"] = "credo.guide_target_consistency"
     schema_version: Literal[1] = 1
     consistency_id: str
     program_contract_id: str = Field(min_length=1)

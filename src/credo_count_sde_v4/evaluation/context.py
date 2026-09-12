@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 from ..canonical import contract_id
@@ -10,7 +12,7 @@ from ..contracts import ContextAuditContract, ContextAuditReceipt
 
 def evaluate_context_audit(
     contract: ContextAuditContract,
-    residualized_pool_composition: np.ndarray,
+    residualized_pool_composition: np.ndarray[Any, Any],
     *,
     selected_rank: int,
     context_parameters: int,

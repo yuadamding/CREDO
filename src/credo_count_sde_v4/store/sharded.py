@@ -10,6 +10,7 @@ import uuid
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 
 import h5py
 import numpy as np
@@ -93,7 +94,7 @@ def _append_plan_hash(append_plan: tuple[ShardAppendContract, ...]) -> str:
     )
 
 
-def _cumulative_row_hash(previous: str, row_ids: np.ndarray) -> str:
+def _cumulative_row_hash(previous: str, row_ids: np.ndarray[Any, Any]) -> str:
     values = np.asarray(row_ids, dtype="<i8")
     return sha256_bytes(bytes.fromhex(previous) + values.tobytes(order="C"))
 
@@ -440,7 +441,7 @@ class BoundedCSRShardWriter:
         self._handle.flush()
 
     def append(
-        self, matrix: sparse.spmatrix, *, row_ids: np.ndarray, source_cursor: int
+        self, matrix: sparse.spmatrix, *, row_ids: np.ndarray[Any, Any], source_cursor: int
     ) -> ShardBuildCheckpoint:
         self._assert_owner()
         if self.checkpoint.phase != "BUILDING" or self._handle is None:
@@ -705,7 +706,7 @@ class ShardedCountStoreBuilder:
     def rows_written(self) -> int:
         return int(self._state["rows"])
 
-    def append(self, matrix: sparse.spmatrix, *, row_ids: np.ndarray) -> CountStoreShard:
+    def append(self, matrix: sparse.spmatrix, *, row_ids: np.ndarray[Any, Any]) -> CountStoreShard:
         csr = sparse.csr_matrix(matrix)
         ids = np.asarray(row_ids, dtype=np.int64)
         if csr.shape != (len(ids), len(self.features)) or not len(ids):
@@ -749,9 +750,9 @@ class ShardedCountStoreBuilder:
         if int(self._state["rows"]) != int(self._state["expected_rows"]):
             raise ContractError("Staged row count does not match the frozen expected count.")
         shards = tuple(CountStoreShard.model_validate(item) for item in self._state["shards"])
-        row_id_parts: list[np.ndarray] = []
-        shard_index_parts: list[np.ndarray] = []
-        row_position_parts: list[np.ndarray] = []
+        row_id_parts: list[np.ndarray[Any, Any]] = []
+        shard_index_parts: list[np.ndarray[Any, Any]] = []
+        row_position_parts: list[np.ndarray[Any, Any]] = []
         for shard_index, shard in enumerate(shards):
             path = self.staging / shard.relative_uri
             CountStore(path, _count_manifest(shard, self._state["feature_index_hash"])).verify(
@@ -844,7 +845,9 @@ class ShardedCountStore:
         if (path / "COMMITTED").read_text().strip() != self.manifest.store_id:
             raise IntegrityError("Sharded count-store commit marker mismatch.")
         self.max_open_shards = max_open_shards
-        self._locator_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+        self._locator_cache: (
+            tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any]] | None
+        ) = None
         self._shard_readers: OrderedDict[int, CountStore] = OrderedDict()
 
     @property
@@ -913,7 +916,7 @@ class ShardedCountStore:
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
 
-    def _locator(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _locator(self) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any]]:
         if self._locator_cache is None:
             with h5py.File(self.path / self.manifest.row_locator_relative_uri, "r") as handle:
                 self._locator_cache = (
@@ -926,7 +929,7 @@ class ShardedCountStore:
     def verify(self, *, full: bool = True) -> ShardedCountStoreManifest:
         observed_rows = 0
         observed_nnz = 0
-        per_shard_ids: list[np.ndarray] = []
+        per_shard_ids: list[np.ndarray[Any, Any]] = []
         for shard in self.manifest.shards:
             path = self.path / shard.relative_uri
             store = CountStore(path, _count_manifest(shard, self.manifest.feature_index_hash))
@@ -978,7 +981,7 @@ class ShardedCountStore:
             raise IntegrityError("Shard Merkle root mismatch.")
         return self.manifest
 
-    def rows(self, row_ids: np.ndarray) -> SparseCountBatch:
+    def rows(self, row_ids: np.ndarray[Any, Any]) -> SparseCountBatch:
         requested = np.asarray(row_ids, dtype=np.int64)
         if not len(requested):
             return SparseCountBatch(
@@ -996,7 +999,7 @@ class ShardedCountStore:
             raise KeyError(f"Unknown sharded count-store row IDs: {missing[:10]}.")
         shard_indices = locator_shards[found]
         blocks: list[sparse.csr_matrix] = []
-        positions: list[np.ndarray] = []
+        positions: list[np.ndarray[Any, Any]] = []
         for shard_index in np.unique(shard_indices):
             selected_positions = np.where(shard_indices == shard_index)[0]
             store = self._reader(int(shard_index))
@@ -1012,7 +1015,7 @@ class ShardedCountStore:
         )
 
     def iter_batches(
-        self, ordered_row_ids: np.ndarray, *, batch_size: int, cursor: int = 0
+        self, ordered_row_ids: np.ndarray[Any, Any], *, batch_size: int, cursor: int = 0
     ) -> Iterator[tuple[int, SparseCountBatch]]:
         if batch_size <= 0 or cursor < 0:
             raise ValueError("batch_size must be positive and cursor nonnegative.")

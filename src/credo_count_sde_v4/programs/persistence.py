@@ -62,7 +62,7 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n")
 
 
-def _write_npy(path: Path, value: np.ndarray) -> None:
+def _write_npy(path: Path, value: np.ndarray[Any, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     np.save(path, np.asarray(value), allow_pickle=False)
 
@@ -135,6 +135,10 @@ def _split_contracts(
 ) -> tuple[ProgramSplitEvaluation, ...]:
     results: list[ProgramSplitEvaluation] = []
     for item in metrics.splits:
+        # The frozen V1 summary requires every metric for an eligible split.
+        # Preserve unsupported contrasts as undefined in the detailed V2
+        # artifact, rather than fabricating a score to satisfy that old shape.
+        supported = item.eligible and item.gene_sign_accuracy is not None
         results.append(
             ProgramSplitEvaluation(
                 split_id=contract_id(
@@ -145,19 +149,25 @@ def _split_contracts(
                     }
                 ),
                 kind=item.kind,
-                eligible=item.eligible,
-                passed=item.passed,
-                ineligibility_reason=item.reason,
+                eligible=supported,
+                passed=item.passed if supported else False,
+                ineligibility_reason=(
+                    None
+                    if supported
+                    else item.reason or "Matched donor-condition gene-sign truth is unavailable."
+                ),
                 fit_units=item.fit_units,
                 evaluation_units=item.evaluation_units,
                 protected_expression_access_contract_id=(
                     dataset.protected_expression_access_contract_id
-                    if item.kind == ProgramSplitKind.HELDOUT_TIME and item.eligible
+                    if item.kind == ProgramSplitKind.HELDOUT_TIME and supported
                     else None
                 ),
-                model_mean_log_likelihood_per_count=(item.model_mean_log_likelihood_per_count),
+                model_mean_log_likelihood_per_count=(
+                    item.model_mean_log_likelihood_per_count if supported else None
+                ),
                 model_mean_negative_log_likelihood_per_cell=(
-                    item.model_mean_negative_log_likelihood_per_cell
+                    item.model_mean_negative_log_likelihood_per_cell if supported else None
                 ),
                 baselines=tuple(
                     BaselineMetric(
@@ -168,9 +178,12 @@ def _split_contracts(
                         ),
                     )
                     for baseline in item.baselines
+                    if supported
                 ),
-                improvement_over_best_baseline=item.improvement_over_best_baseline,
-                gene_sign_accuracy=item.gene_sign_accuracy,
+                improvement_over_best_baseline=(
+                    item.improvement_over_best_baseline if supported else None
+                ),
+                gene_sign_accuracy=item.gene_sign_accuracy if supported else None,
             )
         )
     return tuple(results)
@@ -191,17 +204,11 @@ def _qualification_protocol(
             "sparse_factor_rank": config.sparse_factor_rank,
             "null_replicates": config.null_replicates,
             "null_fit_epochs": config.null_fit_epochs,
-            "minimum_log_likelihood_improvement": (
-                config.minimum_log_likelihood_improvement
-            ),
+            "minimum_log_likelihood_improvement": (config.minimum_log_likelihood_improvement),
             "minimum_gene_sign_accuracy": config.minimum_gene_sign_accuracy,
             "minimum_seed_loading_stability": config.minimum_seed_loading_stability,
-            "minimum_donor_loading_stability": (
-                config.minimum_donor_loading_stability
-            ),
-            "minimum_sister_guide_correlation": (
-                config.minimum_sister_guide_correlation
-            ),
+            "minimum_donor_loading_stability": (config.minimum_donor_loading_stability),
+            "minimum_sister_guide_correlation": (config.minimum_sister_guide_correlation),
             "maximum_null_inclusion_rate": config.maximum_null_inclusion_rate,
             "effect_inclusion_threshold": config.effect_inclusion_threshold,
             "loading_inclusion_threshold": config.loading_inclusion_threshold,
@@ -261,7 +268,7 @@ def _model_artifacts(
                 for index in guide_indices
             ]
         )
-        efficiency = torch.sigmoid(model.guide_efficiency_logit[list(guide_indices)])
+        efficiency = model.latent_guide_scale[list(guide_indices)]
         combined = target.unsqueeze(0) + efficiency[:, None, None] * deviations
         gene_effect = combined.mean(dim=0) @ model.normalized_loadings.T
         stability_gene_effects: list[torch.Tensor] = []
@@ -274,23 +281,15 @@ def _model_artifacts(
                 ),
                 dim=1,
             )
-            replicate_targets = torch.full(
-                (len(replicate_times),), target_index, dtype=torch.long
-            )
-            replicate_target = replicate._target_activity(
-                replicate_targets, replicate_times
-            )
+            replicate_targets = torch.full((len(replicate_times),), target_index, dtype=torch.long)
+            replicate_target = replicate._target_activity(replicate_targets, replicate_times)
             replicate_deviations = torch.stack(
                 [
-                    torch.einsum(
-                        "nb,bk->nk", replicate_times, replicate.guide_deviation[index]
-                    )
+                    torch.einsum("nb,bk->nk", replicate_times, replicate.guide_deviation[index])
                     for index in guide_indices
                 ]
             )
-            replicate_efficiency = torch.sigmoid(
-                replicate.guide_efficiency_logit[list(guide_indices)]
-            )
+            replicate_efficiency = replicate.latent_guide_scale[list(guide_indices)]
             replicate_combined = (
                 replicate_target.unsqueeze(0)
                 + replicate_efficiency[:, None, None] * replicate_deviations
@@ -423,8 +422,10 @@ def _publish_bundle(
     _write_json(
         consistency_path,
         {
+            "metric_revision": metrics.metric_revision,
             "median_sister_guide_correlation": metrics.median_sister_guide_correlation,
             "target_variance_fraction": metrics.target_variance_fraction,
+            "target_variance_fraction_status": "not_estimated_by_keyed_evaluator_legacy_slot_zero",
             "inconsistent_target_fraction": metrics.inconsistent_target_fraction,
             "per_target": [
                 {
@@ -433,6 +434,9 @@ def _publish_bundle(
                     "pair_count": item.pair_count,
                     "median_correlation": item.median_correlation,
                     "within_target_variance": item.within_target_variance,
+                    "shared_support": item.shared_support,
+                    "support_complete": item.support_complete,
+                    "unsupported_legacy_slots": "minus_one_correlation_zero_variance_if_no_pairs",
                 }
                 for item in metrics.per_target_guide_metrics
             ],
@@ -456,9 +460,7 @@ def _publish_bundle(
         "consistency_id",
     )
     donor_artifact = artifacts.get("donor_aligned_loadings")
-    donor_count = (
-        len(np.unique(dataset.donor_index)) if dataset.heldout_donor_eligible else 0
-    )
+    donor_count = len(np.unique(dataset.donor_index)) if dataset.heldout_donor_eligible else 0
     uncertainty = _identified(
         ProgramUncertainty,
         {
@@ -471,9 +473,7 @@ def _publish_bundle(
             "inclusion_probability_artifact": artifacts["loading_inclusion"],
             "null_inclusion_artifact": artifacts["null_inclusion"],
             "median_seed_loading_correlation": metrics.median_seed_loading_correlation,
-            "median_donor_loading_correlation": (
-                metrics.median_donor_loading_correlation
-            ),
+            "median_donor_loading_correlation": (metrics.median_donor_loading_correlation),
             "donor_stability_available": donor_artifact is not None,
             "null_inclusion_rate": metrics.null_program_inclusion_rate,
         },
@@ -483,7 +483,19 @@ def _publish_bundle(
     _write_json(
         metrics_path,
         {
+            "metric_revision": metrics.metric_revision,
+            "qualification_scope": metrics.qualification_scope,
             "scientific_pass": metrics.scientific_pass,
+            "biological_efficiency_identified": metrics.biological_efficiency_identified,
+            "guide_efficiency_artifact_semantics": "legacy_name_unidentified_latent_guide_scale",
+            "null_calibration_semantics": metrics.null_calibration_semantics,
+            "null_inclusion_calibrated": metrics.null_inclusion_calibrated,
+            "legacy_parameter_exceedance_rate": metrics.null_program_inclusion_rate,
+            "execution_limits": {
+                "maximum_panel_genes": config.fit.maximum_panel_genes,
+                "maximum_host_payload_bytes": config.fit.maximum_host_payload_bytes,
+                "memory_semantics": "input_tensor_payload_not_peak_process_or_device_memory",
+            },
             "seed_loading_stability": metrics.median_seed_loading_correlation,
             "donor_loading_stability": metrics.median_donor_loading_correlation,
             "sister_guide_correlation": metrics.median_sister_guide_correlation,
@@ -498,6 +510,11 @@ def _publish_bundle(
                     "passed": item.passed,
                     "improvement": item.improvement_over_best_baseline,
                     "gene_sign_accuracy": item.gene_sign_accuracy,
+                    "gene_sign_coverage": item.gene_sign_coverage,
+                    "predictive_nb_log_likelihood": item.predictive_nb_log_likelihood,
+                    "common_dispersion_mean_prediction_score": (
+                        item.common_dispersion_mean_prediction_score
+                    ),
                 }
                 for item in metrics.splits
             ],
@@ -530,9 +547,7 @@ def _publish_bundle(
             "schema_id": "credo.program_qualification_receipt",
             "schema_version": 1,
             "program_contract_id": contract.program_contract_id,
-            "qualification_protocol_id": (
-                qualification_protocol.qualification_protocol_id
-            ),
+            "qualification_protocol_id": (qualification_protocol.qualification_protocol_id),
             "scope": scope,
             "status": (
                 ProgramQualificationStatus.PASS_SCIENTIFIC
@@ -551,9 +566,7 @@ def _publish_bundle(
             "qualified_program_definition_ids": (
                 tuple(
                     sorted(
-                        item.program_definition_id
-                        for item in definitions
-                        if item.nonzero_genes > 0
+                        item.program_definition_id for item in definitions if item.nonzero_genes > 0
                     )
                 )
                 if metrics.scientific_pass

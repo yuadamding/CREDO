@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -37,7 +38,7 @@ ACCESS_COLUMNS = (
 )
 
 
-def _ordered_int64_hash(values: np.ndarray) -> str:
+def _ordered_int64_hash(values: np.ndarray[Any, Any]) -> str:
     return hashlib.sha256(np.asarray(values, dtype="<i8").tobytes(order="C")).hexdigest()
 
 

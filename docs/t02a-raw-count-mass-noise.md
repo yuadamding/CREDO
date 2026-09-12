@@ -18,8 +18,8 @@ The derived dev22 amendment ID is
 `9f710d3131eb2d9c41e03e311efae7746561a718dab2e2a5257febe344be54c0`;
 its verification receipt is
 `612487edf62982f970d43f6f5e2c4d3b24c03c5d301cb61ea0e7c7095ee314f4`.
-The complete external report is
-[`T02A_RUN_REPORT.md`](../../credo_v4_renz_t02a_noise_20260815/T02A_RUN_REPORT.md).
+The historical external report was recorded at workspace-relative path
+`credo_v4_renz_t02a_noise_20260815/T02A_RUN_REPORT.md`; it is not shipped in this repository.
 
 ## Dependency and channel boundary
 

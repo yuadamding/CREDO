@@ -202,9 +202,7 @@ def verify_g00c_final_seal_v1(
     """Verify the outer layer after bundle and decision identities exist."""
 
     if {
-        path.relative_to(seal_root).as_posix()
-        for path in seal_root.rglob("*")
-        if path.is_file()
+        path.relative_to(seal_root).as_posix() for path in seal_root.rglob("*") if path.is_file()
     } != OUTER_NAMES:
         raise IntegrityError("Dev37 outer seal contains missing or extra files.")
     bundle = G00CExecutionBundleV5.model_validate_json(

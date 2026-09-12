@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -40,7 +41,7 @@ def _implementation_hash(authority: G00CD1ExecutionAuthorityFreezeV3, role: str)
 
 def _role_rows_v4(
     root: Path, authority: G00CD1ExecutionAuthorityFreezeV3
-) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray[Any, Any]]:
     table = pd.read_parquet(_path(root, authority.row_role_freeze))
     if tuple(table.columns) != ("row_id", "role") or table["row_id"].duplicated().any():
         raise IntegrityError("Dev37 materializer found malformed row-role authority.")
@@ -57,7 +58,7 @@ def verify_g00c_materialization_v4(
     receipt: G00CMaterializationReceiptV4,
     *,
     expected_selected_feature_ids: tuple[str, ...],
-    expected_selected_rows: np.ndarray,
+    expected_selected_rows: np.ndarray[Any, Any],
 ) -> G00CMaterializationReceiptV3:
     """Verify source equality while replacing Dev36's same-reference restart shortcut."""
 
@@ -84,9 +85,7 @@ def verify_g00c_materialization_v4(
             features["rank"].to_numpy(dtype=np.int64), np.arange(1, len(features) + 1)
         )
         or tuple(selected.columns) != ("row_id",)
-        or not np.array_equal(
-            selected["row_id"].to_numpy(dtype=np.int64), expected_selected_rows
-        )
+        or not np.array_equal(selected["row_id"].to_numpy(dtype=np.int64), expected_selected_rows)
         or _hash_int64(expected_selected_rows, ordered=False) != base.selected_row_set_sha256
     ):
         raise IntegrityError("Dev37 materialization selection differs from verified results.")
@@ -150,8 +149,7 @@ def verify_g00c_materialization_v4(
         or base.puro_r_sidecar != base.uninterrupted_puro_r_sidecar
         or restart.uninterrupted_outputs
         != (base.uninterrupted_compact_payload, base.uninterrupted_puro_r_sidecar)
-        or restart.resumed_outputs
-        != (base.resumed_compact_payload, base.resumed_puro_r_sidecar)
+        or restart.resumed_outputs != (base.resumed_compact_payload, base.resumed_puro_r_sidecar)
     ):
         raise IntegrityError("Dev37 writer restart receipt does not bind the compact outputs.")
     verify_g00c_restart_v4(root, restart)

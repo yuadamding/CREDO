@@ -48,9 +48,7 @@ def _dataset(*, target_descriptors: bool = True, null: bool = False) -> ProgramD
         guide_to_target=simulated.guide_to_target,
         control_guide_indices=simulated.control_guide_indices,
         checkpoint_times=(0.0, 8.0, 24.0),
-        target_descriptors=(
-            simulated.target_descriptors if target_descriptors else None
-        ),
+        target_descriptors=(simulated.target_descriptors if target_descriptors else None),
         protected_expression_access_contract_id="protected-expression-test",
     )
 
@@ -90,9 +88,7 @@ def _model(dataset: ProgramDataset) -> CountLinkedProgramHead:
 
 def test_nb_head_uses_exact_library_offset_and_control_reference() -> None:
     dataset = _dataset()
-    control_indices = np.where(
-        np.isin(dataset.guide_index, dataset.control_guide_indices)
-    )[0][:20]
+    control_indices = np.where(np.isin(dataset.guide_index, dataset.control_guide_indices))[0][:20]
     batch = _batch(dataset, control_indices)
     model = _model(dataset)
     before = model.log_mean(batch).detach().clone()
@@ -181,8 +177,7 @@ def test_all_six_baselines_are_training_only_and_frozen_order() -> None:
     second = fit_frozen_baselines(**kwargs)
     assert tuple(item.name for item in first) == tuple(BaselineName)
     assert all(
-        np.array_equal(left.mean, right.mean)
-        for left, right in zip(first, second, strict=True)
+        np.array_equal(left.mean, right.mean) for left, right in zip(first, second, strict=True)
     )
     assert altered_evaluation_counts.sum() > dataset.counts[evaluation].sum()
 
@@ -223,7 +218,19 @@ def test_complete_qualification_reports_noninterchangeable_splits_and_nulls() ->
     for aligned in result.seed_loadings[1:]:
         correlation = np.corrcoef(reference.T, aligned.T)[:3, 3:]
         assert np.all(np.diag(correlation) >= 0)
-    assert result.scientific_pass
+    assert not result.scientific_pass
+    assert not result.null_inclusion_calibrated
+    assert (
+        result.null_calibration_semantics
+        == "legacy_coefficient_exceedance_not_discovery_calibration"
+    )
+    for metric in result.splits:
+        assert metric.predictive_nb_log_likelihood is not None
+        assert (
+            metric.common_dispersion_mean_prediction_score
+            == metric.model_mean_log_likelihood_per_count
+        )
+        assert metric.gene_sign_coverage is not None
 
 
 def test_identifier_only_target_and_missing_time_firewall_remain_ineligible() -> None:
@@ -355,7 +362,13 @@ def test_program_bundle_publication_is_content_verified(tmp_path) -> None:
         fit_row_ids_sha256="c" * 64,
     )
     bundle = verify_program_qualification(destination)
-    assert bundle.qualification.status == "pass_scientific"
+    assert bundle.qualification.status == "fail_qualification"
+    assert not bundle.qualification.null_inclusion_calibrated
+    detailed = json.loads((destination / "artifacts/qualification_metrics.json").read_text())
+    assert detailed["metric_revision"] == 2
+    assert not detailed["biological_efficiency_identified"]
+    assert detailed["execution_limits"]["maximum_panel_genes"] == 2048
+    assert any(item["gene_sign_accuracy"] is None for item in detailed["splits"])
     assert len(bundle.program_definitions) == 3
     assert bundle.qualification.qualification_protocol_id == (
         bundle.qualification_protocol.qualification_protocol_id

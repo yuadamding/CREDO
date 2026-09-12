@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import cast
 
 import torch
@@ -168,6 +168,15 @@ class CountLinkedProgramHead(nn.Module):
     def dispersion(self) -> Tensor:
         return F.softplus(self.dispersion_raw) + 1e-4
 
+    @property
+    def latent_guide_scale(self) -> Tensor:
+        """Unidentified latent multiplier, NOT measured biological guide efficiency.
+
+        The historical state-dict key is retained for checkpoint compatibility.
+        A centered-deviation successor requires a separately versioned model.
+        """
+        return torch.sigmoid(self.guide_efficiency_logit)
+
     def _time_basis(self, checkpoint_index: Tensor) -> Tensor:
         times = self.normalized_checkpoint_times[checkpoint_index]
         return torch.stack((torch.ones_like(times), times), dim=1)
@@ -183,7 +192,7 @@ class CountLinkedProgramHead(nn.Module):
         return torch.einsum("nb,nbk->nk", time_basis, descriptor_effect)
 
     def program_activity(self, batch: ProgramBatch) -> Tensor:
-        """Return reference + target + efficacy-weighted guide activity."""
+        """Return reference + target + latent-scaled guide activity (not efficacy)."""
 
         checkpoint = batch.checkpoint_index.to(dtype=torch.long)
         target = batch.target_index.to(dtype=torch.long)
@@ -197,7 +206,7 @@ class CountLinkedProgramHead(nn.Module):
         )
         reference = time_basis @ self.checkpoint_reference + state_gate
         target_activity = self._target_activity(target, time_basis) * (1.0 + 0.25 * state_gate)
-        efficiency = torch.sigmoid(self.guide_efficiency_logit[guide]).unsqueeze(1)
+        efficiency = self.latent_guide_scale[guide].unsqueeze(1)
         guide_activity = torch.einsum("nb,nbk->nk", time_basis, self.guide_deviation[guide]) * (
             1.0 + 0.25 * state_gate
         )
@@ -226,6 +235,13 @@ class CountLinkedProgramHead(nn.Module):
 
     def mean(self, batch: ProgramBatch) -> Tensor:
         return torch.exp(self.log_mean(batch).clamp(min=-20.0, max=20.0))
+
+    def reference_mean(self, batch: ProgramBatch) -> Tensor:
+        """Predict the masked reference without consuming observed control outcomes."""
+        control = torch.where(self.control_guide_mask)[0][0]
+        guide = torch.full_like(batch.guide_index, int(control))
+        reference = replace(batch, guide_index=guide, target_index=self.guide_to_target[guide])
+        return self.mean(reference)
 
     def negative_log_likelihood(self, batch: ProgramBatch) -> Tensor:
         log_prob = negative_binomial_log_prob(batch.counts, self.mean(batch), self.dispersion)
@@ -265,6 +281,8 @@ class ProgramFitConfig:
     gradient_clip_norm: float = 5.0
     seed: int = 0
     minibatch_size: int = 256
+    maximum_panel_genes: int = 2048
+    maximum_host_payload_bytes: int = 512 * 1024**2
 
 
 @dataclass(frozen=True)
@@ -288,15 +306,39 @@ def fit_program_head(
 ) -> ProgramFitResult:
     """Fit one head using only training and inner-validation rows."""
 
-    if config.max_epochs <= 0 or config.patience <= 0 or config.minibatch_size <= 0:
+    if (
+        min(
+            config.max_epochs,
+            config.patience,
+            config.minibatch_size,
+            config.maximum_panel_genes,
+            config.maximum_host_payload_bytes,
+        )
+        <= 0
+    ):
         raise ContractError("Program optimization counts must be positive.")
     torch.manual_seed(config.seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(config.seed)
     device_value = torch.device(device)
+    # This component accepts a bounded dense host panel, NOT a full-cohort CSR stream.
+    if (
+        model.genes > config.maximum_panel_genes
+        or sum(
+            value.numel() * value.element_size()
+            for data in (training, validation)
+            for value in vars(data).values()
+        )
+        > config.maximum_host_payload_bytes
+    ):
+        raise ContractError("Program component exceeds its small-panel host payload budget.")
+    if any(
+        value.device.type != "cpu"
+        for data in (training, validation)
+        for value in vars(data).values()
+    ):
+        raise ContractError("Program component input batches must remain on the CPU host.")
     model = model.to(device_value)
-    training = training.to(device_value)
-    validation = validation.to(device_value)
     training.validate(genes=model.genes, state_dimension=model.state_dimension)
     validation.validate(genes=model.genes, state_dimension=model.state_dimension)
     optimizer = torch.optim.AdamW(
@@ -314,8 +356,8 @@ def fit_program_head(
         permutation = torch.randperm(len(training.counts), generator=generator)
         epoch_losses: list[float] = []
         for start in range(0, len(permutation), config.minibatch_size):
-            indices = permutation[start : start + config.minibatch_size].to(device_value)
-            batch = training.subset(indices)
+            indices = permutation[start : start + config.minibatch_size]
+            batch = training.subset(indices).to(device_value)
             optimizer.zero_grad(set_to_none=True)
             loss = model.negative_log_likelihood(batch) + model.regularization(
                 loading_l1_weight=config.loading_l1_weight,
@@ -329,7 +371,14 @@ def fit_program_head(
         train_trace.append(sum(epoch_losses) / len(epoch_losses))
         model.eval()
         with torch.no_grad():
-            value = float(model.negative_log_likelihood(validation))
+            total = 0.0
+            for start in range(0, len(validation.counts), config.minibatch_size):
+                indices = torch.arange(
+                    start, min(start + config.minibatch_size, len(validation.counts))
+                )
+                batch = validation.subset(indices).to(device_value)
+                total += float(model.negative_log_likelihood(batch)) * len(indices)
+            value = total / len(validation.counts)
         validation_trace.append(value)
         if value < best_loss - config.minimum_delta:
             best_loss = value

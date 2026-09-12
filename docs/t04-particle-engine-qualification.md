@@ -127,8 +127,8 @@ relative log masses, generator state, and absolute grid step. T04 requires:
 
 ## Results
 
-Committed evidence:
-[`credo_v4_t04_particle_engine_20260815_r2/`](../../credo_v4_t04_particle_engine_20260815_r2/).
+Historical external evidence was recorded at workspace-relative path
+`credo_v4_t04_particle_engine_20260815_r2/`; it is not shipped in this repository.
 The qualification ID is
 `ffa5d3968cde803675846d9f3ee54e29aa88b7a043bfe6f87aa3fd675f248569`,
 the detailed receipt ID is

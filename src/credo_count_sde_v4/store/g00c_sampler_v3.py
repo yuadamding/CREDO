@@ -6,6 +6,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -75,8 +76,8 @@ def _implementation_hash(authority: G00CD1ExecutionAuthorityFreezeV2, role: str)
 
 def _entry_rows(
     entry: G00CSamplerPlanEntryV3,
-    order: np.ndarray,
-) -> np.ndarray:
+    order: np.ndarray[Any, Any],
+) -> np.ndarray[Any, Any]:
     count = 1_000_000 if entry.candidate_kind == "feature_count" else entry.candidate_value
     if count > len(order):
         raise IntegrityError("Dev36 sampler candidate exceeds the frozen nested row order.")
@@ -87,17 +88,17 @@ def _entry_rows(
 class _PreparedHierarchy:
     """Immutable lookup tables shared by every draw over one row prefix."""
 
-    sources: np.ndarray
-    targets: dict[int, np.ndarray]
-    guides: dict[tuple[int, int], np.ndarray]
-    rows: dict[tuple[int, int, int], np.ndarray]
-    control_row_ids: np.ndarray
-    control_values: np.ndarray
+    sources: np.ndarray[Any, Any]
+    targets: dict[int, np.ndarray[Any, Any]]
+    guides: dict[tuple[int, int], np.ndarray[Any, Any]]
+    rows: dict[tuple[int, int, int], np.ndarray[Any, Any]]
+    control_row_ids: np.ndarray[Any, Any]
+    control_values: np.ndarray[Any, Any]
 
 
 def _prepare_hierarchy(
     hierarchy: pd.DataFrame,
-    allowed_rows: np.ndarray,
+    allowed_rows: np.ndarray[Any, Any],
 ) -> _PreparedHierarchy:
     """Index one frozen prefix once instead of rescanning it for every seed."""
 
@@ -110,25 +111,21 @@ def _prepare_hierarchy(
     if not source_groups:
         raise IntegrityError("Dev36 sampler has no training-fit source strata.")
 
-    targets: dict[int, np.ndarray] = {}
-    guides: dict[tuple[int, int], np.ndarray] = {}
-    rows: dict[tuple[int, int, int], np.ndarray] = {}
+    targets: dict[int, np.ndarray[Any, Any]] = {}
+    guides: dict[tuple[int, int], np.ndarray[Any, Any]] = {}
+    rows: dict[tuple[int, int, int], np.ndarray[Any, Any]] = {}
     for source, source_frame in source_groups.items():
         target_groups = {
-            int(target): frame
-            for target, frame in source_frame.groupby("target_code", sort=True)
+            int(target): frame for target, frame in source_frame.groupby("target_code", sort=True)
         }
         targets[source] = np.asarray(sorted(target_groups), dtype=np.int64)
         for target, target_frame in target_groups.items():
             guide_groups = {
-                int(guide): frame
-                for guide, frame in target_frame.groupby("guide_code", sort=True)
+                int(guide): frame for guide, frame in target_frame.groupby("guide_code", sort=True)
             }
             guides[(source, target)] = np.asarray(sorted(guide_groups), dtype=np.int64)
             for guide, guide_frame in guide_groups.items():
-                rows[(source, target, guide)] = guide_frame["row_id"].to_numpy(
-                    dtype=np.int64
-                )
+                rows[(source, target, guide)] = guide_frame["row_id"].to_numpy(dtype=np.int64)
 
     control = selected[["row_id", "is_control"]].sort_values("row_id", kind="stable")
     return _PreparedHierarchy(
@@ -223,7 +220,7 @@ def _draw_entry(
     entry_index: int,
     entry: G00CSamplerPlanEntryV3,
     hierarchy: pd.DataFrame,
-    allowed_rows: np.ndarray,
+    allowed_rows: np.ndarray[Any, Any],
     schedule: G00CRefitSeedScheduleV1,
     *,
     resume_after_macro_update: int | None = None,
@@ -242,7 +239,7 @@ def _draw_entry(
 def replay_sampler_plan_v3(
     plan: G00CSamplerPlanV3,
     hierarchy: pd.DataFrame,
-    order: np.ndarray,
+    order: np.ndarray[Any, Any],
     schedule: G00CRefitSeedScheduleV1,
     *,
     resumed: bool,
@@ -288,7 +285,7 @@ def verify_g00c_sampler_v3(
     evidence: G00CSamplerEvidenceV3,
     *,
     expected_candidate_values: dict[str, tuple[int, ...]] | None = None,
-) -> tuple[G00CSamplerPlanV3, pd.DataFrame, np.ndarray, pd.DataFrame]:
+) -> tuple[G00CSamplerPlanV3, pd.DataFrame, np.ndarray[Any, Any], pd.DataFrame]:
     """Independently regenerate every draw, weight, thinning value, RNG state, and cursor."""
 
     if (
@@ -352,7 +349,7 @@ def derive_support_table_v3(
     contract: G00CSupportAuditContractV2,
     plan: G00CSamplerPlanV3,
     hierarchy: pd.DataFrame,
-    order: np.ndarray,
+    order: np.ndarray[Any, Any],
     trace: pd.DataFrame,
 ) -> pd.DataFrame:
     """Derive support from verified sampled rows, weights, and frozen hierarchy."""
@@ -443,7 +440,7 @@ def verify_g00c_support_v3(
     *,
     plan: G00CSamplerPlanV3,
     hierarchy: pd.DataFrame,
-    order: np.ndarray,
+    order: np.ndarray[Any, Any],
     trace: pd.DataFrame,
 ) -> pd.DataFrame:
     """Recompute support; never trust eligibility columns supplied by an execution."""

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 
 import numpy as np
 from scipy import sparse
@@ -23,7 +23,7 @@ from ..contracts import CheckpointMultinomialDecoderContract
 from ..errors import ContractError
 
 
-def _fit_row_hash(row_ids: np.ndarray) -> str:
+def _fit_row_hash(row_ids: np.ndarray[Any, Any]) -> str:
     values = np.asarray(row_ids, dtype="<i8")
     return hashlib.sha256(values.tobytes(order="C")).hexdigest()
 
@@ -33,8 +33,8 @@ class CheckpointMultinomialDecoder:
     """One immutable checkpoint-intercept decoder state."""
 
     contract: CheckpointMultinomialDecoderContract
-    checkpoint_intercepts: np.ndarray
-    latent_weights: np.ndarray
+    checkpoint_intercepts: np.ndarray[Any, Any]
+    latent_weights: np.ndarray[Any, Any]
 
     def __post_init__(self) -> None:
         intercepts = np.asarray(self.checkpoint_intercepts, dtype=np.float64)
@@ -48,7 +48,7 @@ class CheckpointMultinomialDecoder:
         object.__setattr__(self, "checkpoint_intercepts", intercepts.copy())
         object.__setattr__(self, "latent_weights", weights.copy())
 
-    def state_dict(self) -> dict[str, np.ndarray]:
+    def state_dict(self) -> dict[str, np.ndarray[Any, Any]]:
         """Return the complete numerical state without target/guide parameters."""
 
         return {
@@ -56,7 +56,9 @@ class CheckpointMultinomialDecoder:
             "latent_weights": self.latent_weights.copy(),
         }
 
-    def probabilities(self, z: np.ndarray, checkpoints: np.ndarray) -> np.ndarray:
+    def probabilities(
+        self, z: np.ndarray[Any, Any], checkpoints: np.ndarray[Any, Any]
+    ) -> np.ndarray[Any, Any]:
         """Evaluate probabilities in input order for declared checkpoints."""
 
         latent = np.asarray(z, dtype=np.float64)
@@ -79,14 +81,14 @@ class CheckpointMultinomialDecoder:
             probabilities.sum(axis=1), 1.0, atol=1e-12, rtol=0.0
         ):
             raise ContractError("Checkpoint decoder produced invalid probabilities.")
-        return cast(np.ndarray, probabilities)
+        return cast(np.ndarray[Any, Any], probabilities)
 
 
 def fit_checkpoint_frequency_null(
     training_counts: sparse.spmatrix,
     *,
-    training_checkpoints: np.ndarray,
-    training_row_ids: np.ndarray,
+    training_checkpoints: np.ndarray[Any, Any],
+    training_row_ids: np.ndarray[Any, Any],
     checkpoint_order: tuple[str, ...],
     physical_time_hours: tuple[float, ...],
     pseudocount: float = 0.5,

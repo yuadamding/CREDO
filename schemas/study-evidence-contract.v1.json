@@ -1,14 +1,364 @@
 {
   "$defs": {
+    "AbsoluteAbundanceDesignContract": {
+      "additionalProperties": false,
+      "description": "System boundary and repeated calibration for non-relative counts.",
+      "properties": {
+        "absolute_design_id": {
+          "title": "Absolute Design Id",
+          "type": "string"
+        },
+        "basis": {
+          "$ref": "#/$defs/AbsoluteCountBasis"
+        },
+        "calibration_timepoints": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Calibration Timepoints",
+          "type": "array"
+        },
+        "capture_fraction_model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Capture Fraction Model"
+        },
+        "system_boundary": {
+          "minLength": 1,
+          "title": "System Boundary",
+          "type": "string"
+        },
+        "total_count_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "uncertainty_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "absolute_design_id",
+        "basis",
+        "system_boundary",
+        "calibration_timepoints",
+        "total_count_artifact",
+        "uncertainty_artifact"
+      ],
+      "title": "AbsoluteAbundanceDesignContract",
+      "type": "object"
+    },
     "AbsoluteCountBasis": {
-      "description": "Physical calibration behind an absolute abundance capability.",
+      "description": "Physical calibration scale, not an inferred biological process.",
       "enum": [
-        "none",
-        "capture_calibrated",
+        "capture_calibrated_sampled_compartment",
         "absolute_tissue"
       ],
       "title": "AbsoluteCountBasis",
       "type": "string"
+    },
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "CloneObservationContract": {
+      "additionalProperties": false,
+      "description": "Quality gates for stable and evolving barcode interpretations.",
+      "properties": {
+        "assignment_confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Assignment Confidence",
+          "type": "number"
+        },
+        "audit_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "biological_replicates": {
+          "minimum": 1,
+          "title": "Biological Replicates",
+          "type": "integer"
+        },
+        "clone_observation_id": {
+          "title": "Clone Observation Id",
+          "type": "string"
+        },
+        "collision_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Collision Rate",
+          "type": "number"
+        },
+        "cross_time_continuity_verified": {
+          "title": "Cross Time Continuity Verified",
+          "type": "boolean"
+        },
+        "dropout_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Dropout Rate",
+          "type": "number"
+        },
+        "evolving_barcode_history_observed": {
+          "default": false,
+          "title": "Evolving Barcode History Observed",
+          "type": "boolean"
+        },
+        "maximum_collision_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Maximum Collision Rate",
+          "type": "number"
+        },
+        "maximum_dropout_rate": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Maximum Dropout Rate",
+          "type": "number"
+        },
+        "minimum_assignment_confidence": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Minimum Assignment Confidence",
+          "type": "number"
+        },
+        "minimum_clone_support": {
+          "minimum": 2,
+          "title": "Minimum Clone Support",
+          "type": "integer"
+        },
+        "observation_model": {
+          "minLength": 1,
+          "title": "Observation Model",
+          "type": "string"
+        },
+        "parent_relationship_directly_observed": {
+          "default": false,
+          "title": "Parent Relationship Directly Observed",
+          "type": "boolean"
+        },
+        "parent_tree_inferred_only": {
+          "default": false,
+          "title": "Parent Tree Inferred Only",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "clone_observation_id",
+        "cross_time_continuity_verified",
+        "collision_rate",
+        "maximum_collision_rate",
+        "dropout_rate",
+        "maximum_dropout_rate",
+        "minimum_clone_support",
+        "assignment_confidence",
+        "minimum_assignment_confidence",
+        "biological_replicates",
+        "observation_model",
+        "audit_artifact"
+      ],
+      "title": "CloneObservationContract",
+      "type": "object"
+    },
+    "PhysicalContextDesignContract": {
+      "additionalProperties": false,
+      "description": "Separates co-residence, counterfactual modelling, and intervention.",
+      "properties": {
+        "audit_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "context_design_id": {
+          "title": "Context Design Id",
+          "type": "string"
+        },
+        "mediator_intervention_observed": {
+          "default": false,
+          "title": "Mediator Intervention Observed",
+          "type": "boolean"
+        },
+        "perturbations_cultured_separately": {
+          "title": "Perturbations Cultured Separately",
+          "type": "boolean"
+        },
+        "populations_co_resident": {
+          "title": "Populations Co Resident",
+          "type": "boolean"
+        },
+        "qualified_context_model": {
+          "default": false,
+          "title": "Qualified Context Model",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "context_design_id",
+        "populations_co_resident",
+        "perturbations_cultured_separately",
+        "audit_artifact"
+      ],
+      "title": "PhysicalContextDesignContract",
+      "type": "object"
+    },
+    "ProtectedExpressionAccessContract": {
+      "additionalProperties": false,
+      "description": "Leakage firewall for every decision that could inspect protected expression.",
+      "properties": {
+        "audit_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "batch_correction_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Batch Correction Accessed",
+          "type": "boolean"
+        },
+        "feature_selection_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Feature Selection Accessed",
+          "type": "boolean"
+        },
+        "metric_threshold_selection_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Metric Threshold Selection Accessed",
+          "type": "boolean"
+        },
+        "model_selection_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Model Selection Accessed",
+          "type": "boolean"
+        },
+        "normalization_estimation_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Normalization Estimation Accessed",
+          "type": "boolean"
+        },
+        "program_or_pathway_discovery_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Program Or Pathway Discovery Accessed",
+          "type": "boolean"
+        },
+        "protected_access_contract_id": {
+          "title": "Protected Access Contract Id",
+          "type": "string"
+        },
+        "protected_checkpoint_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Protected Checkpoint Ids",
+          "type": "array"
+        },
+        "representation_fit_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Representation Fit Accessed",
+          "type": "boolean"
+        },
+        "stopping_accessed": {
+          "const": false,
+          "default": false,
+          "title": "Stopping Accessed",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "protected_access_contract_id",
+        "protected_checkpoint_ids",
+        "audit_artifact"
+      ],
+      "title": "ProtectedExpressionAccessContract",
+      "type": "object"
+    },
+    "RelativeAbundanceDesignContract": {
+      "additionalProperties": false,
+      "description": "Design gates needed before guide fractions identify relative selection.",
+      "properties": {
+        "guide_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Guide Catalog Sha256",
+          "type": "string"
+        },
+        "pool_or_exposure_alignment": {
+          "const": true,
+          "default": true,
+          "title": "Pool Or Exposure Alignment",
+          "type": "boolean"
+        },
+        "relative_design_id": {
+          "title": "Relative Design Id",
+          "type": "string"
+        },
+        "replicate_identity_complete": {
+          "const": true,
+          "default": true,
+          "title": "Replicate Identity Complete",
+          "type": "boolean"
+        },
+        "sampling_uncertainty_artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "stable_denominator_definition": {
+          "minLength": 1,
+          "title": "Stable Denominator Definition",
+          "type": "string"
+        }
+      },
+      "required": [
+        "relative_design_id",
+        "guide_catalog_sha256",
+        "stable_denominator_definition",
+        "sampling_uncertainty_artifact"
+      ],
+      "title": "RelativeAbundanceDesignContract",
+      "type": "object"
     },
     "StudyEntityCounts": {
       "additionalProperties": false,
@@ -81,7 +431,7 @@
       "type": "object"
     },
     "StudyField": {
-      "description": "Fields that may unlock a scientific result layer.",
+      "description": "Physically observed fields that may unlock a scientific result layer.",
       "enum": [
         "biological_sample_id",
         "physical_pool_id",
@@ -92,6 +442,7 @@
         "guide_id",
         "target_id",
         "cell_id",
+        "cell_state",
         "clone_id",
         "lineage_parent_id",
         "live_cell_track_id",
@@ -113,11 +464,29 @@
   "$id": "https://credo.local/schemas/study-evidence-contract.v1.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
-  "description": "Observed study-design fields from which capabilities are derived.",
+  "description": "Observed study design plus auditable non-field gates.",
   "properties": {
-    "absolute_count_basis": {
-      "$ref": "#/$defs/AbsoluteCountBasis",
-      "default": "none"
+    "absolute_abundance_design": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AbsoluteAbundanceDesignContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "clone_observation": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CloneObservationContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "destructive_snapshots_only": {
       "default": true,
@@ -134,10 +503,43 @@
       "title": "Observed Fields",
       "type": "array"
     },
+    "physical_context_design": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/PhysicalContextDesignContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
     "physical_pool_identity_complete": {
       "default": false,
       "title": "Physical Pool Identity Complete",
       "type": "boolean"
+    },
+    "protected_expression_access": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProtectedExpressionAccessContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "relative_abundance_design": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RelativeAbundanceDesignContract"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "schema_id": {
       "const": "credo.study_evidence_contract",
@@ -159,11 +561,6 @@
       "minLength": 1,
       "title": "Study Id",
       "type": "string"
-    },
-    "training_only_heldout_time_representation": {
-      "default": false,
-      "title": "Training Only Heldout Time Representation",
-      "type": "boolean"
     }
   },
   "required": [

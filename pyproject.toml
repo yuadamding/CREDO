@@ -49,7 +49,7 @@ where = ["src"]
 credo_count_sde_v4 = ["py.typed"]
 
 [tool.pytest.ini_options]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --import-mode=importlib"
 testpaths = ["tests"]
 markers = ["gpu: requires CUDA", "slow: longer synthetic lifecycle"]
 

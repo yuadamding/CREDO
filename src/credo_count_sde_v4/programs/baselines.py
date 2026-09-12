@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -15,24 +16,24 @@ class BaselinePrediction:
     """Mean-count prediction for one frozen baseline."""
 
     name: BaselineName
-    mean: np.ndarray
+    mean: np.ndarray[Any, Any]
 
 
-def _frequency(counts: np.ndarray, pseudocount: float = 0.5) -> np.ndarray:
+def _frequency(counts: np.ndarray[Any, Any], pseudocount: float = 0.5) -> np.ndarray[Any, Any]:
     totals = counts.sum(axis=0, dtype=np.float64) + pseudocount
     return totals / totals.sum()
 
 
 def _conditional_frequencies(
-    counts: np.ndarray,
-    first: np.ndarray,
-    second: np.ndarray,
+    counts: np.ndarray[Any, Any],
+    first: np.ndarray[Any, Any],
+    second: np.ndarray[Any, Any],
     *,
     first_levels: int,
     second_levels: int,
-    fallback: np.ndarray,
+    fallback: np.ndarray[Any, Any],
     shrinkage: float,
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     result = np.empty((first_levels, second_levels, counts.shape[1]), dtype=np.float64)
     for left in range(first_levels):
         for right in range(second_levels):
@@ -46,14 +47,14 @@ def _conditional_frequencies(
 
 
 def _validate_inputs(
-    training_counts: np.ndarray,
-    training_library_size: np.ndarray,
-    training_checkpoint: np.ndarray,
-    training_target: np.ndarray,
-    training_guide: np.ndarray,
-    evaluation_library_size: np.ndarray,
-    evaluation_checkpoint: np.ndarray,
-    evaluation_target: np.ndarray,
+    training_counts: np.ndarray[Any, Any],
+    training_library_size: np.ndarray[Any, Any],
+    training_checkpoint: np.ndarray[Any, Any],
+    training_target: np.ndarray[Any, Any],
+    training_guide: np.ndarray[Any, Any],
+    evaluation_library_size: np.ndarray[Any, Any],
+    evaluation_checkpoint: np.ndarray[Any, Any],
+    evaluation_target: np.ndarray[Any, Any],
 ) -> tuple[int, int]:
     counts = np.asarray(training_counts)
     rows = counts.shape[0]
@@ -85,15 +86,15 @@ def _validate_inputs(
 
 def fit_frozen_baselines(
     *,
-    training_counts: np.ndarray,
-    training_library_size: np.ndarray,
-    training_checkpoint: np.ndarray,
-    training_target: np.ndarray,
-    training_guide: np.ndarray,
+    training_counts: np.ndarray[Any, Any],
+    training_library_size: np.ndarray[Any, Any],
+    training_checkpoint: np.ndarray[Any, Any],
+    training_target: np.ndarray[Any, Any],
+    training_guide: np.ndarray[Any, Any],
     control_guide_indices: tuple[int, ...],
-    evaluation_library_size: np.ndarray,
-    evaluation_checkpoint: np.ndarray,
-    evaluation_target: np.ndarray,
+    evaluation_library_size: np.ndarray[Any, Any],
+    evaluation_checkpoint: np.ndarray[Any, Any],
+    evaluation_target: np.ndarray[Any, Any],
     sparse_factor_rank: int,
 ) -> tuple[BaselinePrediction, ...]:
     """Fit every comparator from training rows and predict evaluation means."""

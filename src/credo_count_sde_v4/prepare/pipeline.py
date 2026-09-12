@@ -61,7 +61,7 @@ def _library_normalize(matrix: sparse.csr_matrix) -> sparse.csr_matrix:
 
 def _apply_multiplicative_offsets(
     matrix: sparse.csr_matrix,
-    batch_ids: np.ndarray,
+    batch_ids: np.ndarray[Any, Any],
     offsets: dict[str, list[float]],
 ) -> sparse.csr_matrix:
     """Apply ``X * exp(-beta_batch)`` without changing the zero pattern."""
@@ -78,7 +78,7 @@ def _apply_multiplicative_offsets(
 def _fit_corrected_view(
     config_root: Path,
     config: ResolvedConfig,
-    fit_rows: np.ndarray,
+    fit_rows: np.ndarray[Any, Any],
     fit_matrix: sparse.csr_matrix,
 ) -> tuple[sparse.csr_matrix, dict[str, Any]]:
     """Fit a conservative matched-reference multiplicative offset.
@@ -171,7 +171,7 @@ def _fit_corrected_view(
 def _apply_frozen_view(
     config_root: Path,
     config: ResolvedConfig,
-    row_ids: np.ndarray,
+    row_ids: np.ndarray[Any, Any],
     matrix: sparse.csr_matrix,
     audit: dict[str, Any],
 ) -> sparse.csr_matrix:
@@ -193,7 +193,7 @@ def _randomized_right_singular_vectors(
     *,
     seed: int = 0,
     oversample: int = 8,
-) -> np.ndarray:
+) -> np.ndarray[Any, Any]:
     """Return a deterministic fixed-work approximation for a large sparse matrix.
 
     ARPACK can require hundreds of full sparse passes for the full-gene cohort.
@@ -218,7 +218,7 @@ def _randomized_right_singular_vectors(
 
 def _fit_components(
     matrix: sparse.csr_matrix, state_dim: int, *, seed: int
-) -> tuple[np.ndarray, np.ndarray, float]:
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], float]:
     squared = matrix.copy()
     squared.data **= 2
     scale = np.sqrt(np.asarray(squared.mean(axis=0)).reshape(-1))
@@ -436,7 +436,9 @@ def prepare_representation(config_path: Path) -> Path:
     return destination
 
 
-def load_prepared_arrays(workspace: Path) -> tuple[PreparedRepresentation, np.ndarray, np.ndarray]:
+def load_prepared_arrays(
+    workspace: Path,
+) -> tuple[PreparedRepresentation, np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     prepared_root = workspace / "prepared"
     manifest = PreparedRepresentation.model_validate_json(
         (prepared_root / "prepared.json").read_text()

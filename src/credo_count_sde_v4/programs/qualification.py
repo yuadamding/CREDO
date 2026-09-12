@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
+from typing import Any
 
 import numpy as np
 import torch
@@ -19,23 +20,24 @@ from .head import (
     fit_program_head,
     negative_binomial_log_prob,
 )
+from .keyed_metrics import gene_sign_report, sister_guide_reports
 
 
 @dataclass(frozen=True)
 class ProgramDataset:
     """Cohort-neutral raw-count inputs for independent program qualification."""
 
-    counts: np.ndarray
-    state: np.ndarray
-    donor_index: np.ndarray
-    sample_index: np.ndarray
-    checkpoint_index: np.ndarray
-    target_index: np.ndarray
-    guide_index: np.ndarray
-    guide_to_target: np.ndarray
+    counts: np.ndarray[Any, Any]
+    state: np.ndarray[Any, Any]
+    donor_index: np.ndarray[Any, Any]
+    sample_index: np.ndarray[Any, Any]
+    checkpoint_index: np.ndarray[Any, Any]
+    target_index: np.ndarray[Any, Any]
+    guide_index: np.ndarray[Any, Any]
+    guide_to_target: np.ndarray[Any, Any]
     control_guide_indices: tuple[int, ...]
     checkpoint_times: tuple[float, ...]
-    target_descriptors: np.ndarray | None = None
+    target_descriptors: np.ndarray[Any, Any] | None = None
     protected_expression_access_contract_id: str | None = None
     heldout_donor_eligible: bool = True
     heldout_donor_ineligibility_reason: str | None = None
@@ -95,9 +97,7 @@ class ProgramDataset:
             or not np.isfinite(self.target_descriptors).all()
         ):
             raise ContractError("Program target descriptors are invalid.")
-        if self.heldout_donor_eligible == (
-            self.heldout_donor_ineligibility_reason is not None
-        ):
+        if self.heldout_donor_eligible == (self.heldout_donor_ineligibility_reason is not None):
             raise ContractError(
                 "Held-out-donor eligibility and its ineligibility reason contradict."
             )
@@ -147,6 +147,9 @@ class RuntimeSplitMetric:
     baselines: tuple[RuntimeBaselineMetric, ...]
     improvement_over_best_baseline: float | None
     gene_sign_accuracy: float | None
+    predictive_nb_log_likelihood: float | None = None
+    common_dispersion_mean_prediction_score: float | None = None
+    gene_sign_coverage: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -158,6 +161,8 @@ class RuntimeTargetGuideMetric:
     pair_count: int
     median_correlation: float
     within_target_variance: float
+    shared_support: tuple[dict[str, Any], ...] = ()
+    support_complete: bool = True
 
 
 @dataclass(frozen=True)
@@ -179,16 +184,20 @@ class ProgramQualificationMetrics:
     heldout_target_performance_pass: bool
     gene_sign_calibration_pass: bool
     scientific_pass: bool
-    seed_loadings: tuple[np.ndarray, ...]
-    donor_loadings: tuple[np.ndarray, ...]
+    seed_loadings: tuple[np.ndarray[Any, Any], ...]
+    donor_loadings: tuple[np.ndarray[Any, Any], ...]
     stability_fits: tuple[ProgramFitResult, ...]
     donor_fits: tuple[ProgramFitResult, ...]
     null_replicate_inclusion_rates: tuple[float, ...]
     null_replicate_families: tuple[str, ...]
     reference_fit: ProgramFitResult
+    qualification_scope: str = "legacy_four_split_component_diagnostic_not_nested_donor_forecast"
+    metric_revision: int = 2
+    null_calibration_semantics: str = "legacy_coefficient_exceedance_not_discovery_calibration"
+    biological_efficiency_identified: bool = False
 
 
-def _batch(dataset: ProgramDataset, indices: np.ndarray) -> ProgramBatch:
+def _batch(dataset: ProgramDataset, indices: np.ndarray[Any, Any]) -> ProgramBatch:
     counts = torch.as_tensor(dataset.counts[indices], dtype=torch.float32)
     return ProgramBatch(
         counts=counts,
@@ -223,7 +232,7 @@ def _new_model(dataset: ProgramDataset, programs: int, *, seed: int) -> CountLin
     )
 
 
-def _initialize_intercept(model: CountLinkedProgramHead, counts: np.ndarray) -> None:
+def _initialize_intercept(model: CountLinkedProgramHead, counts: np.ndarray[Any, Any]) -> None:
     frequency = counts.sum(axis=0, dtype=np.float64) + 0.5
     frequency /= frequency.sum()
     with torch.no_grad():
@@ -232,20 +241,18 @@ def _initialize_intercept(model: CountLinkedProgramHead, counts: np.ndarray) -> 
 
 def _split_masks(
     dataset: ProgramDataset,
-) -> tuple[tuple[ProgramSplitKind, np.ndarray, np.ndarray, str | None], ...]:
+) -> tuple[tuple[ProgramSplitKind, np.ndarray[Any, Any], np.ndarray[Any, Any], str | None], ...]:
     rows = len(dataset.counts)
     all_rows = np.arange(rows)
     donor = int(np.max(dataset.donor_index))
     donor_eval = dataset.donor_index == donor
     donor_reason = (
-        None
-        if dataset.heldout_donor_eligible
-        else dataset.heldout_donor_ineligibility_reason
+        None if dataset.heldout_donor_eligible else dataset.heldout_donor_ineligibility_reason
     )
 
     heldout_guides: list[int] = []
     controls = set(dataset.control_guide_indices)
-    for target in sorted(set(dataset.target_index) - {0}):
+    for target in sorted(set(dataset.target_index)):
         guides = sorted(
             set(dataset.guide_index[dataset.target_index == target].tolist()) - controls
         )
@@ -253,8 +260,10 @@ def _split_masks(
             heldout_guides.append(guides[-1])
     guide_eval = np.isin(dataset.guide_index, heldout_guides)
 
-    target = int(np.max(dataset.target_index))
-    target_eval = dataset.target_index == target
+    perturbation_rows = ~np.isin(dataset.guide_index, tuple(controls))
+    observed_targets = dataset.target_index[perturbation_rows]
+    target = int(np.max(observed_targets)) if len(observed_targets) else -1
+    target_eval = (dataset.target_index == target) & perturbation_rows
     target_reason = (
         None
         if dataset.target_descriptors is not None
@@ -269,9 +278,7 @@ def _split_masks(
             "held-out time requires at least two fit checkpoints and one evaluation checkpoint"
         )
     if dataset.protected_expression_access_contract_id is None:
-        time_blockers.append(
-            "no protected-expression access contract for the held-out checkpoint"
-        )
+        time_blockers.append("no protected-expression access contract for the held-out checkpoint")
     time_reason = "; ".join(time_blockers) or None
     return (
         (
@@ -302,8 +309,8 @@ def _split_masks(
 
 
 def _inner_split(
-    indices: np.ndarray, *, fraction: float, seed: int
-) -> tuple[np.ndarray, np.ndarray]:
+    indices: np.ndarray[Any, Any], *, fraction: float, seed: int
+) -> tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]:
     if not 0 < fraction < 0.5:
         raise ContractError("Inner validation fraction must lie between zero and one half.")
     rng = np.random.default_rng(seed)
@@ -314,7 +321,7 @@ def _inner_split(
     return shuffled[validation_count:], shuffled[:validation_count]
 
 
-def _dispersion(counts: np.ndarray) -> np.ndarray:
+def _dispersion(counts: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
     mean = counts.mean(axis=0, dtype=np.float64) + 1e-6
     variance = counts.var(axis=0, dtype=np.float64) + 1e-6
     theta = mean**2 / np.maximum(variance - mean, 1e-3)
@@ -322,9 +329,9 @@ def _dispersion(counts: np.ndarray) -> np.ndarray:
 
 
 def _likelihood_metrics(
-    counts: np.ndarray,
-    mean: np.ndarray,
-    dispersion: np.ndarray,
+    counts: np.ndarray[Any, Any],
+    mean: np.ndarray[Any, Any],
+    dispersion: np.ndarray[Any, Any],
 ) -> tuple[float, float]:
     count_tensor = torch.as_tensor(counts, dtype=torch.float64)
     mean_tensor = torch.as_tensor(np.maximum(mean, 1e-8), dtype=torch.float64)
@@ -342,38 +349,30 @@ def _likelihood_metrics(
 def _gene_sign_accuracy(
     *,
     dataset: ProgramDataset,
-    evaluation_indices: np.ndarray,
-    predicted_mean: np.ndarray,
-    training_indices: np.ndarray,
-) -> float:
-    observed = dataset.counts[evaluation_indices].sum(axis=0, dtype=np.float64) + 0.5
-    observed /= observed.sum()
-    controls = np.isin(
-        dataset.guide_index[training_indices], np.asarray(dataset.control_guide_indices)
-    )
-    control_counts = dataset.counts[training_indices][controls]
-    if not len(control_counts):
-        return 0.0
-    control = control_counts.sum(axis=0, dtype=np.float64) + 0.5
-    control /= control.sum()
-    predicted = predicted_mean.sum(axis=0, dtype=np.float64) + 1e-8
-    predicted /= predicted.sum()
-    truth_effect = np.log(observed) - np.log(control)
-    predicted_effect = np.log(predicted) - np.log(control)
-    informative = np.abs(truth_effect) >= 0.05
-    if not np.any(informative):
-        return 0.5
-    return float(
-        np.mean(np.sign(truth_effect[informative]) == np.sign(predicted_effect[informative]))
-    )
+    evaluation_indices: np.ndarray[Any, Any],
+    predicted_mean: np.ndarray[Any, Any],
+    predicted_reference_mean: np.ndarray[Any, Any],
+    training_indices: np.ndarray[Any, Any],
+) -> float | None:
+    """Revision 2; training counts cannot substitute for matched endpoint controls."""
+    return gene_sign_report(
+        counts=dataset.counts[evaluation_indices],
+        predicted_mean=predicted_mean,
+        predicted_reference_mean=predicted_reference_mean,
+        donor=dataset.donor_index[evaluation_indices],
+        condition=dataset.checkpoint_index[evaluation_indices],
+        guide=dataset.guide_index[evaluation_indices],
+        guide_to_target=dataset.guide_to_target,
+        control_guides=dataset.control_guide_indices,
+    ).accuracy
 
 
 def _evaluate_split(
     dataset: ProgramDataset,
     *,
     kind: ProgramSplitKind,
-    training_indices: np.ndarray,
-    evaluation_indices: np.ndarray,
+    training_indices: np.ndarray[Any, Any],
+    evaluation_indices: np.ndarray[Any, Any],
     ineligibility_reason: str | None,
     config: ProgramQualificationConfig,
     device: torch.device | str,
@@ -413,9 +412,15 @@ def _evaluate_split(
     evaluation_batch = _batch(dataset, evaluation_indices).to(device)
     with torch.no_grad():
         predicted_mean = fit.model.mean(evaluation_batch).cpu().numpy()
+        predicted_reference = fit.model.reference_mean(evaluation_batch).cpu().numpy()
     dispersion = _dispersion(dataset.counts[fit_indices])
     model_ll, model_nll = _likelihood_metrics(
         dataset.counts[evaluation_indices], predicted_mean, dispersion
+    )
+    predictive_ll, _ = _likelihood_metrics(
+        dataset.counts[evaluation_indices],
+        predicted_mean,
+        fit.model.dispersion.detach().cpu().numpy(),
     )
     baseline_predictions = fit_frozen_baselines(
         training_counts=dataset.counts[fit_indices],
@@ -438,15 +443,22 @@ def _evaluate_split(
     )
     best_baseline = max(item.mean_log_likelihood_per_count for item in baseline_metrics)
     improvement = model_ll - best_baseline
-    sign_accuracy = _gene_sign_accuracy(
-        dataset=dataset,
-        evaluation_indices=evaluation_indices,
+    sign_report = gene_sign_report(
+        counts=dataset.counts[evaluation_indices],
         predicted_mean=predicted_mean,
-        training_indices=fit_indices,
+        predicted_reference_mean=predicted_reference,
+        donor=dataset.donor_index[evaluation_indices],
+        condition=dataset.checkpoint_index[evaluation_indices],
+        guide=dataset.guide_index[evaluation_indices],
+        guide_to_target=dataset.guide_to_target,
+        control_guides=dataset.control_guide_indices,
     )
+    sign_accuracy = sign_report.accuracy
     passed = (
         improvement > config.minimum_log_likelihood_improvement
+        and sign_accuracy is not None
         and sign_accuracy >= config.minimum_gene_sign_accuracy
+        and sign_report.supported_units == sign_report.total_units
     )
     unit_values = {
         ProgramSplitKind.HELDOUT_DONOR: dataset.donor_index,
@@ -471,14 +483,17 @@ def _evaluate_split(
             baselines=baseline_metrics,
             improvement_over_best_baseline=improvement,
             gene_sign_accuracy=sign_accuracy,
+            predictive_nb_log_likelihood=predictive_ll,
+            common_dispersion_mean_prediction_score=model_ll,
+            gene_sign_coverage=asdict(sign_report),
         ),
         fit,
     )
 
 
 def _align_loading(
-    reference: np.ndarray, candidate: np.ndarray
-) -> tuple[float, np.ndarray]:
+    reference: np.ndarray[Any, Any], candidate: np.ndarray[Any, Any]
+) -> tuple[float, np.ndarray[Any, Any]]:
     """Align a candidate basis to the reference by permutation and sign."""
 
     correlation = np.corrcoef(reference.T, candidate.T)[: reference.shape[1], reference.shape[1] :]
@@ -497,7 +512,7 @@ def _fit_reference(
     *,
     seed: int,
     device: torch.device | str,
-    indices: np.ndarray | None = None,
+    indices: np.ndarray[Any, Any] | None = None,
 ) -> ProgramFitResult:
     indices = np.arange(len(dataset.counts)) if indices is None else indices
     fit_indices, validation_indices = _inner_split(
@@ -517,96 +532,53 @@ def _fit_reference(
 def _guide_target_consistency(
     dataset: ProgramDataset, *, inconsistent_threshold: float
 ) -> tuple[float, float, float, tuple[RuntimeTargetGuideMetric, ...]]:
-    """Measure sister-guide agreement from observed counts, not fitted shrinkage."""
-
-    controls = np.isin(
-        dataset.guide_index, np.asarray(dataset.control_guide_indices, dtype=np.int64)
+    reports = sister_guide_reports(
+        counts=dataset.counts,
+        donor=dataset.donor_index,
+        condition=dataset.checkpoint_index,
+        guide=dataset.guide_index,
+        guide_to_target=dataset.guide_to_target,
+        control_guides=dataset.control_guide_indices,
     )
-    observed_guides = set(dataset.guide_index.tolist())
-    per_target: list[RuntimeTargetGuideMetric] = []
-    target_means: list[np.ndarray] = []
-    within_variances: list[float] = []
-    all_correlations: list[float] = []
-    for target in sorted(set(dataset.target_index.tolist()) - {0}):
-        guides = tuple(
-            guide
-            for guide in sorted(observed_guides)
-            if dataset.guide_to_target[guide] == target
-            and guide not in dataset.control_guide_indices
-        )
-        if len(guides) < 2:
-            continue
-        effects: list[np.ndarray] = []
-        for guide in guides:
-            checkpoint_effects: list[np.ndarray] = []
-            for checkpoint in range(len(dataset.checkpoint_times)):
-                guide_rows = (dataset.guide_index == guide) & (
-                    dataset.checkpoint_index == checkpoint
-                )
-                control_rows = controls & (dataset.checkpoint_index == checkpoint)
-                if not np.any(guide_rows) or not np.any(control_rows):
-                    continue
-                guide_frequency = (
-                    dataset.counts[guide_rows].sum(axis=0, dtype=np.float64) + 0.5
-                )
-                guide_frequency /= guide_frequency.sum()
-                control_frequency = (
-                    dataset.counts[control_rows].sum(axis=0, dtype=np.float64) + 0.5
-                )
-                control_frequency /= control_frequency.sum()
-                checkpoint_effects.append(np.log(guide_frequency) - np.log(control_frequency))
-            if checkpoint_effects:
-                effects.append(np.concatenate(checkpoint_effects))
-        if len(effects) < 2 or any(value.shape != effects[0].shape for value in effects):
-            continue
-        pair_correlations: list[float] = []
-        for left in range(len(effects)):
-            for right in range(left + 1, len(effects)):
-                value = float(np.corrcoef(effects[left], effects[right])[0, 1])
-                if np.isfinite(value):
-                    pair_correlations.append(value)
-        if not pair_correlations:
-            continue
-        effect_matrix = np.stack(effects)
-        target_mean = effect_matrix.mean(axis=0)
-        within_variance = float(np.mean((effect_matrix - target_mean) ** 2))
-        median_correlation = float(np.median(pair_correlations))
-        all_correlations.extend(pair_correlations)
-        target_means.append(target_mean)
-        within_variances.append(within_variance)
-        per_target.append(
+    targets = []
+    all_correlations = []
+    for report in reports:
+        pairs = [p for p in report["pairs"] if p["correlation"] is not None]
+        correlations = [float(p["correlation"]) for p in pairs]
+        all_correlations.extend(correlations)
+        targets.append(
             RuntimeTargetGuideMetric(
-                target_index=target,
-                guide_indices=guides,
-                pair_count=len(pair_correlations),
-                median_correlation=median_correlation,
-                within_target_variance=within_variance,
+                target_index=report["target_index"],
+                guide_indices=report["guide_indices"],
+                pair_count=len(pairs),
+                median_correlation=float(np.median(correlations)) if correlations else -1.0,
+                within_target_variance=(
+                    float(np.mean([p["within_variance"] for p in pairs])) if pairs else 0.0
+                ),
+                shared_support=tuple(report["pairs"]),
+                support_complete=bool(pairs) and len(pairs) == len(report["pairs"]),
             )
         )
-    if not per_target:
+    if not targets:
         return -1.0, 0.0, 1.0, ()
-    between_variance = (
-        float(np.mean(np.var(np.stack(target_means), axis=0)))
-        if len(target_means) > 1
-        else 0.0
-    )
-    within_variance = float(np.mean(within_variances))
-    total_variance = between_variance + within_variance
-    target_variance_fraction = between_variance / total_variance if total_variance else 0.0
-    inconsistent_fraction = float(
-        np.mean(
-            [item.median_correlation < inconsistent_threshold for item in per_target]
-        )
-    )
+    # No between-target variance is inferred from differently keyed supports.
+    # The historical scalar is retained at zero; revision-2 reports mark it unestimated.
     return (
-        float(np.median(all_correlations)),
-        target_variance_fraction,
-        inconsistent_fraction,
-        tuple(per_target),
+        float(np.median(all_correlations)) if all_correlations else -1.0,
+        0.0,
+        float(
+            np.mean(
+                [
+                    not t.support_complete or t.median_correlation < inconsistent_threshold
+                    for t in targets
+                ]
+            )
+        ),
+        tuple(targets),
     )
 
 
-def _null_inclusion_rate(
+def _legacy_parameter_exceedance_rate(
     dataset: ProgramDataset,
     config: ProgramQualificationConfig,
     *,
@@ -735,7 +707,7 @@ def qualify_program_model(
     aligned_seed_loadings = (reference_loading, *(item[1] for item in seed_alignments))
     donor_fits: tuple[ProgramFitResult, ...] = ()
     donor_stability: float | None = None
-    aligned_donor_loadings: tuple[np.ndarray, ...] = ()
+    aligned_donor_loadings: tuple[np.ndarray[Any, Any], ...] = ()
     if dataset.heldout_donor_eligible:
         donor_fits = tuple(
             _fit_reference(
@@ -760,7 +732,9 @@ def qualify_program_model(
         dataset,
         inconsistent_threshold=config.minimum_sister_guide_correlation,
     )
-    null_rate, null_replicates, null_families = _null_inclusion_rate(dataset, config, device=device)
+    null_rate, null_replicates, null_families = _legacy_parameter_exceedance_rate(
+        dataset, config, device=device
+    )
     target_metric = next(
         item for item in split_metrics if item.kind == ProgramSplitKind.HELDOUT_TARGET
     )
@@ -772,10 +746,11 @@ def qualify_program_model(
     )
     gates = (
         stability >= config.minimum_seed_loading_stability,
-        donor_stability is not None
-        and donor_stability >= config.minimum_donor_loading_stability,
-        sister >= config.minimum_sister_guide_correlation,
-        null_rate <= config.maximum_null_inclusion_rate,
+        donor_stability is not None and donor_stability >= config.minimum_donor_loading_stability,
+        sister >= config.minimum_sister_guide_correlation
+        and bool(per_target)
+        and all(t.support_complete for t in per_target),
+        False,  # Coefficient thresholds/shortened null fits do not calibrate discoveries.
         target_metric.eligible and target_metric.passed,
         gene_sign_pass,
         all(item.eligible and item.passed for item in split_metrics),

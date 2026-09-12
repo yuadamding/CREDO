@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import h5py
 import numpy as np
@@ -24,21 +24,21 @@ from ..errors import ContractError, IntegrityError
 @dataclass(frozen=True)
 class SparseCountBatch:
     matrix: sparse.csr_matrix
-    row_ids: np.ndarray
+    row_ids: np.ndarray[Any, Any]
     feature_index_hash: str
 
     @property
-    def library_sizes(self) -> np.ndarray:
-        return cast(np.ndarray, np.asarray(self.matrix.sum(axis=1)).reshape(-1))
+    def library_sizes(self) -> np.ndarray[Any, Any]:
+        return cast(np.ndarray[Any, Any], np.asarray(self.matrix.sum(axis=1)).reshape(-1))
 
-    def to_dense(self, *, byte_limit: int) -> np.ndarray:
+    def to_dense(self, *, byte_limit: int) -> np.ndarray[Any, Any]:
         needed = self.matrix.shape[0] * self.matrix.shape[1] * self.matrix.dtype.itemsize
         if needed > byte_limit:
             raise MemoryError(f"Dense conversion needs {needed} bytes; limit is {byte_limit}.")
         return self.matrix.toarray()
 
 
-def _row_hash(row_ids: np.ndarray) -> str:
+def _row_hash(row_ids: np.ndarray[Any, Any]) -> str:
     values = np.asarray(row_ids, dtype="<i8")
     return sha256_bytes(values.tobytes(order="C"))
 
@@ -53,7 +53,7 @@ def build_count_store(
     path: Path,
     matrix: sparse.spmatrix,
     *,
-    row_ids: np.ndarray,
+    row_ids: np.ndarray[Any, Any],
     features: tuple[FeatureKey, ...],
     projected_peak_bytes: int | None = None,
 ) -> CountStoreManifest:
@@ -156,7 +156,9 @@ class CountStore:
         self._manifest = manifest
         self._handle: h5py.File | None = None
         self._owner_pid: int | None = None
-        self._row_index_cache: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
+        self._row_index_cache: (
+            tuple[np.ndarray[Any, Any], np.ndarray[Any, Any], np.ndarray[Any, Any]] | None
+        ) = None
         if path.is_symlink() or not path.is_file():
             raise IntegrityError(f"Count store is not a regular file: {path}.")
 
@@ -289,7 +291,7 @@ class CountStore:
                 raise IntegrityError("Sorted row-position index is inconsistent.")
         return manifest
 
-    def _load(self) -> tuple[sparse.csr_matrix, np.ndarray]:
+    def _load(self) -> tuple[sparse.csr_matrix, np.ndarray[Any, Any]]:
         with h5py.File(self.path, "r") as handle:
             shape = tuple(map(int, handle.attrs["shape"]))
             matrix = sparse.csr_matrix(
@@ -299,7 +301,7 @@ class CountStore:
             row_ids = handle["row_ids"][:]
         return matrix, row_ids
 
-    def rows(self, row_ids: np.ndarray) -> SparseCountBatch:
+    def rows(self, row_ids: np.ndarray[Any, Any]) -> SparseCountBatch:
         requested = np.asarray(row_ids, dtype=np.int64)
         self._assert_process_owner()
         manager = (
@@ -380,7 +382,7 @@ class CountStore:
             if len(positions) >= 4_096:
                 window_rows = 16_384
                 blocks: list[sparse.csr_matrix] = []
-                block_positions: list[np.ndarray] = []
+                block_positions: list[np.ndarray[Any, Any]] = []
                 for window_start in range(0, self.manifest.rows, window_rows):
                     window_end = min(window_start + window_rows, self.manifest.rows)
                     left = np.searchsorted(unique_positions, window_start, side="left")
@@ -414,15 +416,15 @@ class CountStore:
                     feature_index_hash=self.manifest.feature_index_hash,
                 )
             unique_positions = np.unique(positions)
-            row_payload: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+            row_payload: dict[int, tuple[np.ndarray[Any, Any], np.ndarray[Any, Any]]] = {}
             for position in unique_positions:
                 start, end = int(offsets[position]), int(offsets[position + 1])
                 row_payload[int(position)] = (
                     handle["X/indices"][start:end],
                     handle["X/data"][start:end],
                 )
-        indices: list[np.ndarray] = []
-        values: list[np.ndarray] = []
+        indices: list[np.ndarray[Any, Any]] = []
+        values: list[np.ndarray[Any, Any]] = []
         indptr = [0]
         for position in positions:
             row_indices, row_values = row_payload[int(position)]
@@ -449,17 +451,17 @@ class CountStore:
             feature_index_hash=self.manifest.feature_index_hash,
         )
 
-    def row_ids(self) -> np.ndarray:
+    def row_ids(self) -> np.ndarray[Any, Any]:
         self._assert_process_owner()
         manager = (
             nullcontext(self._handle) if self._handle is not None else h5py.File(self.path, "r")
         )
         with manager as handle:
-            return cast(np.ndarray, handle["row_ids"][:])
+            return cast(np.ndarray[Any, Any], handle["row_ids"][:])
 
     def iter_batches(
         self,
-        ordered_row_ids: np.ndarray,
+        ordered_row_ids: np.ndarray[Any, Any],
         *,
         batch_size: int,
         cursor: int = 0,

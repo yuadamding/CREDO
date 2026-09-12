@@ -1,0 +1,296 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "HeldoutTargetMode": {
+      "description": "Whether an unseen target has legal predictive information.",
+      "enum": [
+        "identifier_only_not_eligible",
+        "predeclared_target_descriptors"
+      ],
+      "title": "HeldoutTargetMode",
+      "type": "string"
+    },
+    "LibrarySizeSemantics": {
+      "description": "The library term is observed exposure, never a fitted biological effect.",
+      "enum": [
+        "observed_total_count_log_offset"
+      ],
+      "title": "LibrarySizeSemantics",
+      "type": "string"
+    },
+    "NegativeBinomialSemantics": {
+      "description": "Frozen NB parameterization used by the program head.",
+      "enum": [
+        "nb2_gene_dispersion_var_mu_plus_mu_squared_over_theta"
+      ],
+      "title": "NegativeBinomialSemantics",
+      "type": "string"
+    },
+    "SparseLoadingPrior": {
+      "description": "Qualified optimization surrogate for sparse gene-program loadings.",
+      "enum": [
+        "l1_with_unit_norm_columns"
+      ],
+      "title": "SparseLoadingPrior",
+      "type": "string"
+    }
+  },
+  "$id": "https://credo.local/schemas/count-linked-program-contract.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Static/checkpoint-conditional head, deliberately uncoupled from dynamics.",
+  "properties": {
+    "checkpoint_dependence_enabled": {
+      "title": "Checkpoint Dependence Enabled",
+      "type": "boolean"
+    },
+    "checkpoint_schema_modified": {
+      "const": false,
+      "default": false,
+      "title": "Checkpoint Schema Modified",
+      "type": "boolean"
+    },
+    "checkpoint_time_semantics": {
+      "const": "linear_continuous_physical_time",
+      "default": "linear_continuous_physical_time",
+      "title": "Checkpoint Time Semantics",
+      "type": "string"
+    },
+    "checkpoint_time_values": {
+      "items": {
+        "type": "number"
+      },
+      "title": "Checkpoint Time Values",
+      "type": "array"
+    },
+    "checkpoints": {
+      "exclusiveMinimum": 0,
+      "title": "Checkpoints",
+      "type": "integer"
+    },
+    "control_guide_indices": {
+      "items": {
+        "type": "integer"
+      },
+      "title": "Control Guide Indices",
+      "type": "array"
+    },
+    "control_reference_centered": {
+      "const": true,
+      "default": true,
+      "title": "Control Reference Centered",
+      "type": "boolean"
+    },
+    "count_likelihood": {
+      "$ref": "#/$defs/NegativeBinomialSemantics"
+    },
+    "donor_or_sample_effects_enabled": {
+      "title": "Donor Or Sample Effects Enabled",
+      "type": "boolean"
+    },
+    "dynamics_coupled": {
+      "const": false,
+      "default": false,
+      "title": "Dynamics Coupled",
+      "type": "boolean"
+    },
+    "equation": {
+      "const": "log_mu=log_library+sample_gene+state_gene+W@(reference+target+efficacy*guide)",
+      "default": "log_mu=log_library+sample_gene+state_gene+W@(reference+target+efficacy*guide)",
+      "title": "Equation",
+      "type": "string"
+    },
+    "feature_order_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Feature Order Sha256",
+      "type": "string"
+    },
+    "fit_row_ids_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Fit Row Ids Sha256",
+      "type": "string"
+    },
+    "gene_specific_dispersion": {
+      "const": true,
+      "default": true,
+      "title": "Gene Specific Dispersion",
+      "type": "boolean"
+    },
+    "genes": {
+      "exclusiveMinimum": 1,
+      "title": "Genes",
+      "type": "integer"
+    },
+    "guide_deviation_l2_weight": {
+      "exclusiveMinimum": 0,
+      "title": "Guide Deviation L2 Weight",
+      "type": "number"
+    },
+    "guide_target_map_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Guide Target Map Sha256",
+      "type": "string"
+    },
+    "guides": {
+      "exclusiveMinimum": 0,
+      "title": "Guides",
+      "type": "integer"
+    },
+    "heldout_target_mode": {
+      "$ref": "#/$defs/HeldoutTargetMode"
+    },
+    "hierarchy_equation": {
+      "const": "a_ref+a_target+q_guide*a_guide",
+      "default": "a_ref+a_target+q_guide*a_guide",
+      "title": "Hierarchy Equation",
+      "type": "string"
+    },
+    "library_size_semantics": {
+      "$ref": "#/$defs/LibrarySizeSemantics"
+    },
+    "loading_l1_weight": {
+      "exclusiveMinimum": 0,
+      "title": "Loading L1 Weight",
+      "type": "number"
+    },
+    "program_contract_id": {
+      "title": "Program Contract Id",
+      "type": "string"
+    },
+    "programs": {
+      "exclusiveMinimum": 0,
+      "title": "Programs",
+      "type": "integer"
+    },
+    "raw_nonnegative_integer_counts_required": {
+      "const": true,
+      "default": true,
+      "title": "Raw Nonnegative Integer Counts Required",
+      "type": "boolean"
+    },
+    "samples": {
+      "exclusiveMinimum": 0,
+      "title": "Samples",
+      "type": "integer"
+    },
+    "schema_id": {
+      "const": "credo.count_linked_program_contract",
+      "default": "credo.count_linked_program_contract",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sparse_loading_prior": {
+      "$ref": "#/$defs/SparseLoadingPrior"
+    },
+    "state_dependence_enabled": {
+      "title": "State Dependence Enabled",
+      "type": "boolean"
+    },
+    "state_dimension": {
+      "minimum": 0,
+      "title": "State Dimension",
+      "type": "integer"
+    },
+    "target_descriptor_artifact": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "target_effect_l2_weight": {
+      "exclusiveMinimum": 0,
+      "title": "Target Effect L2 Weight",
+      "type": "number"
+    },
+    "target_guide_hierarchy_enabled": {
+      "const": true,
+      "default": true,
+      "title": "Target Guide Hierarchy Enabled",
+      "type": "boolean"
+    },
+    "targets": {
+      "exclusiveMinimum": 0,
+      "title": "Targets",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "program_contract_id",
+    "count_likelihood",
+    "library_size_semantics",
+    "sparse_loading_prior",
+    "state_dependence_enabled",
+    "checkpoint_dependence_enabled",
+    "checkpoint_time_values",
+    "donor_or_sample_effects_enabled",
+    "heldout_target_mode",
+    "feature_order_sha256",
+    "guide_target_map_sha256",
+    "fit_row_ids_sha256",
+    "genes",
+    "programs",
+    "state_dimension",
+    "samples",
+    "checkpoints",
+    "targets",
+    "guides",
+    "control_guide_indices",
+    "loading_l1_weight",
+    "guide_deviation_l2_weight",
+    "target_effect_l2_weight"
+  ],
+  "title": "CountLinkedProgramContract",
+  "type": "object"
+}

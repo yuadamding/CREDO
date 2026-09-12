@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -13,19 +14,19 @@ from ..errors import ContractError
 class SimulatedProgramData:
     """Raw counts, design labels, and exact latent truth."""
 
-    counts: np.ndarray
-    state: np.ndarray
-    donor_index: np.ndarray
-    sample_index: np.ndarray
-    checkpoint_index: np.ndarray
-    target_index: np.ndarray
-    guide_index: np.ndarray
-    guide_to_target: np.ndarray
+    counts: np.ndarray[Any, Any]
+    state: np.ndarray[Any, Any]
+    donor_index: np.ndarray[Any, Any]
+    sample_index: np.ndarray[Any, Any]
+    checkpoint_index: np.ndarray[Any, Any]
+    target_index: np.ndarray[Any, Any]
+    guide_index: np.ndarray[Any, Any]
+    guide_to_target: np.ndarray[Any, Any]
     control_guide_indices: tuple[int, ...]
-    target_descriptors: np.ndarray
-    true_loadings: np.ndarray
-    true_target_activity: np.ndarray
-    true_gene_effect: np.ndarray
+    target_descriptors: np.ndarray[Any, Any]
+    true_loadings: np.ndarray[Any, Any]
+    true_target_activity: np.ndarray[Any, Any]
+    true_gene_effect: np.ndarray[Any, Any]
 
 
 def simulate_program_counts(

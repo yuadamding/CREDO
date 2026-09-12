@@ -109,23 +109,22 @@ class PerturbationDossier(StrictModel):
             DossierSectionName.BIOLOGICAL_PROGRAMS,
             DossierSectionName.GENE_EFFECT_DECOMPOSITION,
         ):
-            if (
-                section_map[section].status == DossierSectionStatus.AVAILABLE
-                and not self.capabilities.supports(ScientificCapability.PERTURBATION_PROGRAMS)
+            if section_map[
+                section
+            ].status == DossierSectionStatus.AVAILABLE and not self.capabilities.supports(
+                ScientificCapability.PERTURBATION_PROGRAMS
             ):
                 raise ValueError(f"{section.value} exceeds the study capability contract.")
-        if (
-            section_map[DossierSectionName.GENERATOR_ATTRIBUTION].status
-            == DossierSectionStatus.AVAILABLE
-            and not self.capabilities.supports(ScientificCapability.POPULATION_TRAJECTORY)
+        if section_map[
+            DossierSectionName.GENERATOR_ATTRIBUTION
+        ].status == DossierSectionStatus.AVAILABLE and not self.capabilities.supports(
+            ScientificCapability.POPULATION_TRAJECTORY
         ):
             raise ValueError("Generator attribution requires population-trajectory capability.")
-        if (
-            section_map[DossierSectionName.CONTEXT_EFFECT].status
-            == DossierSectionStatus.AVAILABLE
-            and not self.capabilities.supports(
-                ScientificCapability.PHYSICAL_CONTEXT_ASSOCIATION
-            )
+        if section_map[
+            DossierSectionName.CONTEXT_EFFECT
+        ].status == DossierSectionStatus.AVAILABLE and not self.capabilities.supports(
+            ScientificCapability.PHYSICAL_CONTEXT_ASSOCIATION
         ):
             raise ValueError("Context effects require verified physical co-residence.")
         external = section_map[DossierSectionName.EXTERNAL_VALIDATION]
@@ -149,9 +148,10 @@ class PerturbationDossier(StrictModel):
                 self.capabilities.capability_assessment_id
             ):
                 raise ValueError("Trajectory result references another capability assessment.")
-            if LINEAGE_LEVEL_RANK[self.trajectory.lineage_level] > LINEAGE_LEVEL_RANK[
-                self.capabilities.maximum_lineage_level
-            ]:
+            if (
+                LINEAGE_LEVEL_RANK[self.trajectory.lineage_level]
+                > LINEAGE_LEVEL_RANK[self.capabilities.maximum_lineage_level]
+            ):
                 raise ValueError("Trajectory lineage level exceeds the study evidence.")
         if self.abundance is not None:
             if self.abundance.study_id != self.study.study_id:
@@ -190,9 +190,7 @@ class PerturbationDossier(StrictModel):
             if semantics is not None and (
                 self.trajectory is None
                 or LINEAGE_LEVEL_RANK[LINEAGE_RESULT_MINIMUM_LEVEL[semantics]]
-                > LINEAGE_LEVEL_RANK[
-                    LINEAGE_RESULT_MINIMUM_LEVEL[self.trajectory.semantics]
-                ]
+                > LINEAGE_LEVEL_RANK[LINEAGE_RESULT_MINIMUM_LEVEL[self.trajectory.semantics]]
             ):
                 raise ValueError("Claim trajectory semantics lack a matching dossier result.")
             if request.estimand.abundance_scale is not None and (
@@ -324,8 +322,7 @@ def assemble_perturbation_dossier(
 
     capabilities = derive_dataset_capabilities(study)
     adjudications = tuple(
-        adjudicate_scientific_claim(study, capabilities, request)
-        for request in claim_requests
+        adjudicate_scientific_claim(study, capabilities, request) for request in claim_requests
     )
     payload: dict[str, Any] = {
         "schema_id": "credo.perturbation_dossier",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -45,7 +46,7 @@ def verify_g00c_sampler_v4(
     *,
     expected_plan_artifact: ArtifactRef | None = None,
     expected_plan_id: str | None = None,
-) -> tuple[G00CSamplerPlanV4, np.ndarray, pd.DataFrame]:
+) -> tuple[G00CSamplerPlanV4, np.ndarray[Any, Any], pd.DataFrame]:
     """Regenerate all rows/states from the authority-owned plan and fresh-process evidence."""
 
     plan_artifact = expected_plan_artifact or authority.base_sampler_plan
@@ -79,9 +80,7 @@ def verify_g00c_sampler_v4(
     uninterrupted, uninterrupted_states = replay_sampler_plan_v3(
         plan, hierarchy, order, schedule, resumed=False
     )
-    resumed, resumed_states = replay_sampler_plan_v3(
-        plan, hierarchy, order, schedule, resumed=True
-    )
+    resumed, resumed_states = replay_sampler_plan_v3(plan, hierarchy, order, schedule, resumed=True)
     if len(uninterrupted) != plan.expected_total_trace_rows:
         raise IntegrityError("Dev37 sampler trace has another pre-access-frozen size.")
     observed = (
@@ -104,8 +103,7 @@ def verify_g00c_sampler_v4(
         or restart.component != "sampler"
         or restart.uninterrupted_outputs
         != (evidence.uninterrupted_draw_trace, evidence.uninterrupted_state_trace)
-        or restart.resumed_outputs
-        != (evidence.resumed_draw_trace, evidence.resumed_state_trace)
+        or restart.resumed_outputs != (evidence.resumed_draw_trace, evidence.resumed_state_trace)
     ):
         raise IntegrityError("Dev37 sampler restart receipt is cross-wired.")
     verify_g00c_restart_v4(root, restart)
@@ -121,7 +119,7 @@ def verify_g00c_support_v4(
     *,
     plan: G00CSamplerPlanV4,
     hierarchy: pd.DataFrame,
-    order: np.ndarray,
+    order: np.ndarray[Any, Any],
     trace: pd.DataFrame,
 ) -> pd.DataFrame:
     """Recompute one stage's support table from the verified Dev37 trace."""
