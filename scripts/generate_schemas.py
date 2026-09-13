@@ -147,10 +147,11 @@ from credo_count_sde_v4.contracts import (
     VirtualCanonicalCountStoreManifestV2,
 )
 from credo_count_sde_v4.data.prepared_shards import PreparedAccess, PreparedEvaluationAccess
-from credo_count_sde_v4.forecast.contracts import BundleManifest, ForecastSpec
+from credo_count_sde_v4.forecast.contracts import BundleManifest, EvaluationCorrection, ForecastSpec
 from credo_count_sde_v4.reports import PerturbationDossier
 
 MODELS = {
+    "population-baseline-evaluation-correction.v1.json": EvaluationCorrection,
     "prepared-evaluation-access.v1.json": PreparedEvaluationAccess,
     "population-baseline-spec.v2.json": ForecastSpec,
     "population-baseline-bundle.v1.json": BundleManifest,

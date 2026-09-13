@@ -1,5 +1,8 @@
 # Source-only paired-condition population baselines
 
+See the [scoring-v2 correction](review-0cb50da-scoring-correction.md) before
+interpreting effect magnitudes from historical v1 evaluations.
+
 This is the separate R48 integration requested by the review of `21656d8`.
 The four immediate static-program corrections are closed. The additional
 [remote CI observation](../receipts/review-21656d8-remote-ci.json) records the
@@ -78,6 +81,9 @@ always uses all bound categories with Jeffreys frequencies
 not source-conditioned expression evidence. Cohort-wide prevalence filtering is
 not used to redefine `G`.
 
+Coverage separates query source support from family-specific abundance provenance;
+endpoint transfers use fitting-only frequencies even when query source cells exist.
+
 ## Evaluation and interpretation
 
 The evaluator emits one row per guide/family for expression and abundance,
@@ -94,6 +100,10 @@ relative to its observed endpoint control; predicted effects use the independent
 predicted reference. This evaluates endpoint perturbation contrasts, not absolute
 growth, molecular knockdown efficiency, or tracked-cell trajectories.
 
+Scoring v2 takes logs of the already-positive published prediction/reference
+without a second pseudocount. Both observed compositions are smoothed once and
+normalized. Historical scoring-v1 outputs require a separately linked correction.
+
 Observed raw RNA totals are read only after publication for conditional
 multinomial cross entropy. Factorial constants are omitted and the score is
 RNA-UMI weighted. It is **not** unconditional count likelihood or a cell-level
@@ -101,6 +111,10 @@ distribution/variance score. Abundance reports full-catalog log-frequency RMSE,
 conditional cross entropy and Jeffreys KL, plus source-support strata without
 renormalizing within strata. Interval-log-effect error uses the same fixed
 source frequency and therefore equals endpoint log-frequency error.
+
+Family-specific cross entropy is descriptive. Direct family comparisons use the
+new common-support conditional score, with its identical guide population and
+explicit contributing-guide and RNA-UMI denominators.
 
 One inner-validation donor is not outer-donor generalization or biological
 discovery qualification. No result here lifts discovery, dynamics, GPU, or

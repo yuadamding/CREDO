@@ -12,14 +12,26 @@ import pandas as pd
 from ..canonical import contract_id
 from ..data.prepared_shards import PreparedEvaluationAccess
 from ..errors import ContractError
+from ..runtime_identity import environment_identity, implementation_tree_hash
 from .aggregation import verify_runtime
 from .artifacts import publish_bundle, read_spec, verify_bundle, write_json
-from .baselines import _control_mean, _frequency, _means, _normalize
-from .contracts import FAMILIES, BundleManifest, ForecastSpec
+from .baselines import (
+    _control_mean,
+    _frequency,
+    _means,
+    _normalize,
+    abundance_prediction_basis,
+)
+from .contracts import (
+    FAMILIES,
+    BundleManifest,
+    EvaluationCorrection,
+    ForecastSpec,
+    process_environment,
+)
 
 
-def prediction_barrier(prediction: Path) -> tuple[BundleManifest, ForecastSpec]:
-    """Fully verify an already published prediction before granting endpoint use."""
+def _verified_prediction(prediction: Path) -> tuple[BundleManifest, ForecastSpec]:
     receipt = verify_bundle(prediction, stage="prediction")
     spec = ForecastSpec.model_validate(read_spec(prediction))
     if receipt.specification_sha256 != spec.identity():
@@ -32,6 +44,12 @@ def prediction_barrier(prediction: Path) -> tuple[BundleManifest, ForecastSpec]:
         or receipt.facts["rna_order_sha256"] != spec.rna_order_sha256
     ):
         raise ContractError("Prediction information-set or biological-order mismatch.")
+    return receipt, spec
+
+
+def prediction_barrier(prediction: Path) -> tuple[BundleManifest, ForecastSpec]:
+    """Fully verify publication AND original runtime before granting endpoint use."""
+    receipt, spec = _verified_prediction(prediction)
     verify_runtime(spec)
     return receipt, spec
 
@@ -40,7 +58,16 @@ def verify_evaluation_access(
     prediction: Path, access: PreparedEvaluationAccess, spec: ForecastSpec
 ) -> BundleManifest:
     receipt, saved = prediction_barrier(prediction)
-    if saved.identity() != spec.identity() or access.prediction_seal_sha256 != receipt.identity():
+    if saved.identity() != spec.identity():
+        raise ContractError("Endpoint access is not bound to these published predictions.")
+    _verify_access_binding(receipt, access, spec)
+    return receipt
+
+
+def _verify_access_binding(
+    receipt: BundleManifest, access: PreparedEvaluationAccess, spec: ForecastSpec
+) -> None:
+    if access.prediction_seal_sha256 != receipt.identity():
         raise ContractError("Endpoint access is not bound to these published predictions.")
     for key in (
         "package_completion_sha256",
@@ -57,12 +84,63 @@ def verify_evaluation_access(
         raise ContractError("Endpoint capability must use exactly the frozen endpoint view.")
     if set(access.source_ids) & (set(spec.fitting.source_ids) | set(spec.query.source_ids)):
         raise ContractError("Endpoint source overlaps fitting/query observations.")
-    return receipt
 
 
 def _macro(frame: pd.DataFrame, metric: str) -> float | None:
     values = frame.groupby("target_id", sort=True)[metric].mean().dropna()
     return None if not len(values) else float(values.mean())
+
+
+def _conditional_score(frame: pd.DataFrame) -> dict[str, Any]:
+    scored = frame[frame.scored]
+    umis = int(scored.endpoint_RNA_UMIs.sum())
+    return dict(
+        scored_guides=len(scored),
+        endpoint_RNA_UMIs=umis,
+        conditional_cross_entropy_per_RNA_UMI=(
+            float(scored.conditional_nll_without_constant.sum() / umis) if umis else None
+        ),
+    )
+
+
+def rescore_baselines(
+    prediction: Path,
+    access: PreparedEvaluationAccess,
+    endpoint_source: Path,
+    previous_evaluation: Path,
+    destination: Path,
+    correction: EvaluationCorrection,
+) -> None:
+    """Versioned score-only correction; cannot mint access, aggregate, fit or predict.
+
+    Both original runtime identity and new evaluator identity are explicit. The
+    numerical environment must still equal the frozen original environment.
+    Ordinary fitting/prediction/evaluation runtime gates are not relaxed.
+    """
+    sealed, spec = _verified_prediction(prediction)
+    _verify_access_binding(sealed, access, spec)
+    previous = verify_bundle(previous_evaluation, stage="evaluation", specification=spec.identity())
+    expected = dict(
+        prediction=sealed.identity(),
+        endpoint_summary=correction.endpoint_summary_sha256,
+        evaluation_access=access.identity(),
+    )
+    if (
+        correction.original_specification_sha256 != spec.identity()
+        or correction.original_implementation_sha256 != spec.implementation_sha256
+        or correction.evaluator_implementation_sha256 != implementation_tree_hash()
+        or correction.prediction_seal_sha256 != sealed.identity()
+        or correction.evaluation_access_sha256 != access.identity()
+        or correction.previous_evaluation_sha256 != previous.identity()
+        or previous.parents != expected
+        or previous.facts.get("scoring_version", 1) != 1
+        or environment_identity() != spec.environment
+        or process_environment() != spec.process_environment
+    ):
+        raise ContractError("Evaluation correction identity, lineage or runtime mismatch.")
+    _evaluate_baselines(prediction, access, endpoint_source, destination, sealed, spec, correction)
+    if verify_bundle(previous_evaluation).identity() != previous.identity():
+        raise ContractError("Correction modified the original evaluation.")
 
 
 def evaluate_baselines(
@@ -75,8 +153,22 @@ def evaluate_baselines(
     likelihood and NOT a per-cell distributional/variance qualification.
     """
     sealed, spec = prediction_barrier(prediction)
-    verify_evaluation_access(prediction, access, spec)
+    _verify_access_binding(sealed, access, spec)
+    _evaluate_baselines(prediction, access, endpoint_source, destination, sealed, spec)
+
+
+def _evaluate_baselines(
+    prediction: Path,
+    access: PreparedEvaluationAccess,
+    endpoint_source: Path,
+    destination: Path,
+    sealed: BundleManifest,
+    spec: ForecastSpec,
+    correction: EvaluationCorrection | None = None,
+) -> None:
     truth = verify_bundle(endpoint_source, stage="source_summary", specification=spec.identity())
+    if correction is not None and truth.identity() != correction.endpoint_summary_sha256:
+        raise ContractError("Correction endpoint summary identity mismatch.")
     if (
         truth.parents["access"] != access.identity()
         or truth.facts["source_id"] != access.source_ids[0]
@@ -116,7 +208,7 @@ def evaluate_baselines(
             raise ContractError("Endpoint summary changed the declared population denominator.")
         endpoint_frequency = _frequency(n_end)
         source_frequency = predicted["source_frequency"][:]
-        observed_control = _control_mean(observed, controls)
+        observed_control = _normalize(_control_mean(observed, controls), epsilon)
         for family in FAMILIES:
             group = predicted[family]
             if group["mean_composition"].shape != (g, f):
@@ -139,6 +231,7 @@ def evaluate_baselines(
                 or not np.isclose(reference.sum(), 1.0)
             ):
                 raise ContractError("Invalid independent predicted control reference.")
+            reference /= reference.sum()
             for index in range(g):
                 mass_rows.append(
                     dict(
@@ -150,6 +243,10 @@ def evaluate_baselines(
                         source_cells=int(predicted["source_n_cells"][index]),
                         endpoint_cells=int(n_end[index]),
                         source_support_stratum=cov.source_support_stratum.iloc[index],
+                        query_source_support="present"
+                        if predicted["source_n_cells"][index] > 0
+                        else "absent",
+                        abundance_prediction_basis=abundance_prediction_basis(family),
                         prediction_frequency=float(mass[index]),
                         endpoint_frequency=float(endpoint_frequency[index]),
                         source_frequency=float(source_frequency[index]),
@@ -180,10 +277,12 @@ def evaluate_baselines(
                 # Renormalize float32 serialization round-off, not biological subsets.
                 means[supported] /= means[supported].sum(1, keepdims=True)
                 actual = _normalize(observed_mean, epsilon)
-                observed_effect = np.log(observed_mean + epsilon) - np.log(
-                    observed_control + epsilon
+                observed_effect = np.log(actual) - np.log(observed_control)
+                # Published predictions/references already contain their declared
+                # smoothing. Handle serialization underflow, not a second pseudocount.
+                predicted_effect = np.log(np.maximum(means, np.finfo(float).tiny)) - np.log(
+                    reference
                 )
-                predicted_effect = np.log(means + epsilon) - np.log(reference + epsilon)
                 raw_counts = observed["count_sum"][rows]
                 for local, index in enumerate(range(rows.start, rows.stop)):
                     valid = bool(supported[local] and n_rna[index] > 0)
@@ -288,17 +387,19 @@ def evaluate_baselines(
                 scored_guides=len(scored),
                 scored_targets=int(scored.target_id.nunique()),
                 macro_target={metric: _macro(scored, metric) for metric in metrics},
+                conditional_count_score=_conditional_score(scored),
             )
             for column in ("prediction_status", "endpoint_status"):
                 entries[label][column] = {
                     str(k): int(v) for k, v in subset[column].value_counts().items()
                 }
-        scored = all_rows[all_rows.scored]
-        total_umis = int(scored.endpoint_RNA_UMIs.sum())
-        entries["expression_conditional_cross_entropy_per_RNA_UMI"] = (
-            float(scored.conditional_nll_without_constant.sum() / total_umis)
-            if total_umis
-            else None
+        own_score = _conditional_score(all_rows)
+        entries["expression_conditional_cross_entropy_per_RNA_UMI"] = own_score[
+            "conditional_cross_entropy_per_RNA_UMI"
+        ]
+        entries["expression_conditional_count_score"] = own_score
+        entries["expression_common_support_conditional_count_score"] = _conditional_score(
+            all_rows[all_rows.common_family_support]
         )
         entries["abundance"] = dict(
             guides=g,
@@ -330,7 +431,11 @@ def evaluate_baselines(
         mass_frame.to_parquet(path / "abundance_by_guide.parquet", index=False)
         write_json(path / "metrics.json", summary)
         write_json(path / "specification.json", spec.model_dump(mode="json"))
+        if correction is not None:
+            write_json(path / "correction.json", correction.model_dump(mode="json"))
         return dict(
+            scoring_version=2,
+            evaluator_implementation_sha256=implementation_tree_hash(),
             guides=g,
             RNA_features=f,
             endpoint_cells=int(n_end.sum()),
@@ -339,7 +444,11 @@ def evaluate_baselines(
             complete_abundance_denominator=True,
             observed_counts_accessed_only_after_prediction_publication=True,
             composition_scope="equal_cell_population_means_only",
-            effect_definition="endpoint_log_composition_relative_to_independent_control_reference",
+            effect_definition="log_positive_composition_minus_log_positive_independent_reference",
+            truth_smoothing="expression_pseudocount_once_then_normalize",
+            prediction_smoothing="already_published_no_added_pseudocount",
+            numerical_zero_policy="float64_tiny_floor_for_prediction_serialization_underflow",
+            abundance_provenance_definition="query_support_separate_from_family_prediction_basis",
             likelihood_definition="conditional_cross_entropy_factorial_constant_omitted",
             abundance_scope="relative_captured_cell_abundance_not_absolute_growth",
             scientific_promotion=False,
@@ -355,6 +464,14 @@ def evaluate_baselines(
             "prediction": sealed.identity(),
             "endpoint_summary": truth.identity(),
             "evaluation_access": access.identity(),
+            **(
+                {
+                    "previous_evaluation": correction.previous_evaluation_sha256,
+                    "correction": correction.identity(),
+                }
+                if correction is not None
+                else {}
+            ),
         },
         writer=write,
     )

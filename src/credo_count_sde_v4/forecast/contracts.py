@@ -190,3 +190,20 @@ class BundleManifest(StrictModel):
         if len(set(paths)) != len(paths) or "COMPLETE.json" in paths:
             raise ValueError("Bundle inventory must be unique and cannot include its own marker.")
         return self
+
+
+class EvaluationCorrection(StrictModel):
+    """Explicit bridge from frozen predictions to a separately pinned scorer."""
+
+    schema_id: Literal["credo.population_baseline_evaluation_correction"] = (
+        "credo.population_baseline_evaluation_correction"
+    )
+    schema_version: Literal[1] = 1
+    scoring_version: Literal[2] = 2
+    original_specification_sha256: Sha256
+    original_implementation_sha256: Sha256
+    evaluator_implementation_sha256: Sha256
+    prediction_seal_sha256: Sha256
+    endpoint_summary_sha256: Sha256
+    evaluation_access_sha256: Sha256
+    previous_evaluation_sha256: Sha256

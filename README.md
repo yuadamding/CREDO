@@ -1,9 +1,12 @@
 # CREDO count-SDE v4
 
+Current review: [population-baseline scoring correction](docs/review-0cb50da-scoring-correction.md)
+(real first-split execution and linked rescoring completed; frozen predictions unchanged).
+
 New work: [source-only population baseline workflow](docs/source-only-population-baselines.md)
 (separate fitting, immutable prediction and endpoint evaluation; neural successor training remains unrun).
 Foundation: [full-cohort successor access](docs/full-cohort-successor-foundation.md).
-Current correction: [review of b45330b: CI and split integration](docs/review-b45330b-integration.md).
+Previous correction: [review of b45330b: CI and split integration](docs/review-b45330b-integration.md).
 Previous foundation: [review of 789537f and promotion gates](docs/review-789537f-corrections.md).
 
 Independent count-native finite-measure SDE recipe for longitudinal

@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "observation": "local_population_baseline_scoring_v2_validation",
+  "observed_utc": "2026-09-12T22:44:03Z",
+  "base_commit": "0cb50dad32dcc7e90d6f2ce7b682a3199597fd85",
+  "implementation_sha256": "a39939b2b053c6374da9fae44339b29eb00690158a4ba88f8b3ed7ffca77e2eb",
+  "original_prediction_implementation_sha256": "7798497529ca758a29fbea0c29f5dd7bcbe4f3fe25589f8b6c91ef378a87c3b9",
+  "scoring_version": 2,
+  "external_evidence_root": "../credo_full_cohort_20260912/r48_scoring_review_20260912",
+  "full_suite": {
+    "status": "completed",
+    "exit_code": 0,
+    "passed": 563,
+    "skipped": 4,
+    "skip_reason": "CUDA unavailable under explicitly CPU-only test execution",
+    "warnings": 1,
+    "warning_scope": "Existing NearConstantInputWarning in tests/unit/test_evaluation.py",
+    "pytest_elapsed_seconds": 907.23,
+    "command_wall_seconds": 942.26,
+    "command_peak_rss_kib": 1399520,
+    "fresh_coverage_without_append": true,
+    "combined_statement_branch_coverage_percent": 85.33582237756683,
+    "covered_statements": 17519,
+    "statements": 19529,
+    "covered_branches": 3966,
+    "branches": 5648,
+    "required_combined_coverage_percent": 85,
+    "log_file": "full-suite.log",
+    "log_sha256": "bf44e1953be4932ed42685e5e4b666a9fabe0a42c8b71d7a09a1155be234ea21",
+    "coverage_file": "coverage.json",
+    "coverage_json_sha256": "c0addccfca0da7295157e6acfceb1aec138eb342b4077d4535135f7064c4bff6"
+  },
+  "forecast_tests_sha256": "bf6b1b5093ef95c868c738e96a0c060fa2194cb2d60bfa75863543f6a121a9ba",
+  "synthetic_reproduction": {
+    "original_two_gene_sparse_effect_mse": 0.24022650138707496,
+    "original_three_gene_shared_zero_effect_mse": 0.16015100323520742,
+    "corrected_regression_requires_effect_mse_below": 1e-12,
+    "actual_fit_float32_prediction_and_evaluation_interfaces": true,
+    "not_real_cohort_errors": true
+  },
+  "external_workflow_canary": {
+    "passed": 11,
+    "elapsed_seconds": 15.20,
+    "log_sha256": "3756122a4da2fe01198b00478aec86e73248c60a40997a5178bfc945a3a4ed99"
+  },
+  "installed_wheel_canary": {
+    "passed": 11,
+    "elapsed_seconds": 18.35,
+    "log_sha256": "14e84b457e5273588354e57500fae716deb621876c67ec295123523c877d2076",
+    "wheel_sha256": "eabfb3c90cb16f52fc8204c8102166cd3c8339db0cb547ad9aa0113cbc454ffa",
+    "installed_source_identity_matches_working_source": true
+  },
+  "archived_original_code_canary_correction": {
+    "original_prediction_seal_sha256": "92c4e01b2f62531d8bed21636477456a542813f74b5a1b0446f7468cadbf421a",
+    "original_evaluation_sha256": "7a8de6a75d44e990b78b11d59cf0780bbe585bb6943596b98146fc1763620a12",
+    "correction_sha256": "f41ba4b63f1b56efec2fcb31da15cc851dc96deb60cb926fad57bd74963b32df",
+    "corrected_evaluation_sha256": "47d1160359413779155f8ec2d402fd38951f2742b2a4cdb9ac9edaba84732d4f",
+    "source_and_installed_wheel_corrections_agree": true,
+    "final_external_runner_sha256": "4777a17b33033e56c9f7a516ed3b3031f6eed0e4dba6db582ca4ad9c0c41665e",
+    "final_runner_canary_log_sha256": "7191e35721d971ff74b3b717e9483c4508c1874754e0f8f8d98625068264401c",
+    "original_predictions_and_evaluation_preserved": true,
+    "abundance_numerics_unchanged": true,
+    "non_effect_expression_columns_unchanged": true,
+    "refitted": false
+  },
+  "other_checks": {
+    "ruff": "passed",
+    "formatting": "passed",
+    "mypy": "passed_105_source_files",
+    "generated_schemas": "passed",
+    "documentation_links": "passed",
+    "repository_index_manifest": "passed",
+    "wheel_build_and_package_audit": "passed",
+    "frozen_CREDO_parent_audit": "passed"
+  },
+  "scope": "Local generic, synthetic and packaging validation only. Real R48 performance and final resource measurements are separate external evidence. No refitting, discovery promotion, GPU qualification or physical storage isolation is claimed. Historical receipts remain unchanged."
+}

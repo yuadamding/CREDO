@@ -23,6 +23,17 @@ def _frequency(n: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
     return (n + 0.5) / (n.sum() + 0.5 * len(n))
 
 
+def abundance_prediction_basis(family: str) -> str:
+    """Numerical provenance is independent of whether query source cells exist."""
+    return {
+        "source_persistence": "source_persistence",
+        "fitting_control_response": "source_persistence",
+        "guide_endpoint_transfer": "fitting_guide_endpoint_transfer",
+        "target_endpoint_transfer": "fitting_target_endpoint_transfer",
+        "hierarchical_source_response": "source_response",
+    }[family]
+
+
 def _normalize(values: np.ndarray[Any, Any], epsilon: float) -> np.ndarray[Any, Any]:
     values = np.asarray(values, dtype=np.float64) + epsilon
     return values / values.sum(axis=-1, keepdims=True)
@@ -354,9 +365,10 @@ def predict_baselines(fitted: Path, query_sources: dict[str, Path], destination:
                                     else "20-99"
                                     if n_source[index] < 100
                                     else ">=100",
-                                    abundance_status="mass_only_source_prior"
-                                    if n_source[index] == 0
-                                    else "source_conditioned",
+                                    query_source_support="present"
+                                    if n_source[index] > 0
+                                    else "absent",
+                                    abundance_prediction_basis=abundance_prediction_basis(family),
                                     hierarchical_response_support="guide_target_shrinkage"
                                     if support[offset] > 0
                                     else "target_fallback"

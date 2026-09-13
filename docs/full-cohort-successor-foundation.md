@@ -29,7 +29,8 @@ separate baseline fitting, immutable predictions and sealed endpoint evaluation;
 it does not implement count-representation or neural dynamics training.
 Software allowlists explicitly do not certify physical access isolation.
 
-Remaining stages are full first-split baseline execution/scale qualification,
-count representation qualification, role-scoped latent compilation, then gated
+The first-split population-mean baseline execution and its linked scoring
+correction have now [completed](review-0cb50da-scoring-correction.md). Remaining
+stages are count representation qualification, role-scoped latent compilation, then gated
 drift/dispersion/reaction fitting and interpretation. `count_context`
 remains off. A successful engineering test is not biological advancement.

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "observation": "completed_remote_CPU_CI",
+  "observed_utc": "2026-09-12T22:27:13Z",
+  "repository": "yuadamding/CREDO",
+  "commit": "0cb50dad32dcc7e90d6f2ce7b682a3199597fd85",
+  "run_id": 34721414546,
+  "url": "https://github.com/yuadamding/CREDO/actions/runs/34721414546",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {"name": "wheel", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.11)", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.12)", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.13)", "status": "completed", "conclusion": "success"}
+  ],
+  "scope": "Exact original workflow commit only; not validation of the subsequent scoring correction or a real-cohort performance claim."
+}

@@ -21,15 +21,25 @@ from credo_count_sde_v4.data.prepared_shards import (
 from credo_count_sde_v4.errors import ContractError, IntegrityError
 from credo_count_sde_v4.forecast.aggregation import aggregate_view
 from credo_count_sde_v4.forecast.artifacts import publish_bundle, verify_bundle
-from credo_count_sde_v4.forecast.baselines import fit_baselines, predict_baselines
+from credo_count_sde_v4.forecast.baselines import (
+    abundance_prediction_basis,
+    fit_baselines,
+    numeric_h5_identity,
+    predict_baselines,
+)
 from credo_count_sde_v4.forecast.contracts import (
     FAMILIES,
     BaselineRules,
+    EvaluationCorrection,
     ForecastSpec,
     SourceRole,
     process_environment,
 )
-from credo_count_sde_v4.forecast.evaluation import evaluate_baselines, prediction_barrier
+from credo_count_sde_v4.forecast.evaluation import (
+    evaluate_baselines,
+    prediction_barrier,
+    rescore_baselines,
+)
 from credo_count_sde_v4.runtime_identity import environment_identity, implementation_tree_hash
 
 
@@ -44,7 +54,9 @@ def artifact(root, name):
     )
 
 
-def make_fixture(root: Path, *, endpoint_variant=False, null=False, workers=1):
+def make_fixture(
+    root: Path, *, endpoint_variant=False, null=False, workers=1, guide_rna=None, control_rna=None
+):
     root.mkdir()
     catalog = pd.DataFrame(
         dict(
@@ -55,6 +67,7 @@ def make_fixture(root: Path, *, endpoint_variant=False, null=False, workers=1):
         )
     )
     catalog.to_parquet(root / "catalog.parquet", index=False)
+    features = tuple("ABC"[: len(guide_rna)]) if guide_rna is not None else ("A", "B")
     records = {}
     roles = []
     for donor in ("fit-a", "fit-b", "query"):
@@ -84,6 +97,11 @@ def make_fixture(root: Path, *, endpoint_variant=False, null=False, workers=1):
                     rna = [2, 8] if guide == 0 else list(reversed(rna))
                 if guide == 5 and donor == "query":
                     rna = [0, 0]
+                rna += [0] * (len(features) - len(rna))
+                if guide_rna is not None and guide == 1 and condition == "destination":
+                    rna = list(guide_rna)
+                if control_rna is not None and guide == 0:
+                    rna = list(control_rna)
                 values.append([17 + guide, *rna])
             sid_records = []
             # Two shards exercise complete source accumulation and metadata checks.
@@ -125,12 +143,12 @@ def make_fixture(root: Path, *, endpoint_variant=False, null=False, workers=1):
         package_completion_sha256=contract_id({"variant": endpoint_variant, "null": null}),
         package_inventory_sha256="b" * 64,
         amendment_sha256="c" * 64,
-        feature_order_sha256=contract_id(["technical", "A", "B"]),
+        feature_order_sha256=contract_id(["technical", *features]),
         guide_catalog=GuideCatalogBinding(
             artifact=artifact(root, "catalog.parquet"),
             ordered_catalog_sha256=contract_id(catalog.to_dict("records")),
         ),
-        n_features=3,
+        n_features=1 + len(features),
         task_id="paired",
     )
     fit_ids = tuple(s for s in records if s.startswith("fit-"))
@@ -164,8 +182,8 @@ def make_fixture(root: Path, *, endpoint_variant=False, null=False, workers=1):
         fitting=fitting,
         query=query,
         evaluation_view=artifact(root, "endpoint-view.json"),
-        ordered_rna_features=("A", "B"),
-        rna_positions=(1, 2),
+        ordered_rna_features=features,
+        rna_positions=tuple(range(1, len(features) + 1)),
         worker_count=workers,
         batch_rows=2,
     )
@@ -227,6 +245,12 @@ def test_real_interfaces_canary_mean_effect_mass_missing_and_recovery(tmp_path):
     assert perfect["abundance"]["guides"] == 6
     assert perfect["abundance"]["observed_cells"] == 7
     coverage = pd.read_parquet(first / "prediction/coverage.parquet")
+    assert "abundance_status" not in coverage
+    for family in FAMILIES:
+        rows = coverage[coverage.family.eq(family)]
+        assert set(rows.abundance_prediction_basis) == {abundance_prediction_basis(family)}
+        assert set(rows.loc[rows.source_cells.eq(0), "query_source_support"]) == {"absent"}
+        assert set(rows.loc[rows.source_cells.gt(0), "query_source_support"]) == {"present"}
     assert set(coverage.loc[coverage.guide_index.eq(3), "expression_status"]) == {"source_absent"}
     assert set(coverage.loc[coverage.guide_index.eq(5), "expression_status"]) == {"zero_RNA_source"}
     assert coverage[
@@ -238,6 +262,21 @@ def test_real_interfaces_canary_mean_effect_mass_missing_and_recovery(tmp_path):
     expression = pd.read_parquet(first / "evaluation/expression_by_guide.parquet")
     assert not expression[expression.guide_index.eq(3)].scored.any()
     assert len(expression) == 6 * len(FAMILIES)
+    common_scores = [
+        metrics[f]["expression_common_support_conditional_count_score"] for f in FAMILIES
+    ]
+    assert {s["scored_guides"] for s in common_scores} == {3}
+    assert {s["endpoint_RNA_UMIs"] for s in common_scores} == {40}
+    assert metrics["source_persistence"]["expression_conditional_count_score"]["scored_guides"] == 4
+    for family in FAMILIES:
+        rows = expression[expression.family.eq(family) & expression.common_family_support]
+        expected = rows.conditional_nll_without_constant.sum() / rows.endpoint_RNA_UMIs.sum()
+        assert metrics[family]["expression_common_support_conditional_count_score"][
+            "conditional_cross_entropy_per_RNA_UMI"
+        ] == pytest.approx(expected)
+        targeting = metrics[family]["targeting_common_support"]["conditional_count_score"]
+        assert targeting["scored_guides"] == 2
+        assert targeting["endpoint_RNA_UMIs"] == 30
     assert (
         metrics["source_persistence"]["targeting_common_support"]["macro_target"]["composition_mse"]
         > perfect["targeting_common_support"]["macro_target"]["composition_mse"]
@@ -282,6 +321,22 @@ def test_null_and_worker_parallelism(tmp_path):
     for family in FAMILIES:
         assert metrics[family]["targeting"]["macro_target"]["composition_mse"] < 1e-12
         assert metrics[family]["targeting"]["macro_target"]["effect_sign_accuracy"] is None
+
+
+@pytest.mark.parametrize(
+    "guide_rna,control_rna", [([0, 10], [5, 5]), ([0, 10, 0], [0, 5, 5]), ([2, 8], [7, 3])]
+)
+def test_perfect_sparse_endpoint_transfer_has_zero_effect_error(tmp_path, guide_rna, control_rna):
+    fixture = make_fixture(tmp_path / "input", guide_rna=guide_rna, control_rna=control_rna)
+    output = tmp_path / "run"
+    access = publish(fixture, output)
+    evaluate(fixture, output, access)
+    with h5py.File(output / "prediction/predictions.h5") as handle:
+        assert handle["guide_endpoint_transfer/mean_composition"].dtype == np.dtype("float32")
+    table = pd.read_parquet(output / "evaluation/expression_by_guide.parquet")
+    row = table[table.family.eq("guide_endpoint_transfer") & table.guide_index.eq(1)].iloc[0]
+    assert row.composition_mse < 1e-14
+    assert row.endpoint_control_log_effect_mse < 1e-12
 
 
 @pytest.mark.parametrize(
@@ -372,7 +427,8 @@ def test_label_permutation_harms_keyed_score_without_cell_correspondence(tmp_pat
                 array = handle[family]["mean_composition"]
                 exchanged = array[[1, 2]][::-1]
                 array[[1, 2]] = exchanged
-        return original.facts
+            numerical = numeric_h5_identity(handle)
+        return {**original.facts, "numerical_sha256": numerical}
 
     shuffled = out / "shuffled"
     new = publish_bundle(
@@ -382,6 +438,9 @@ def test_label_permutation_harms_keyed_score_without_cell_correspondence(tmp_pat
         parents=original.parents,
         writer=writer,
     )
+    assert new.facts["numerical_sha256"] != original.facts["numerical_sha256"]
+    with h5py.File(shuffled / "predictions.h5") as handle:
+        assert numeric_h5_identity(handle) == new.facts["numerical_sha256"]
     revised = access.model_copy(update={"prediction_seal_sha256": new.identity()})
     truth = aggregate_view(
         fixture[0], revised, fixture[1], out / "shuffled-truth", prediction=shuffled
@@ -418,3 +477,109 @@ def test_role_catalog_order_and_rules_invalidate_artifact_reuse(tmp_path):
     fit_baselines(spec, catalog, summaries, tmp_path / "fit")
     with pytest.raises(ContractError, match="authorized role"):
         predict_baselines(tmp_path / "fit", summaries, tmp_path / "bad-query")
+
+
+def test_linked_score_correction_preserves_frozen_inputs_and_runtime_gates(tmp_path, monkeypatch):
+    fixture = make_fixture(tmp_path / "input")
+    output = tmp_path / "run"
+    access = publish(fixture, output)
+    evaluate(fixture, output, access)
+    current = verify_bundle(output / "evaluation")
+
+    # A synthetic historical publication exercises the version bridge. Numerical
+    # old-code reproduction is separately exercised with the archived old wheel.
+    def legacy_writer(path):
+        for item in current.artifacts:
+            (path / item.relative_uri).write_bytes(
+                (output / "evaluation" / item.relative_uri).read_bytes()
+            )
+        facts = {**current.facts}
+        facts.pop("scoring_version")
+        return facts
+
+    legacy = publish_bundle(
+        output / "legacy",
+        stage="evaluation",
+        specification=current.specification_sha256,
+        parents=current.parents,
+        writer=legacy_writer,
+    )
+    prediction = verify_bundle(output / "prediction")
+    endpoint = next((output / "endpoint-summary").iterdir())
+    correction = EvaluationCorrection(
+        original_specification_sha256=fixture[1].identity(),
+        original_implementation_sha256=fixture[1].implementation_sha256,
+        evaluator_implementation_sha256="a" * 64,
+        prediction_seal_sha256=prediction.identity(),
+        endpoint_summary_sha256=verify_bundle(endpoint).identity(),
+        evaluation_access_sha256=access.identity(),
+        previous_evaluation_sha256=legacy.identity(),
+    )
+    monkeypatch.setattr(
+        "credo_count_sde_v4.forecast.evaluation.implementation_tree_hash", lambda: "a" * 64
+    )
+    monkeypatch.setattr(
+        "credo_count_sde_v4.forecast.aggregation.implementation_tree_hash", lambda: "a" * 64
+    )
+    with pytest.raises(ContractError, match="runtime"):
+        prediction_barrier(output / "prediction")
+    with pytest.raises(ContractError, match="runtime"):
+        evaluate_baselines(output / "prediction", access, endpoint, output / "ordinary")
+    for field in (
+        "original_specification_sha256",
+        "original_implementation_sha256",
+        "evaluator_implementation_sha256",
+        "prediction_seal_sha256",
+        "endpoint_summary_sha256",
+        "evaluation_access_sha256",
+        "previous_evaluation_sha256",
+    ):
+        changed = correction.model_copy(update={field: "0" * 64})
+        with pytest.raises(ContractError, match="correction"):
+            rescore_baselines(
+                output / "prediction", access, endpoint, output / "legacy", output / field, changed
+            )
+        assert not (output / field).exists()
+    rescore_baselines(
+        output / "prediction", access, endpoint, output / "legacy", output / "corrected", correction
+    )
+    corrected = verify_bundle(output / "corrected")
+    assert corrected.facts["scoring_version"] == 2
+    assert corrected.parents["previous_evaluation"] == legacy.identity()
+    assert corrected.parents["correction"] == correction.identity()
+    assert corrected.parents["prediction"] == prediction.identity()
+    assert verify_bundle(output / "prediction").identity() == prediction.identity()
+    assert verify_bundle(output / "legacy").identity() == legacy.identity()
+    assert json.loads((output / "corrected/metrics.json").read_text()) == json.loads(
+        (output / "evaluation/metrics.json").read_text()
+    )
+    with pytest.raises(FileExistsError):
+        rescore_baselines(
+            output / "prediction",
+            access,
+            endpoint,
+            output / "legacy",
+            output / "corrected",
+            correction,
+        )
+    monkeypatch.setenv("NUMPY_MADVISE_HUGEPAGE", "changed")
+    with pytest.raises(ContractError, match="runtime"):
+        rescore_baselines(
+            output / "prediction",
+            access,
+            endpoint,
+            output / "legacy",
+            output / "bad-runtime",
+            correction,
+        )
+
+
+def test_common_count_score_empty_support_is_missing_not_zero():
+    from credo_count_sde_v4.forecast.evaluation import _conditional_score
+
+    frame = pd.DataFrame(
+        dict(scored=[False], endpoint_RNA_UMIs=[10], conditional_nll_without_constant=[None])
+    )
+    assert _conditional_score(frame) == dict(
+        scored_guides=0, endpoint_RNA_UMIs=0, conditional_cross_entropy_per_RNA_UMI=None
+    )
