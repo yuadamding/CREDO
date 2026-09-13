@@ -155,8 +155,8 @@ from credo_count_sde_v4.forecast.contracts import BundleManifest, EvaluationCorr
 from credo_count_sde_v4.reports import PerturbationDossier
 
 MODELS = {
-    "fold-count-representation-spec.v1.json": CountRepresentationSpec,
-    "fold-count-representation-bundle.v1.json": RepresentationManifest,
+    "fold-count-representation-spec.v2.json": CountRepresentationSpec,
+    "fold-count-representation-bundle.v2.json": RepresentationManifest,
     "population-baseline-evaluation-correction.v1.json": EvaluationCorrection,
     "prepared-evaluation-access.v1.json": PreparedEvaluationAccess,
     "population-baseline-spec.v2.json": ForecastSpec,
@@ -307,6 +307,8 @@ MODELS = {
 # Immutable accepted schemas whose active construction advanced to v2. They are
 # validated by explicit v1 models and compatibility tests, never regenerated.
 LEGACY_SCHEMAS = {
+    "fold-count-representation-spec.v1.json",  # bd2a639 wheel preserves its constructor.
+    "fold-count-representation-bundle.v1.json",
     "population-baseline-spec.v1.json",  # A1 source wheel preserves its original constructor.
     "checkpoint-multinomial-decoder.v1.json",
     "claim-registry.v1.json",

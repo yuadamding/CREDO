@@ -14,7 +14,7 @@ import pandas as pd
 from scipy import sparse
 
 from ..canonical import canonical_json_bytes, contract_id
-from ..data.prepared_shards import PreparedShardReader, RowAddress
+from ..data.prepared_shards import PreparedShard, PreparedShardReader, RowAddress
 from ..errors import ContractError
 from ..representation.state_information import thin_counts_by_cell
 from .contracts import CountRepresentationSpec
@@ -130,6 +130,52 @@ def partition_audit(root: Path, spec: CountRepresentationSpec) -> tuple[Partitio
     )
 
 
+def training_schedule(spec: CountRepresentationSpec, epoch: int) -> tuple[PreparedShard, ...]:
+    """Interleave shuffled shards, reserving a rotating final round across sources.
+
+    The final round prevents unequal shard counts from fixing the last source.
+    Only authorized fitting payload/row identities influence the schedule.
+    Each shard is opened in one contiguous visit; the one-shard cache is retained.
+    """
+    if type(epoch) is not int or epoch < 0:
+        raise ContractError("Training epoch must be a nonnegative integer.")
+    records = sorted(spec.fitting.shards, key=lambda s: (s.source_id, s.shard))
+    identity = [
+        [r.source_id, r.shard, r.counts.sha256, r.cells.sha256, r.allowed_rows] for r in records
+    ]
+    key = [spec.rules.sampler_version, spec.rules.seed, identity]
+    base = int(contract_id(key)[:32], 16)
+    sources = sorted({r.source_id for r in records})
+    source_order = list(np.random.Generator(np.random.PCG64DXSM(base)).permutation(sources))
+    shift = epoch % len(source_order)
+    tail_order = source_order[shift:] + source_order[:shift]
+    rng = np.random.Generator(np.random.PCG64DXSM(int(contract_id([key, epoch])[:32], 16)))
+    groups = {}
+    for source in sources:
+        group = [r for r in records if r.source_id == source]
+        groups[source] = [group[int(i)] for i in rng.permutation(len(group))]
+    tail = {source: group.pop() for source, group in groups.items()}
+    result = []
+    while any(groups.values()):
+        for source in rng.permutation(sources):
+            if groups[source]:
+                result.append(groups[source].pop())
+    result.extend(tail[source] for source in tail_order)
+    return tuple(result)
+
+
+def schedule_receipt(spec: CountRepresentationSpec, epoch: int) -> dict[str, Any]:
+    ordered = [[r.source_id, r.shard] for r in training_schedule(spec, epoch)]
+    return dict(
+        sampler_version=spec.rules.sampler_version,
+        epoch_zero_based=epoch,
+        ordered_shards=ordered,
+        ordered_shards_sha256=contract_id(ordered),
+        last_source=ordered[-1][0],
+        fitting_authority=spec.fitting.identity(),
+    )
+
+
 def iter_counts(
     root: Path,
     spec: CountRepresentationSpec,
@@ -137,12 +183,20 @@ def iter_counts(
     partition: Partition | None = None,
     split: Literal["train", "audit", "all", "query"] = "all",
     epoch: int = 0,
+    training: bool = False,
 ) -> Iterator[tuple[sparse.csr_matrix, pd.DataFrame]]:
     reader = reader_for(root, spec, query=split == "query")
     catalog = reader.guide_catalog()
     if split in {"train", "audit"} and partition is None:
         raise ContractError("Calibration stream requires its prespecified audit partition.")
-    for record in sorted(reader.access.shards, key=lambda s: (s.source_id, s.shard)):
+    if training and split not in {"train", "all"}:
+        raise ContractError("Training schedule cannot consume query or audit streams.")
+    records = (
+        training_schedule(spec, epoch)
+        if training
+        else tuple(sorted(reader.access.shards, key=lambda s: (s.source_id, s.shard)))
+    )
+    for record in records:
         rows = (
             np.arange(record.rows)
             if record.allowed_rows is None

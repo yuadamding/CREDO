@@ -1,5 +1,9 @@
 # CREDO count-SDE v4
 
+Current follow-up: [count-representation qualification changes](docs/review-bd2a639-count-qualification.md)
+(cross-source scheduling, objective-matched gate, explicit failed-gate stop, and CUDA tests;
+GPU execution and real-cohort calibration remain pending).
+
 New component: [streamed fold-fitted count representation](docs/fold-count-representation.md)
 (separate calibration/refit/frozen per-cell laws; no full-cohort representation trained yet).
 Accepted baseline: [frozen R48 numerical results and paired target review](docs/r48-baseline-results.md).

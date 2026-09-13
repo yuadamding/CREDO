@@ -7,6 +7,10 @@ promotion**. The accepted baseline/scoring milestone remains `9ef72c6` and its
 baseline formula, historical T01/E2 record, or existing `credo-v4` lifecycle
 has been repurposed.
 
+The [bd2a639 follow-up](review-bd2a639-count-qualification.md) advances the
+representation-only specification and bundle to V2. V1 schemas and historical
+results remain immutable; replay them with their archived source/wheel.
+
 ## Implementation and fixed starting configuration
 
 The separate `credo_count_sde_v4.count_representation` package connects the
@@ -19,9 +23,10 @@ prepared integer CSR reader to a learned encoder/decoder:
 | Decoder | 48 → 128 → 512 → F; full-gene log-softmax; multinomial conditional on supplied RNA exposure |
 | Objective | Symmetric A→B and B→A equal-scored-cell-direction conditional cross entropy; raw target counts remain sparse |
 | Calibration | Fixed, source/guide-stratified audit cells within fitting donors; no query counts, endpoints or query-derived statistics |
-| Comparators | Fitting-condition UMI-pooled composition with gene pseudocount 0.5; separately trained regularized rank-8 count factor; latent-ablated encoder |
+| Comparators | Retained UMI-pooled composition; objective-matched mean training-half composition; separately trained rank-8 count factor; zero-latent diagnostic |
+| Training schedule | Epoch-dependent shuffled source-interleaved shards with a rotating final source round; one contiguous visit per shard |
 | Exposure selection | Prespecified full-epoch candidates (1, 2, 4, 8 by default), earliest epoch on exact score ties; candidate selection uses only fitting-donor audit cells |
-| Fresh refit | New initialization at the frozen seed, all authorized fitting rows per selected full epoch; never continue calibration weights |
+| Fresh refit | Gate must pass, or an explicit diagnostic reason must be supplied; fresh initialization, all authorized rows per selected epoch |
 | Geometry | Fitting-only streaming latent population mean/variance; frozen center and scale, no PCA or whitening |
 | Query | Frozen encoder/decoder, eval mode, no optimizer or normalization updates |
 | Latent export | Every captured cell retained; individual 48D states plus explicit positive-RNA geometry mask and complete source/guide support |
@@ -36,10 +41,11 @@ stable under row reordering/batching, and satisfies A+B=X exactly. This technica
 diagnostic is not an independent biological replicate or a general guarantee
 that complementary counts are independent.
 
-The condition-only baseline intentionally implements the proposed UMI-pooled
-count formula; its objective weighting differs from equal-cell model training.
-The audit report therefore retains both equal-cell-direction CE and UMI-weighted
-CE with explicit contributors. Missing scored-half depth has no score. Zero-input
+The original UMI-pooled condition baseline remains reported. V2 additionally
+fits an objective-matched mean of positive-depth training-half compositions;
+that comparator enters the primary count gate. Its fixed numerical positivity
+floor is not a biological pseudocount. Both equal-cell-direction CE and UMI-weighted
+CE retain explicit contributors. Missing scored-half depth has no score. Zero-input
 halves receive the model's input-independent response, with their frequency
 reported, not a claim to cell-specific information.
 
@@ -48,7 +54,8 @@ reported, not a claim to cell-specific information.
 `CountRepresentationSpec` is a new, strict, versioned contract. It binds the
 exact representation-fitting and query capabilities; donor/source roles;
 complete canonical features; configuration/seed; executing source hash;
-environment and allowlisted process settings. In the first R48 application this
+environment, allowlisted process settings, and PyTorch deterministic/TF32/cuDNN
+controls. In the first R48 application this
 means D3/D4 Rest and Stim48hr for fitting, D2 Rest for encoding after freezing,
 and no D1, D2 Stim48hr, Stim8hr or context fitting.
 
@@ -78,7 +85,7 @@ Sampling/thinning do not use unrelated package/query/protected hashes, so changi
 provenance outside authorized numerical inputs need not change fitted values.
 
 The held-out count gate requires strictly lower selected error than the
-condition baseline, separately selected factor, and matched latent ablation,
+equal-cell-direction condition baseline, separately selected factor, and zero-latent ablation,
 by the prespecified margin. This is only a component count gate. It never sets
 `representation_qualified` or scientific promotion true: real-cohort execution,
 perturbation-preservation assessment and additional selection calibration remain
@@ -87,8 +94,8 @@ unqualified. One synthetic null does not substitute for independent null refits.
 ## Artifact and execution interface
 
 The new schemas are
-[specification V1](../schemas/fold-count-representation-spec.v1.json) and
-[representation bundle V1](../schemas/fold-count-representation-bundle.v1.json).
+[specification V2](../schemas/fold-count-representation-spec.v2.json) and
+[representation bundle V2](../schemas/fold-count-representation-bundle.v2.json).
 Artifacts use no-pickle safe tensors, exact-content verification and no-clobber
 publication. Output roots must remain outside the prepared input package.
 The historical checkpoint schemas and baseline publications are unchanged.
@@ -150,9 +157,9 @@ An empty population returns no samples, never a fabricated NTC population.
   Full-cohort degeneracy and perturbation-preservation diagnostics are still
   required before selecting this representation for scientific state modeling.
 
-The [local validation receipt](../receipts/review-9ef72c6-count-representation-validation.json)
+The historical bd2a639 [local validation receipt](../receipts/review-9ef72c6-count-representation-validation.json)
 separates synthetic integration evidence from real-cohort baseline results.
-The fresh complete suite passed **585 tests, four expected CUDA skips, and
+That implementation's fresh complete suite passed **585 tests, four expected CUDA skips, and
 85.5666% combined coverage** (unchanged 85% gate). The 22 focused component
 tests reached 91.7735% combined component coverage; that coverage was not merged
 with the full suite. The installed wheel passed the same 22 tests and all 14

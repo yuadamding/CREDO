@@ -11,6 +11,7 @@ permissions:
 jobs:
   cuda-smoke:
     runs-on: [self-hosted, linux, gpu]
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -23,4 +24,16 @@ jobs:
         env:
           CREDO_V4_WORKSPACE_ROOT: ${{ github.workspace }}
           PYTHONDONTWRITEBYTECODE: "1"
-        run: pytest -q -m gpu tests/gpu
+          CUBLAS_WORKSPACE_CONFIG: ":4096:8"
+        run: |
+          python -c 'import torch; assert torch.cuda.is_available(), "GPU qualification requires CUDA"'
+          pytest -q -s -m gpu tests/gpu --basetemp=artifacts/gpu-tests --junitxml=artifacts/gpu-tests.xml
+      - name: Retain CUDA qualification measurements
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cuda-qualification-${{ github.sha }}
+          path: |
+            artifacts/gpu-tests.xml
+            artifacts/gpu-tests/**/CUDA_QUALIFICATION.json
+          if-no-files-found: warn

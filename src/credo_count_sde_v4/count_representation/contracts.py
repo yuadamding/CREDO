@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any, Literal
 
+import torch
 from pydantic import Field, model_validator
 
 from ..canonical import contract_id
@@ -14,12 +16,32 @@ from ..forecast.contracts import PROCESS_ENV_KEYS, SourceRole
 PositiveInt = Annotated[int, Field(gt=0, strict=True)]
 
 
+def numerical_settings() -> dict[str, Any]:
+    """Allowlisted numerical controls; never inspect arbitrary process variables."""
+    return dict(
+        deterministic_algorithms=torch.are_deterministic_algorithms_enabled(),
+        deterministic_warn_only=torch.is_deterministic_algorithms_warn_only_enabled(),
+        matmul_precision=torch.get_float32_matmul_precision(),
+        cuda_matmul_allow_tf32=torch.backends.cuda.matmul.allow_tf32,
+        cudnn_allow_tf32=torch.backends.cudnn.allow_tf32,
+        cudnn_deterministic=torch.backends.cudnn.deterministic,
+        cudnn_benchmark=torch.backends.cudnn.benchmark,
+        cublas_workspace_config=os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+    )
+
+
 class RNAFeature(StrictModel):
     feature_id: str = Field(min_length=1)
     is_RNA: bool = Field(strict=True)
 
 
 class RepresentationRules(StrictModel):
+    sampler_version: Literal["source_interleaved_rotating_tail_v1"] = (
+        "source_interleaved_rotating_tail_v1"
+    )
+    constant_comparator: Literal["training_scored_half_composition_v1"] = (
+        "training_scored_half_composition_v1"
+    )
     latent_dim: PositiveInt = 48
     hidden_dims: tuple[PositiveInt, PositiveInt] = (512, 128)
     factor_rank: PositiveInt = 8
@@ -56,11 +78,12 @@ class CountRepresentationSpec(StrictModel):
     schema_id: Literal["credo.fold_count_representation_spec"] = (
         "credo.fold_count_representation_spec"
     )
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     base_git_commit: GitCommit
     implementation_sha256: Sha256
     environment: dict[str, Any]
     process_environment: dict[str, str | None]
+    numerical_settings: dict[str, Any] = Field(default_factory=numerical_settings)
     fitting: PreparedAccess
     query: PreparedAccess
     source_roles: tuple[SourceRole, ...]
@@ -136,7 +159,7 @@ class RepresentationManifest(StrictModel):
     schema_id: Literal["credo.fold_count_representation_bundle"] = (
         "credo.fold_count_representation_bundle"
     )
-    schema_version: Literal[1] = 1
+    schema_version: Literal[2] = 2
     stage: Literal["calibration", "fitted_representation", "latent_cells"]
     specification_sha256: Sha256
     parents: dict[str, Sha256]

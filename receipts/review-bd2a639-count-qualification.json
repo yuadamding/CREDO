@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "observation": "bd2a639_count_qualification_followup",
+  "observed_date_UTC": "2026-09-13",
+  "base_commit": "bd2a6393844d55e56b39f66e932e3e96a188cbde",
+  "status": "implementation_and_CPU_validation_complete_GPU_execution_blocked",
+  "implementation_sha256": "216f463bf7224d2c4dfe417af490e85d1b42ae77d5af3feec9810f20b73c673d",
+  "external_evidence_root": "../credo_full_cohort_20260912/review_bd2a639_20260913",
+  "full_suite": {
+    "exit_code": 0,
+    "passed": 591,
+    "skipped": 6,
+    "skip_reason": "Explicit CPU-only run; four existing and two new CUDA cases skipped",
+    "warnings": 1,
+    "warning_scope": "Existing NearConstantInputWarning",
+    "pytest_seconds": 944.4,
+    "command_wall_seconds": 973.48,
+    "maximum_resident_set_kib": 1406908,
+    "combined_statement_branch_coverage_percent": 85.60632085194091,
+    "covered_statements": 18252,
+    "statements": 20301,
+    "covered_branches": 4176,
+    "branches": 5898,
+    "required_coverage_percent": 85,
+    "fresh_suite_no_append_or_merge": true,
+    "log_file": "full-suite-a2.log",
+    "log_sha256": "21c6ea37bedaf23b504984602d32f1c0e5f9d435246549e61c14575fdb3cb6ac",
+    "coverage_file": "full-suite-a2-coverage.json",
+    "coverage_sha256": "4bf55093678bedd5911d5e47bcfd2a897f95468aca219e76e10664ca0297cbc0"
+  },
+  "focused": {
+    "passed": 28,
+    "CUDA_skipped": 2,
+    "elapsed_seconds": 66.67,
+    "combined_component_coverage_percent": 92.27005870841488,
+    "covered_statements": 733,
+    "statements": 772,
+    "covered_branches": 210,
+    "branches": 250,
+    "log_sha256": "b4a3121bb1c79e70bcd423c3c7f34f31bcfdeff1d0f3c26993fa6682effac875",
+    "coverage_sha256": "44da44c658c2019a23d07b0c7a74c8f567f01ffb92d3476ade5bca731e7e2295",
+    "merged_with_full_suite": false
+  },
+  "wheel": {
+    "filename": "credo_count_sde_v4-4.0.0.dev40-py3-none-any.whl",
+    "sha256": "6d3983525a48b2fff3bb56d53f210947b6e99a2148d4ae0992ecd44af905b971",
+    "installed_in_separate_environment": true,
+    "installed_implementation_verified": true,
+    "component_tests_passed": 28,
+    "CUDA_skipped": 2,
+    "elapsed_seconds": 52.99,
+    "log_sha256": "baecb775a1f1ef90d382f8287f99fbfd5439e786537339ab7d0a7ffb26c5133e"
+  },
+  "external_native_adapter_workflow": {
+    "passed": 14,
+    "elapsed_seconds": 26.63,
+    "installed_wheel": true,
+    "diagnostic_refits_explicitly_named": true,
+    "default_failed_gate_stop_verified": true,
+    "valid_protected_outcome_change_preserves_tensor_bytes_and_query_states": true,
+    "log_sha256": "d5e4ca49736becf8b7fb587f60b0113d0bc5674e14cb4dbc46ca87eaa920fb3f",
+    "updated_test_file_sha256": "71d4e6044de90652990f93abbbef0050a2075b85c4ec48a32d5c662e5efa6c97"
+  },
+  "tests_sha256": {
+    "tests/unit/test_fold_count_representation.py": "1e2f198eb1c37534fb34dfba06cabb3816bfe234375e2797d2a7b9e9a1c5d6bc",
+    "tests/unit/test_count_representation_review.py": "490c4a3da55247db9c05a60308665d8cb857b4ea9356d8f7652f24a181660e49",
+    "tests/gpu/test_count_representation_cuda.py": "2c30a7e2991c21b5de954a0856589aa8ea23a425e014d35bf8604904d9863973"
+  },
+  "source_typing": "passed_113_files",
+  "ruff": "passed",
+  "formatting": "passed_177_files",
+  "generated_schemas": "passed",
+  "documentation_links": "passed",
+  "wheel_audit": "passed",
+  "GPU_workflow_static_check": "passed_CUDA_required_and_JSON_JUnit_retention",
+  "synthetic_signal": {
+    "RNA_features": 6,
+    "hidden_dims": [
+      24,
+      12
+    ],
+    "latent_dim": 48,
+    "factor_rank": 1,
+    "selected_epoch": 8,
+    "count_gate": true,
+    "AE_CE": 0.5549757155505094,
+    "matched_constant_CE": 1.4121778824112632,
+    "UMI_pooled_CE": 1.4121839729222385,
+    "factor_CE": 1.0266507295044986,
+    "scored_cell_directions": 22,
+    "scored_RNA_UMIs": 22000,
+    "representation_qualified": false
+  },
+  "synthetic_source_shift": {
+    "RNA_features": 6,
+    "hidden_dims": [
+      24,
+      12
+    ],
+    "latent_dim": 48,
+    "factor_rank": 1,
+    "selected_epoch": 2,
+    "count_gate": false,
+    "AE_CE": 1.412943341515281,
+    "matched_constant_CE": 1.1645082614638589,
+    "UMI_pooled_CE": 1.2119245122779498,
+    "factor_CE": 1.7623638781634243,
+    "scored_cell_directions": 22,
+    "scored_RNA_UMIs": 89500,
+    "epochs_increased_to_force_pass": false
+  },
+  "GPU_fixture": {
+    "executed": false,
+    "RNA_features": [
+      6,
+      18129
+    ],
+    "batch_rows": 256,
+    "wide_extra_gene_density": 0.3,
+    "density_basis": "Prior authorized fitting-shard nnz/row metadata gives source-mean RNA density approximately 0.1935 to 0.2514; 0.30 is a stress case, not a measured cell-level tail distribution.",
+    "metadata_source_sha256": "a7c35d35b7bb2a7e03168f8ee30e08c6ff8753a6b067ab0323d1c8f49fb0919d",
+    "raw_count_payloads_opened": false,
+    "allocated_reserved_ceiling_bytes": 8589934592,
+    "same_device_tolerance": {
+      "rtol": 0.000001,
+      "atol": 0.000001
+    },
+    "CPU_CUDA_byte_equivalence_required": false
+  },
+  "preserved_attempts": {
+    "full_suite_a1": {
+      "status": "intentionally_interrupted_to_freeze_updated_density_fixture",
+      "log_sha256": "1b7a4cb86018f791fdd207e47773b9762693f681396f9e0cee044d5142495157",
+      "coverage_reused": false
+    },
+    "external_a1": {
+      "passed": 12,
+      "failed": 2,
+      "reason": "Old synthetic refits now correctly stopped at failed count gate; tests updated to request and record diagnostic refits.",
+      "log_sha256": "c5eedd2cbbdb0fe4554b60494af0f3eeb88a5d33bbfa6702b20d3f9aef439359"
+    }
+  },
+  "seadragon": {
+    "scope": "exact read-only path and chain checks; no scheduler or data mutation",
+    "chain_verified": "station001 -> work-mac -> seadragon -> ldragon3",
+    "scratch_publication_directory_present": true,
+    "home_project": "/rsrch8/home/bcb/yding4/perturbseq",
+    "home_project_exists": false,
+    "parent_access_verified": {
+      "owner": "yding4",
+      "mode": "0700"
+    },
+    "exact_stat_error": "No such file or directory",
+    "worker_template_image_mount_qualified": false,
+    "worker_scratch_visibility": "User-reported unavailable; not independently retested here",
+    "jobs_created": 0,
+    "copies_created": 0,
+    "environment_installs": 0
+  },
+  "execution_blocker": "Current approved CREDO H100 image/template/project mount and worker-visible setup required before CUDA qualification or real calibration.",
+  "GPU_qualification": false,
+  "real_cohort_calibration": false,
+  "scientific_promotion": false,
+  "full_count_geometry_qualified": false,
+  "optimizer_cursor_resume_qualified": false,
+  "baseline_results_unchanged": true,
+  "preserved_baseline_markers": {
+    "WORKFLOW_COMPLETE.json": "79c0e7fbee89b9c5e91ce02d845ecb45491b543c61d37e954ced7dc339bf5c8f",
+    "CORRECTION_COMPLETE.json": "47d0763cbeb95ce84d1cde0d604b4838714e6770eb1b3c5da2ec427fd2711a82"
+  },
+  "original_CREDO": "clean_6f4f57c114606476cb6e93c6d52dc34628173a4d",
+  "v1_schema_sha256": {
+    "fold-count-representation-spec.v1.json": "9033b305dd5909d8eb8a052cf1eb8ee0d29637428c461835e7f4bc3fd573c0b7",
+    "fold-count-representation-bundle.v1.json": "bb47c6abd7d51949f69df4be8b01803e2b7cd79d8f84a47d6ddcccf39eacb8ad"
+  }
+}

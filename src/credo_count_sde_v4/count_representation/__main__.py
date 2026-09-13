@@ -17,6 +17,9 @@ def main(argv: list[str] | None = None) -> None:
     calibrate.add_argument("--specification", type=Path, required=True)
     refit = sub.add_parser("refit")
     refit.add_argument("--calibration", type=Path, required=True)
+    refit.add_argument(
+        "--diagnostic-reason", help="Explicit non-promoting refit after a failed count gate"
+    )
     encode = sub.add_parser("encode")
     encode.add_argument("--fitted", type=Path, required=True)
     encode.add_argument("--role", choices=("fitting", "query"), required=True)
@@ -28,7 +31,9 @@ def main(argv: list[str] | None = None) -> None:
         spec = CountRepresentationSpec.model_validate_json(args.specification.read_text())
         record = calibrate_representation(args.input_root, spec, args.output)
     elif args.stage == "refit":
-        record = refit_representation(args.input_root, args.calibration, args.output)
+        record = refit_representation(
+            args.input_root, args.calibration, args.output, diagnostic_reason=args.diagnostic_reason
+        )
     else:
         _, spec, _ = load_representation(args.fitted)
         access = spec.fitting if args.role == "fitting" else spec.query

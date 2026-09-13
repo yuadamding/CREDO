@@ -52,7 +52,18 @@ def artifact(root, name):
     )
 
 
-def fixture(root: Path, *, null=False, epochs=(2, 8), zero=True):
+def fixture(
+    root: Path,
+    *,
+    null=False,
+    epochs=(2, 8),
+    zero=True,
+    source_shift=False,
+    depth_imbalance=False,
+    rna_features=6,
+    rows_per_shard=32,
+    rules=None,
+):
     root.mkdir()
     catalog = pd.DataFrame(
         dict(
@@ -65,7 +76,7 @@ def fixture(root: Path, *, null=False, epochs=(2, 8), zero=True):
     catalog.to_parquet(root / "catalog.parquet", index=False)
     features = tuple(
         RNAFeature(feature_id=f, is_RNA=f != "technical")
-        for f in ("technical", "a", "b", "c", "d", "e", "f")
+        for f in ("technical", *[f"rna-{i}" for i in range(rna_features)])
     )
     records, roles = [], []
     patterns = np.array(
@@ -84,13 +95,39 @@ def fixture(root: Path, *, null=False, epochs=(2, 8), zero=True):
             sid = f"{donor}-{condition}"
             roles.append(SourceRole(source_id=sid, donor_id=donor, condition_role=condition))
             for shard in range(2):
-                n = 32
+                n = rows_per_shard
                 rna = (
                     np.tile(np.array([500, 500, 500, 500, 0, 0], dtype=np.uint32), (n, 1))
                     if null
                     else patterns[np.arange(n) % 4]
                 )
                 rna = rna.copy()
+                if depth_imbalance:
+                    rna = np.tile(
+                        np.array([[900, 100, 0, 0, 0, 0], [1, 9, 0, 0, 0, 0]], dtype=np.uint32),
+                        (n // 2, 1),
+                    )
+                if source_shift:
+                    index = 2 * (donor == "fit-b") + (condition == "destination")
+                    rna[:, index] += (index + 1) * 2500
+                if rna_features > 6:
+                    # Bounded synthetic width/sparsity fixture, not a real cohort sample.
+                    rng = np.random.default_rng(734 + shard)
+                    extra = (
+                        sparse.random(
+                            n,
+                            rna_features - 6,
+                            density=0.30,
+                            format="csr",
+                            random_state=rng,
+                            data_rvs=lambda size, generator=rng: generator.integers(
+                                1, 5, size=size
+                            ),
+                        )
+                        .toarray()
+                        .astype(np.uint32)
+                    )
+                    rna = np.column_stack((rna, extra))
                 if zero and shard == 0:
                     rna[-1] = 0
                 counts = sparse.csr_matrix(
@@ -159,7 +196,8 @@ def fixture(root: Path, *, null=False, epochs=(2, 8), zero=True):
         source_condition="source",
         destination_condition="destination",
         features=features,
-        rules=RepresentationRules(
+        rules=rules
+        or RepresentationRules(
             hidden_dims=(24, 12),
             factor_rank=1,
             candidate_epochs=epochs,

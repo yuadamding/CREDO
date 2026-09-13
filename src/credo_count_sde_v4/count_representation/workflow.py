@@ -17,24 +17,51 @@ from ..persistence.artifacts import load_tensor_file, save_tensor_file
 from .artifacts import output_check, publish, runtime_check, verify
 from .contracts import CountRepresentationSpec, RepresentationManifest
 from .network import SparseCountAutoencoder, count_loss, initialize
-from .stream import Exposure, Partition, halves, iter_counts, partition_audit
+from .stream import Exposure, Partition, halves, iter_counts, partition_audit, schedule_receipt
 
 
 def fit_priors(
     root: Path, spec: CountRepresentationSpec, partition: Partition
-) -> tuple[np.ndarray[Any, Any], dict[str, Any]]:
+) -> tuple[dict[str, np.ndarray[Any, Any]], dict[str, Any]]:
     sums = np.zeros((2, len(spec.rna_positions)), dtype=np.float64)
+    cell_sums = np.zeros_like(sums)
+    directions = np.zeros(2, dtype=np.int64)
     exposure = Exposure()
     for counts, cells in iter_counts(root, spec, partition=partition, split="train"):
         exposure.update(cells)
         for index, condition in enumerate(("source", "destination")):
             selected = cells.condition_role.eq(condition).to_numpy()
             sums[index] += np.asarray(counts[selected].sum(axis=0), dtype=np.float64).ravel()
+        # Fixed, identity-keyed halves on training cells only. Both scored directions
+        # contribute one composition, irrespective of their RNA depth.
+        for target in halves(counts, cells, spec.rules.seed):
+            depth = np.asarray(target.sum(axis=1), dtype=np.float64).ravel()
+            for index, condition in enumerate(("source", "destination")):
+                selected = cells.condition_role.eq(condition).to_numpy() & (depth > 0)
+                cell_sums[index] += np.asarray(
+                    target[selected].multiply((1 / depth[selected])[:, None]).sum(axis=0)
+                ).ravel()
+                directions[index] += np.count_nonzero(selected)
     if np.any(sums.sum(axis=1) <= 0):
         raise ContractError("Each fitting condition needs positive RNA for its count baseline.")
     priors = sums + 0.5
     priors /= priors.sum(axis=1, keepdims=True)
-    return priors, exposure.record()
+    cell_priors = cell_sums / directions[:, None]
+    # Numerical positivity only, not a biological pseudocount. An unseen gene
+    # remains extremely costly on audit rather than receiving a fitted effect.
+    cell_priors = np.maximum(cell_priors, np.finfo(np.float64).tiny)
+    cell_priors /= cell_priors.sum(axis=1, keepdims=True)
+    return dict(condition_composition=priors, condition_cell_direction=cell_priors), dict(
+        **exposure.record(),
+        comparator=spec.rules.constant_comparator,
+        scored_training_cell_directions=dict(
+            zip(("source", "destination"), map(int, directions), strict=False)
+        ),
+        thinning_seed=spec.rules.seed,
+        numerical_probability_floor=float(np.finfo(np.float64).tiny),
+        audit_cells_used=0,
+        query_cells_used=0,
+    )
 
 
 def train_epoch(
@@ -50,7 +77,12 @@ def train_epoch(
     updates: dict[str, int] = defaultdict(int)
     skipped = 0
     for counts, cells in iter_counts(
-        root, spec, partition=partition, split="all" if partition is None else "train", epoch=epoch
+        root,
+        spec,
+        partition=partition,
+        split="all" if partition is None else "train",
+        epoch=epoch,
+        training=True,
     ):
         exposure.update(cells)
         seed = int(contract_id(["fit-thinning", spec.rules.seed, epoch])[:16], 16)
@@ -86,6 +118,7 @@ def train_epoch(
         updates=dict(updates),
         zero_RNA_rows_without_optimizer_loss=skipped,
         objective="equal_scored_cell_direction_symmetric_A_B_conditional_CE",
+        schedule=schedule_receipt(spec, epoch),
     )
 
 
@@ -94,11 +127,14 @@ def audit_models(
     spec: CountRepresentationSpec,
     partition: Partition,
     models: dict[str, SparseCountAutoencoder],
-    priors: np.ndarray[Any, Any],
+    priors: dict[str, np.ndarray[Any, Any]],
 ) -> dict[str, Any]:
-    names = [*models, "condition_composition", "autoencoder_latent_ablated"]
+    names = [*models, *priors, "autoencoder_latent_ablated"]
     sums = {name: np.zeros(4, dtype=np.float64) for name in names}
     by_guide: dict[tuple[str, int, str], list[float]] = defaultdict(lambda: [0.0, 0.0])
+    by_source: dict[tuple[str, str], np.ndarray[Any, Any]] = defaultdict(
+        lambda: np.zeros(4, dtype=np.float64)
+    )
     exposure = Exposure()
     zero_input = zero_target = 0
     for model in models.values():
@@ -114,10 +150,12 @@ def audit_models(
                 valid = target_depth > 0
                 zero_target += int((~valid).sum())
                 for name in names:
-                    if name == "condition_composition":
+                    if name in priors:
                         indices = cells.condition_role.eq("destination").to_numpy().astype(int)
                         logits = torch.as_tensor(
-                            np.log(priors[indices]), dtype=torch.float32, device=spec.rules.device
+                            np.log(priors[name][indices]),
+                            dtype=torch.float32,
+                            device=spec.rules.device,
                         )
                     elif name == "autoencoder_latent_ablated":
                         logits = models["autoencoder"].log_probabilities(observed, ablate=True)
@@ -133,6 +171,14 @@ def audit_models(
                         np.dot(values[valid], target_depth[valid]),
                         target_depth[valid].sum(),
                     ]
+                    for source in cells.source_id.unique():
+                        selected = cells.source_id.eq(source).to_numpy() & valid
+                        by_source[(str(source), name)] += [
+                            values[selected].sum(),
+                            selected.sum(),
+                            np.dot(values[selected], target_depth[selected]),
+                            target_depth[selected].sum(),
+                        ]
                     for i in np.flatnonzero(valid):
                         key = (
                             str(cells.condition_role.iloc[i]),
@@ -164,6 +210,23 @@ def audit_models(
         )
         for (c, g, f), (total, n) in sorted(by_guide.items())
     ]
+    roles = {r.source_id: r for r in spec.source_roles}
+    report["source_scores"] = [
+        dict(
+            source_id=source,
+            donor_id=roles[source].donor_id,
+            condition_role=roles[source].condition_role,
+            family=family,
+            mean_cell_direction_CE=float(ce / n) if n else None,
+            RNA_UMI_weighted_CE=float(nll / umis) if umis else None,
+            scored_cell_directions=int(n),
+            scored_RNA_UMIs=int(umis),
+        )
+        for (source, family), (ce, n, nll, umis) in sorted(by_source.items())
+    ]
+    report["latent_ablation"] = (
+        "zero_raw_latent_not_fitting_mean; auxiliary_not_geometry_qualification"
+    )
     report["interpretation"] = (
         "cell_held_out_and_molecule_split; selection_set_not_independent_confirmation"
     )
@@ -219,7 +282,7 @@ def calibrate_representation(
     factor = next(r for r in candidates if r["epoch"] == selected["count_factor"])
     ae_score = best["models"]["autoencoder"]["mean_cell_direction_CE"]
     competitors = [
-        best["models"]["condition_composition"]["mean_cell_direction_CE"],
+        best["models"]["condition_cell_direction"]["mean_cell_direction_CE"],
         factor["models"]["count_factor"]["mean_cell_direction_CE"],
         best["models"]["autoencoder_latent_ablated"]["mean_cell_direction_CE"],
     ]
@@ -233,6 +296,8 @@ def calibrate_representation(
         candidates=candidates,
         selected_epochs=selected,
         heldout_count_gate=bool(count_gate),
+        primary_constant_comparator="condition_cell_direction",
+        failed_gate_policy="stop_before_refit_unless_explicit_diagnostic_reason",
         perturbation_preservation_qualified=False,
         representation_qualified=False,
         scientific_promotion=False,
@@ -244,7 +309,8 @@ def calibrate_representation(
         write_json(path / "audit_rows.json", partition)
         write_json(path / "calibration.json", result)
         save_tensor_file(
-            path / "condition_priors.safetensors", {"priors": torch.from_numpy(priors)}
+            path / "condition_priors.safetensors",
+            {name: torch.from_numpy(values) for name, values in priors.items()},
         )
         for name, state in best_weights.items():
             save_tensor_file(path / f"calibration_{name}.safetensors", state)
@@ -313,7 +379,7 @@ def fit_scaling(
 
 
 def refit_representation(
-    root: Path, calibration: Path, destination: Path
+    root: Path, calibration: Path, destination: Path, *, diagnostic_reason: str | None = None
 ) -> RepresentationManifest:
     record = verify(calibration, stage="calibration")
     spec = CountRepresentationSpec.model_validate_json(
@@ -326,6 +392,15 @@ def refit_representation(
         raise ContractError("Calibration fitting/specification identity mismatch.")
     output_check(root, destination)
     result = json.loads((calibration / "calibration.json").read_text())
+    if diagnostic_reason is not None and not diagnostic_reason.strip():
+        raise ContractError("Diagnostic refit requires a nonempty explicit reason.")
+    if record.facts["heldout_count_gate"] != result["heldout_count_gate"]:
+        raise ContractError("Calibration count-gate records disagree.")
+    if not result["heldout_count_gate"] and diagnostic_reason is None:
+        raise ContractError(
+            "Calibration count gate failed; refit stopped. "
+            "An explicit diagnostic reason is required."
+        )
     epochs = result["selected_epochs"]["autoencoder"]
     if (
         epochs not in spec.rules.candidate_epochs
@@ -367,6 +442,8 @@ def refit_representation(
             model_numerical_sha256=sha256_file(path / "model.safetensors"),
             latent_dim=spec.rules.latent_dim,
             heldout_count_gate=result["heldout_count_gate"],
+            diagnostic_refit=diagnostic_reason is not None,
+            diagnostic_reason=diagnostic_reason,
             representation_qualified=False,
             frozen_encoder=True,
             frozen_decoder=True,

@@ -14,7 +14,7 @@ from ..forecast.artifacts import write_json
 from ..forecast.contracts import process_environment
 from ..persistence.artifacts import publish_directory, verify_directory
 from ..runtime_identity import environment_identity, implementation_tree_hash
-from .contracts import CountRepresentationSpec, RepresentationManifest
+from .contracts import CountRepresentationSpec, RepresentationManifest, numerical_settings
 
 
 def runtime_check(spec: CountRepresentationSpec) -> None:
@@ -23,6 +23,7 @@ def runtime_check(spec: CountRepresentationSpec) -> None:
         spec.implementation_sha256 != implementation_tree_hash()
         or spec.environment != environment_identity()
         or spec.process_environment != process_environment()
+        or spec.numerical_settings != numerical_settings()
     ):
         raise ContractError("Representation runtime differs from frozen specification.")
 
