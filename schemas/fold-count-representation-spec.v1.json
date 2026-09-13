@@ -1,0 +1,597 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    },
+    "GuideCatalogBinding": {
+      "additionalProperties": false,
+      "description": "Artifact plus explicitly declared projection; never infer biological labels.",
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "control_column": {
+          "default": "is_control",
+          "title": "Control Column",
+          "type": "string"
+        },
+        "guide_id_column": {
+          "default": "guide_id",
+          "title": "Guide Id Column",
+          "type": "string"
+        },
+        "index_column": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "guide_index",
+          "title": "Index Column"
+        },
+        "ordered_catalog_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Ordered Catalog Sha256",
+          "type": "string"
+        },
+        "target_id_column": {
+          "default": "target_id",
+          "title": "Target Id Column",
+          "type": "string"
+        }
+      },
+      "required": [
+        "artifact",
+        "ordered_catalog_sha256"
+      ],
+      "title": "GuideCatalogBinding",
+      "type": "object"
+    },
+    "PreparedAccess": {
+      "additionalProperties": false,
+      "description": "Existing V2 predictor/fitting capability; serialized identity is unchanged.",
+      "properties": {
+        "amendment_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Amendment Sha256",
+          "type": "string"
+        },
+        "feature_order_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Feature Order Sha256",
+          "type": "string"
+        },
+        "guide_catalog": {
+          "$ref": "#/$defs/GuideCatalogBinding"
+        },
+        "n_features": {
+          "exclusiveMinimum": 0,
+          "title": "N Features",
+          "type": "integer"
+        },
+        "package_completion_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Package Completion Sha256",
+          "type": "string"
+        },
+        "package_inventory_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Package Inventory Sha256",
+          "type": "string"
+        },
+        "parent_view_sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Parent View Sha256",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "representation_fit",
+            "dynamics_source",
+            "dynamics_supervision",
+            "baseline_fit",
+            "query"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "shards": {
+          "items": {
+            "$ref": "#/$defs/PreparedShard"
+          },
+          "title": "Shards",
+          "type": "array"
+        },
+        "source_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Ids",
+          "type": "array"
+        },
+        "storage_isolation_qualified": {
+          "const": false,
+          "default": false,
+          "title": "Storage Isolation Qualified",
+          "type": "boolean"
+        },
+        "task_id": {
+          "minLength": 1,
+          "title": "Task Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "package_completion_sha256",
+        "package_inventory_sha256",
+        "parent_view_sha256",
+        "amendment_sha256",
+        "feature_order_sha256",
+        "guide_catalog",
+        "n_features",
+        "task_id",
+        "source_ids",
+        "shards",
+        "role"
+      ],
+      "title": "PreparedAccess",
+      "type": "object"
+    },
+    "PreparedShard": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_rows": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allowed Rows"
+        },
+        "cells": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "counts": {
+          "$ref": "#/$defs/ArtifactRef"
+        },
+        "nnz": {
+          "minimum": 0,
+          "title": "Nnz",
+          "type": "integer"
+        },
+        "rows": {
+          "exclusiveMinimum": 0,
+          "title": "Rows",
+          "type": "integer"
+        },
+        "shard": {
+          "minimum": 0,
+          "title": "Shard",
+          "type": "integer"
+        },
+        "source_id": {
+          "minLength": 1,
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "shard",
+        "rows",
+        "nnz",
+        "counts",
+        "cells"
+      ],
+      "title": "PreparedShard",
+      "type": "object"
+    },
+    "RNAFeature": {
+      "additionalProperties": false,
+      "properties": {
+        "feature_id": {
+          "minLength": 1,
+          "title": "Feature Id",
+          "type": "string"
+        },
+        "is_RNA": {
+          "title": "Is Rna",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "feature_id",
+        "is_RNA"
+      ],
+      "title": "RNAFeature",
+      "type": "object"
+    },
+    "RepresentationRules": {
+      "additionalProperties": false,
+      "properties": {
+        "audit_fraction": {
+          "default": 0.05,
+          "exclusiveMaximum": 0.5,
+          "exclusiveMinimum": 0,
+          "title": "Audit Fraction",
+          "type": "number"
+        },
+        "batch_correction": {
+          "const": "identity_unqualified",
+          "default": "identity_unqualified",
+          "title": "Batch Correction",
+          "type": "string"
+        },
+        "batch_rows": {
+          "default": 256,
+          "exclusiveMinimum": 0,
+          "maximum": 8192,
+          "title": "Batch Rows",
+          "type": "integer"
+        },
+        "candidate_epochs": {
+          "default": [
+            1,
+            2,
+            4,
+            8
+          ],
+          "items": {
+            "exclusiveMinimum": 0,
+            "type": "integer"
+          },
+          "title": "Candidate Epochs",
+          "type": "array"
+        },
+        "device": {
+          "default": "cpu",
+          "enum": [
+            "cpu",
+            "cuda"
+          ],
+          "title": "Device",
+          "type": "string"
+        },
+        "factor_rank": {
+          "default": 8,
+          "exclusiveMinimum": 0,
+          "title": "Factor Rank",
+          "type": "integer"
+        },
+        "gradient_clip": {
+          "default": 1.0,
+          "exclusiveMinimum": 0,
+          "title": "Gradient Clip",
+          "type": "number"
+        },
+        "hidden_dims": {
+          "default": [
+            512,
+            128
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "prefixItems": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            }
+          ],
+          "title": "Hidden Dims",
+          "type": "array"
+        },
+        "latent_dim": {
+          "default": 48,
+          "exclusiveMinimum": 0,
+          "title": "Latent Dim",
+          "type": "integer"
+        },
+        "learning_rate": {
+          "default": 0.001,
+          "exclusiveMinimum": 0,
+          "title": "Learning Rate",
+          "type": "number"
+        },
+        "maximum_dense_working_bytes": {
+          "default": 536870912,
+          "exclusiveMinimum": 0,
+          "title": "Maximum Dense Working Bytes",
+          "type": "integer"
+        },
+        "maximum_latent_index_bytes": {
+          "default": 536870912,
+          "exclusiveMinimum": 0,
+          "title": "Maximum Latent Index Bytes",
+          "type": "integer"
+        },
+        "maximum_partition_rows": {
+          "default": 30000000,
+          "exclusiveMinimum": 0,
+          "title": "Maximum Partition Rows",
+          "type": "integer"
+        },
+        "minimum_count_improvement": {
+          "default": 0.0,
+          "minimum": 0,
+          "title": "Minimum Count Improvement",
+          "type": "number"
+        },
+        "observation": {
+          "const": "library_conditioned_multinomial",
+          "default": "library_conditioned_multinomial",
+          "title": "Observation",
+          "type": "string"
+        },
+        "scale_floor_fraction": {
+          "default": 0.01,
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Scale Floor Fraction",
+          "type": "number"
+        },
+        "seed": {
+          "default": 0,
+          "exclusiveMaximum": 4294967296,
+          "minimum": 0,
+          "title": "Seed",
+          "type": "integer"
+        },
+        "thinning_probability": {
+          "default": 0.5,
+          "title": "Thinning Probability",
+          "type": "number"
+        },
+        "weight_decay": {
+          "default": 0.0001,
+          "minimum": 0,
+          "title": "Weight Decay",
+          "type": "number"
+        }
+      },
+      "title": "RepresentationRules",
+      "type": "object"
+    },
+    "SourceRole": {
+      "additionalProperties": false,
+      "properties": {
+        "condition_role": {
+          "enum": [
+            "source",
+            "destination"
+          ],
+          "title": "Condition Role",
+          "type": "string"
+        },
+        "donor_id": {
+          "title": "Donor Id",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id",
+        "donor_id",
+        "condition_role"
+      ],
+      "title": "SourceRole",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/fold-count-representation-spec.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "base_git_commit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Base Git Commit",
+      "type": "string"
+    },
+    "context_enabled": {
+      "const": false,
+      "default": false,
+      "title": "Context Enabled",
+      "type": "boolean"
+    },
+    "destination_condition": {
+      "minLength": 1,
+      "title": "Destination Condition",
+      "type": "string"
+    },
+    "environment": {
+      "additionalProperties": true,
+      "title": "Environment",
+      "type": "object"
+    },
+    "features": {
+      "items": {
+        "$ref": "#/$defs/RNAFeature"
+      },
+      "title": "Features",
+      "type": "array"
+    },
+    "fitting": {
+      "$ref": "#/$defs/PreparedAccess"
+    },
+    "fitting_donors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Fitting Donors",
+      "type": "array"
+    },
+    "implementation_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Implementation Sha256",
+      "type": "string"
+    },
+    "process_environment": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "title": "Process Environment",
+      "type": "object"
+    },
+    "protected_donors": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Protected Donors",
+      "type": "array"
+    },
+    "protected_endpoint_access": {
+      "const": false,
+      "default": false,
+      "title": "Protected Endpoint Access",
+      "type": "boolean"
+    },
+    "query": {
+      "$ref": "#/$defs/PreparedAccess"
+    },
+    "query_donor": {
+      "title": "Query Donor",
+      "type": "string"
+    },
+    "rules": {
+      "$ref": "#/$defs/RepresentationRules",
+      "default": {
+        "audit_fraction": 0.05,
+        "batch_correction": "identity_unqualified",
+        "batch_rows": 256,
+        "candidate_epochs": [
+          1,
+          2,
+          4,
+          8
+        ],
+        "device": "cpu",
+        "factor_rank": 8,
+        "gradient_clip": 1.0,
+        "hidden_dims": [
+          512,
+          128
+        ],
+        "latent_dim": 48,
+        "learning_rate": 0.001,
+        "maximum_dense_working_bytes": 536870912,
+        "maximum_latent_index_bytes": 536870912,
+        "maximum_partition_rows": 30000000,
+        "minimum_count_improvement": 0.0,
+        "observation": "library_conditioned_multinomial",
+        "scale_floor_fraction": 0.01,
+        "seed": 0,
+        "thinning_probability": 0.5,
+        "weight_decay": 0.0001
+      }
+    },
+    "schema_id": {
+      "const": "credo.fold_count_representation_spec",
+      "default": "credo.fold_count_representation_spec",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "source_condition": {
+      "minLength": 1,
+      "title": "Source Condition",
+      "type": "string"
+    },
+    "source_roles": {
+      "items": {
+        "$ref": "#/$defs/SourceRole"
+      },
+      "title": "Source Roles",
+      "type": "array"
+    }
+  },
+  "required": [
+    "base_git_commit",
+    "implementation_sha256",
+    "environment",
+    "process_environment",
+    "fitting",
+    "query",
+    "source_roles",
+    "fitting_donors",
+    "query_donor",
+    "protected_donors",
+    "source_condition",
+    "destination_condition",
+    "features"
+  ],
+  "title": "CountRepresentationSpec",
+  "type": "object"
+}

@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "observation": "fold_count_representation_local_validation",
+  "observed_date_UTC": "2026-09-13",
+  "base_commit": "9ef72c64c733da8911ae58ffa3780c0c098d933c",
+  "implementation_sha256": "f92830ba544e9dacda0c1bf584a5f5b73e64bd5c5511a5bce2f4127938539433",
+  "status": "completed",
+  "external_evidence_root": "../credo_full_cohort_20260912/count_representation_review_20260913",
+  "test_file": "tests/unit/test_fold_count_representation.py",
+  "test_file_sha256": "2426bb6ed02958ec98aa5b7bdd04317073ec979c431ec03e733ca1fa3e1edce6",
+  "full_suite": {
+    "exit_code": 0,
+    "passed": 585,
+    "skipped": 4,
+    "skip_reason": "Explicitly CPU-only execution; existing CUDA tests skipped",
+    "warnings": 1,
+    "warning_scope": "Existing NearConstantInputWarning",
+    "pytest_seconds": 934.2,
+    "command_wall_seconds": 967.96,
+    "maximum_resident_set_kib": 1381372,
+    "combined_statement_branch_coverage_percent": 85.56657603492513,
+    "covered_statements": 18191,
+    "statements": 20239,
+    "covered_branches": 4153,
+    "branches": 5874,
+    "required_coverage_percent": 85,
+    "fresh_complete_suite_without_append": true,
+    "log_file": "full-suite.log",
+    "log_sha256": "9593511885adc838bc44627cbcde8c62fdddc07cb05505636eb125a136a7cf0e",
+    "coverage_file": "full-suite-coverage.json",
+    "coverage_sha256": "565f22566a54cb65653551337fd74f119857141b1cd991a122d75688e12a2214"
+  },
+  "focused": {
+    "passed": 22,
+    "elapsed_seconds": 67.12,
+    "combined_component_coverage_percent": 91.77350427350427,
+    "covered_statements": 672,
+    "statements": 710,
+    "covered_branches": 187,
+    "branches": 226,
+    "required_coverage_percent": 85,
+    "merged_with_full_suite": false,
+    "log_file": "focused-a3.log",
+    "log_sha256": "ecc86d4cfb801be500d0d978821ea7a7e742130799858deef44e0669d283a6f0",
+    "coverage_sha256": "fcf09e5a99e1488821a1586f072c44b156657e0832f3d624319a683d7dd3a1eb"
+  },
+  "wheel": {
+    "filename": "credo_count_sde_v4-4.0.0.dev40-py3-none-any.whl",
+    "sha256": "8d7926552878975d943e19b48c17093b49556e1ad75d62872655eb7a9d4bb69e",
+    "installed_in_separate_environment": true,
+    "installed_source_identity_matches": true,
+    "component_tests_passed": 22,
+    "component_test_seconds": 48.34,
+    "log_sha256": "fd306949cfedd0d63f49d7bc04e49b62a1bce49b15254e5e9ff64819f8667e8b"
+  },
+  "external_native_adapter_workflow": {
+    "passed": 14,
+    "elapsed_seconds": 23.78,
+    "installed_wheel_execution": true,
+    "log_file": "all-external-a2.log",
+    "log_sha256": "fd322de34bae98bf75c449101342d36b641c1f7e635c091016510b61bc324b93",
+    "new_test_file_sha256": "a9a9b2eaf85465a26e5f043b82ddf651cddb8687522e11349bfbf2ef4cac169d",
+    "includes_original_baseline_workflow": true,
+    "includes_native_view_calibration_and_refit": true,
+    "valid_changed_protected_outcomes_preserve_fitted_tensors_and_query_states": true
+  },
+  "synthetic_signal_canary": {
+    "RNA_features": 6,
+    "hidden_dims": [
+      24,
+      12
+    ],
+    "latent_dim": 48,
+    "factor_rank": 1,
+    "fitting_cells": 256,
+    "audit_cells": 12,
+    "audit_positive_RNA_cells": 11,
+    "selected_epochs": {
+      "autoencoder": 8,
+      "count_factor": 8
+    },
+    "mean_cell_direction_CE": {
+      "autoencoder": 0.5560052259401842,
+      "condition_composition": 1.4121839729222385,
+      "count_factor": 1.0301405597816815,
+      "latent_ablated": 1.730870466340672
+    },
+    "count_gate": true,
+    "representation_qualified": false,
+    "scope": "Small prespecified synthetic signal fixture, not real-cohort performance or default full-gene/rank-8 comparison"
+  },
+  "synthetic_null_canary": {
+    "count_gate": false,
+    "independent_null_refit_calibration_qualified": false
+  },
+  "other_checks": {
+    "mypy": "passed_113_source_files",
+    "ruff": "passed",
+    "formatting": "passed_175_files",
+    "generated_schemas": "passed",
+    "documentation_links": "passed",
+    "repository_index_manifest": "passed",
+    "wheel_package_audit": "passed",
+    "frozen_sibling_CREDO": "clean_6f4f57c114606476cb6e93c6d52dc34628173a4d"
+  },
+  "harness_diagnosis": {
+    "failed_attempt": "focused-a2.log",
+    "tests_executed": 0,
+    "error": "PyTorch _has_torch_function already has a docstring",
+    "cause": "Dotted-submodule coverage discovery imports parent under sys_modules_saved and subsequently repeats extension initialization",
+    "resolution": "Directory source target for focused coverage; established root-package target for complete suite",
+    "dependency_changes": false,
+    "coverage_gate_lowered": false
+  },
+  "real_cohort_representation_training": false,
+  "GPU_qualification": false,
+  "scientific_promotion": false,
+  "optimizer_cursor_resume_qualified": false,
+  "storage_isolation_qualified": false,
+  "baseline_predictions_and_scoring_v2_unchanged": true,
+  "scope": "Completed local CPU synthetic component/packaging validation and metadata-only real input resolution. No full-cohort representation, state predictor, protected-endpoint encoding, donor expansion or scientific promotion was performed. Historical receipts and baseline outputs are preserved."
+}

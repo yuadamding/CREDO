@@ -1,5 +1,9 @@
 # CREDO count-SDE v4
 
+New component: [streamed fold-fitted count representation](docs/fold-count-representation.md)
+(separate calibration/refit/frozen per-cell laws; no full-cohort representation trained yet).
+Accepted baseline: [frozen R48 numerical results and paired target review](docs/r48-baseline-results.md).
+
 Current review: [population-baseline scoring correction](docs/review-0cb50da-scoring-correction.md)
 (real first-split execution and linked rescoring completed; frozen predictions unchanged).
 

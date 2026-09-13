@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "observation": "completed_remote_CPU_CI",
+  "observed_date_UTC": "2026-09-13",
+  "repository": "yuadamding/CREDO",
+  "commit": "9ef72c64c733da8911ae58ffa3780c0c098d933c",
+  "run_id": 34737927672,
+  "url": "https://github.com/yuadamding/CREDO/actions/runs/34737927672",
+  "status": "completed",
+  "conclusion": "success",
+  "jobs": [
+    {"name": "wheel", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.11)", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.12)", "status": "completed", "conclusion": "success"},
+    {"name": "test (3.13)", "status": "completed", "conclusion": "success"}
+  ],
+  "scope": "Accepted baseline/scoring milestone only. Not CI evidence for the subsequent count-representation implementation. Remote coverage is not merged with local coverage."
+}

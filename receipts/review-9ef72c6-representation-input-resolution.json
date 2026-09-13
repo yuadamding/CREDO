@@ -1,0 +1,33 @@
+{
+  "RNA_features": 18129,
+  "adapter_sha256": "6c34a12e984f5d5028cab64e16a014bbf3ed046475f0a4ef8634ef9c07be3bd9",
+  "amendment_sha256": "409e9117691dafcaae427a4a3c1081e3770765ac89a86a8c79a770846b9175ca",
+  "execution_scope": "local_CPU_software_preflight_not_a_GPU_run_spec",
+  "fitting_rows": 7416636,
+  "fitting_shards": 607,
+  "fitting_sources": [
+    "D3_Rest",
+    "D3_Stim48hr",
+    "D4_Rest",
+    "D4_Stim48hr"
+  ],
+  "implementation_sha256": "f92830ba544e9dacda0c1bf584a5f5b73e64bd5c5511a5bce2f4127938539433",
+  "latent_dim": 48,
+  "launch_authority": false,
+  "original_package_modified": false,
+  "package_completion_sha256": "77d4fab700449ac323ff750cef6946a3185c06653891c41123fb4c76a4d5f057",
+  "protected_endpoints_opened": false,
+  "query_rows": 1983457,
+  "query_shards": 152,
+  "query_sources": [
+    "D2_Rest"
+  ],
+  "raw_count_payloads_opened": false,
+  "resolver_sha256": "5ba3a2ad0498657893c031d91d5642d76a8dcc74ca0d9bbb673ab7f65a2297ee",
+  "specification_sha256": "b50506930daa53be56c049c68dcfcec6f16e6f5fd47ae33a2247d827164951cc",
+  "status": "metadata_only_source_resolution_complete",
+  "training_launched": false,
+  "schema_version": 1,
+  "external_completion_file_sha256": "11608e9a297c9b3f23bbc6d23adcdd402ddaa36d26c009d166486a1601ad8bc5",
+  "external_preflight": "../credo_full_cohort_20260912/representation_source_preflight_20260913"
+}

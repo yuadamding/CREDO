@@ -1,0 +1,106 @@
+{
+  "$defs": {
+    "ArtifactRef": {
+      "additionalProperties": false,
+      "properties": {
+        "media_type": {
+          "title": "Media Type",
+          "type": "string"
+        },
+        "relative_uri": {
+          "title": "Relative Uri",
+          "type": "string"
+        },
+        "schema_id": {
+          "title": "Schema Id",
+          "type": "string"
+        },
+        "schema_version": {
+          "minimum": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "size_bytes": {
+          "minimum": 0,
+          "title": "Size Bytes",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "schema_id",
+        "schema_version",
+        "sha256",
+        "size_bytes",
+        "media_type",
+        "relative_uri"
+      ],
+      "title": "ArtifactRef",
+      "type": "object"
+    }
+  },
+  "$id": "https://credo.local/schemas/fold-count-representation-bundle.v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "items": {
+        "$ref": "#/$defs/ArtifactRef"
+      },
+      "title": "Artifacts",
+      "type": "array"
+    },
+    "facts": {
+      "additionalProperties": true,
+      "title": "Facts",
+      "type": "object"
+    },
+    "parents": {
+      "additionalProperties": {
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "title": "Parents",
+      "type": "object"
+    },
+    "schema_id": {
+      "const": "credo.fold_count_representation_bundle",
+      "default": "credo.fold_count_representation_bundle",
+      "title": "Schema Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "specification_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Specification Sha256",
+      "type": "string"
+    },
+    "stage": {
+      "enum": [
+        "calibration",
+        "fitted_representation",
+        "latent_cells"
+      ],
+      "title": "Stage",
+      "type": "string"
+    }
+  },
+  "required": [
+    "stage",
+    "specification_sha256",
+    "parents",
+    "artifacts",
+    "facts"
+  ],
+  "title": "RepresentationManifest",
+  "type": "object"
+}

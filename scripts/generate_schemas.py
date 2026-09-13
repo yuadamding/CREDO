@@ -146,11 +146,17 @@ from credo_count_sde_v4.contracts import (
     VirtualCanonicalCountStoreManifestV1,
     VirtualCanonicalCountStoreManifestV2,
 )
+from credo_count_sde_v4.count_representation.contracts import (
+    CountRepresentationSpec,
+    RepresentationManifest,
+)
 from credo_count_sde_v4.data.prepared_shards import PreparedAccess, PreparedEvaluationAccess
 from credo_count_sde_v4.forecast.contracts import BundleManifest, EvaluationCorrection, ForecastSpec
 from credo_count_sde_v4.reports import PerturbationDossier
 
 MODELS = {
+    "fold-count-representation-spec.v1.json": CountRepresentationSpec,
+    "fold-count-representation-bundle.v1.json": RepresentationManifest,
     "population-baseline-evaluation-correction.v1.json": EvaluationCorrection,
     "prepared-evaluation-access.v1.json": PreparedEvaluationAccess,
     "population-baseline-spec.v2.json": ForecastSpec,

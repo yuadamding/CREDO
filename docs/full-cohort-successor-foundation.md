@@ -30,7 +30,10 @@ it does not implement count-representation or neural dynamics training.
 Software allowlists explicitly do not certify physical access isolation.
 
 The first-split population-mean baseline execution and its linked scoring
-correction have now [completed](review-0cb50da-scoring-correction.md). Remaining
-stages are count representation qualification, role-scoped latent compilation, then gated
-drift/dispersion/reaction fitting and interpretation. `count_context`
-remains off. A successful engineering test is not biological advancement.
+correction have now [completed](review-0cb50da-scoring-correction.md).
+The [streamed count representation and role-scoped latent interface](fold-count-representation.md)
+now have a separate implementation and synthetic integration tests. Remaining
+stages are real-cohort representation/perturbation-preservation qualification,
+production-scale latent compilation, then gated drift/dispersion/reaction fitting
+and interpretation. `count_context` remains off. A successful engineering test
+is not biological advancement.

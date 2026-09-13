@@ -1,0 +1,525 @@
+{
+  "baseline_commit": "9ef72c64c733da8911ae58ffa3780c0c098d933c",
+  "corrected_evaluation_sha256": "0189bbf0b58c6579ad6c586c86b8a7f8766b70aaaa685dae2ccabed300e31026",
+  "metrics_sha256": "41a45bf2b89e50d4f9fd1c85e25d787aa772e4d30ad0272a52eb555765c3ae8c",
+  "expression_sha256": "f61c79a7033debdcb396db104798448e41a9ecdded053e4141675d3e32de6e59",
+  "abundance_sha256": "d7c9c9ea2a0f27e75a71afea10d90b766029c61edb55045d3bce919a8fe1dfe7",
+  "common_guides": 21487,
+  "complete_guide_catalog": 26504,
+  "common_catalog_fraction": 0.8107078176878961,
+  "outside_common_intersection": 5017,
+  "bootstrap": {
+    "draws": 2000,
+    "generator": "PCG64DXSM",
+    "posthoc_descriptive": true,
+    "scope": "conditional_on_one_observed_validation_donor_D2",
+    "seed": 0,
+    "simultaneous_intervals": false,
+    "unit": "target_after_within_target_sister_guide_mean"
+  },
+  "paired_target_comparisons": [
+    {
+      "block": "expression",
+      "candidate": "fitting_control_response",
+      "conditional_target_bootstrap_95_percentile": [
+        -9.132343834750935e-9,
+        -8.941221410240848e-9
+      ],
+      "fraction_targets_lower_error": 0.9808363853164126,
+      "mean_candidate_minus_reference": -9.039085345828616e-9,
+      "metric": "composition_mse",
+      "reference": "source_persistence",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "target_endpoint_transfer",
+      "conditional_target_bootstrap_95_percentile": [
+        -6.138042777110062e-10,
+        -5.345379298862443e-10
+      ],
+      "fraction_targets_lower_error": 0.8036794140192488,
+      "mean_candidate_minus_reference": -5.723609921477276e-10,
+      "metric": "composition_mse",
+      "reference": "guide_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        2.505786157355972e-7,
+        2.8626445978713094e-7
+      ],
+      "fraction_targets_lower_error": 0.0022996337620304914,
+      "mean_candidate_minus_reference": 2.68004115543736e-7,
+      "metric": "composition_mse",
+      "reference": "target_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        2.5000946563012064e-7,
+        2.8569793894131074e-7
+      ],
+      "fraction_targets_lower_error": 0.0015330891746869943,
+      "mean_candidate_minus_reference": 2.6743175455158824e-7,
+      "metric": "composition_mse",
+      "reference": "guide_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "fitting_control_response",
+      "conditional_target_bootstrap_95_percentile": [
+        -0.03059701440583506,
+        -0.0303164481660113
+      ],
+      "fraction_targets_lower_error": 0.9946341878885955,
+      "mean_candidate_minus_reference": -0.030460405895607598,
+      "metric": "hellinger_squared",
+      "reference": "source_persistence",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "target_endpoint_transfer",
+      "conditional_target_bootstrap_95_percentile": [
+        -0.004182047830280617,
+        -0.003740861898614648
+      ],
+      "fraction_targets_lower_error": 0.8684950174601823,
+      "mean_candidate_minus_reference": -0.003953393134961367,
+      "metric": "hellinger_squared",
+      "reference": "guide_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        0.1510968570572026,
+        0.15577029329166417
+      ],
+      "fraction_targets_lower_error": 0.0022996337620304914,
+      "mean_candidate_minus_reference": 0.1534815843104685,
+      "metric": "hellinger_squared",
+      "reference": "target_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        0.14721430799039117,
+        0.1517718558262729
+      ],
+      "fraction_targets_lower_error": 0.0018737756579507707,
+      "mean_candidate_minus_reference": 0.14952819117550714,
+      "metric": "hellinger_squared",
+      "reference": "guide_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "fitting_control_response",
+      "conditional_target_bootstrap_95_percentile": [
+        -0.00043121118573603433,
+        0.0007085284581863396
+      ],
+      "fraction_targets_lower_error": 0.5083894046503705,
+      "mean_candidate_minus_reference": 0.00014699588182579148,
+      "metric": "endpoint_control_log_effect_mse",
+      "reference": "source_persistence",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "target_endpoint_transfer",
+      "conditional_target_bootstrap_95_percentile": [
+        -0.11276963130614277,
+        -0.07781079528537738
+      ],
+      "fraction_targets_lower_error": 0.47176560769951453,
+      "mean_candidate_minus_reference": -0.09475761888050954,
+      "metric": "endpoint_control_log_effect_mse",
+      "reference": "guide_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        2.7288153600292397,
+        2.9558582445215524
+      ],
+      "fraction_targets_lower_error": 0.05970530619197683,
+      "mean_candidate_minus_reference": 2.8430476386781347,
+      "metric": "endpoint_control_log_effect_mse",
+      "reference": "target_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "expression",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        2.6380288957057734,
+        2.856412189937436
+      ],
+      "fraction_targets_lower_error": 0.054765352184652075,
+      "mean_candidate_minus_reference": 2.748290019797625,
+      "metric": "endpoint_control_log_effect_mse",
+      "reference": "guide_endpoint_transfer",
+      "targets": 11741
+    },
+    {
+      "block": "abundance",
+      "candidate": "fitting_control_response",
+      "conditional_target_bootstrap_95_percentile": [
+        0,
+        0
+      ],
+      "fraction_targets_lower_error": 0,
+      "mean_candidate_minus_reference": 0,
+      "metric": "log_frequency_squared_error",
+      "reference": "source_persistence",
+      "targets": 12779
+    },
+    {
+      "block": "abundance",
+      "candidate": "target_endpoint_transfer",
+      "conditional_target_bootstrap_95_percentile": [
+        0.5502012275942096,
+        0.6353351263627783
+      ],
+      "fraction_targets_lower_error": 0.43845371312309256,
+      "mean_candidate_minus_reference": 0.5933820560536482,
+      "metric": "log_frequency_squared_error",
+      "reference": "guide_endpoint_transfer",
+      "targets": 12779
+    },
+    {
+      "block": "abundance",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        -3.5139385915498957,
+        -3.353415421994731
+      ],
+      "fraction_targets_lower_error": 0.883402457156272,
+      "mean_candidate_minus_reference": -3.4362739798670634,
+      "metric": "log_frequency_squared_error",
+      "reference": "target_endpoint_transfer",
+      "targets": 12779
+    },
+    {
+      "block": "abundance",
+      "candidate": "hierarchical_source_response",
+      "conditional_target_bootstrap_95_percentile": [
+        -2.911893358817643,
+        -2.7745126863819642
+      ],
+      "fraction_targets_lower_error": 0.8628218170435872,
+      "mean_candidate_minus_reference": -2.842891923813415,
+      "metric": "log_frequency_squared_error",
+      "reference": "guide_endpoint_transfer",
+      "targets": 12779
+    }
+  ],
+  "baseline_metrics": {
+    "fitting_control_response": {
+      "targeting_common_support": {
+        "conditional_count_score": {
+          "conditional_cross_entropy_per_RNA_UMI": 8.51685801842522,
+          "endpoint_RNA_UMIs": 19379726599,
+          "scored_guides": 20634
+        },
+        "designed_guides": 20634,
+        "endpoint_status": {
+          "observed": 20634
+        },
+        "macro_target": {
+          "composition_mse": 8.128964063921086e-9,
+          "effect_sign_accuracy": 0.6615101452184866,
+          "endpoint_control_log_effect_mse": 4.7962324102155165,
+          "hellinger_squared": 0.06175081205733427,
+          "log1p_10000_composition_mse": 0.040571418402265746
+        },
+        "prediction_status": {
+          "predicted": 20634
+        },
+        "scored_guides": 20634,
+        "scored_targets": 11741
+      },
+      "common_count_score": {
+        "conditional_cross_entropy_per_RNA_UMI": 8.516848378931329,
+        "endpoint_RNA_UMIs": 20243714670,
+        "scored_guides": 21487
+      },
+      "abundance": {
+        "by_source_support": {
+          "0": {
+            "guides": 4133,
+            "log_frequency_RMSE": 1.0224965995862678
+          },
+          "1-19": {
+            "guides": 7825,
+            "log_frequency_RMSE": 0.9639413915544057
+          },
+          "20-99": {
+            "guides": 8968,
+            "log_frequency_RMSE": 0.4606288742470908
+          },
+          ">=100": {
+            "guides": 5578,
+            "log_frequency_RMSE": 0.308841136590671
+          }
+        },
+        "conditional_cross_entropy_per_cell": 9.26780719709257,
+        "denominator": "complete_bound_guide_catalog",
+        "guides": 26504,
+        "interval_log_effect_RMSE": 0.7274835178648559,
+        "jeffreys_KL_truth_to_prediction": 0.07304719879450718,
+        "log_frequency_RMSE": 0.7274835178648559,
+        "observed_cells": 2053058
+      }
+    },
+    "guide_endpoint_transfer": {
+      "targeting_common_support": {
+        "conditional_count_score": {
+          "conditional_cross_entropy_per_RNA_UMI": 8.486703471380205,
+          "endpoint_RNA_UMIs": 19379726599,
+          "scored_guides": 20634
+        },
+        "designed_guides": 20634,
+        "endpoint_status": {
+          "observed": 20634
+        },
+        "macro_target": {
+          "composition_mse": 5.716262830701188e-9,
+          "effect_sign_accuracy": 0.659054980184378,
+          "endpoint_control_log_effect_mse": 4.275943736746456,
+          "hellinger_squared": 0.04146779152493375,
+          "log1p_10000_composition_mse": 0.02732633821927765
+        },
+        "prediction_status": {
+          "predicted": 20634
+        },
+        "scored_guides": 20634,
+        "scored_targets": 11741
+      },
+      "common_count_score": {
+        "conditional_cross_entropy_per_RNA_UMI": 8.486671348830445,
+        "endpoint_RNA_UMIs": 20243714670,
+        "scored_guides": 21487
+      },
+      "abundance": {
+        "by_source_support": {
+          "0": {
+            "guides": 4133,
+            "log_frequency_RMSE": 2.7437537129277954
+          },
+          "1-19": {
+            "guides": 7825,
+            "log_frequency_RMSE": 2.2095562229680636
+          },
+          "20-99": {
+            "guides": 8968,
+            "log_frequency_RMSE": 1.0903172117945805
+          },
+          ">=100": {
+            "guides": 5578,
+            "log_frequency_RMSE": 1.3764493877575732
+          }
+        },
+        "conditional_cross_entropy_per_cell": 10.20655579491238,
+        "denominator": "complete_bound_guide_catalog",
+        "guides": 26504,
+        "interval_log_effect_RMSE": 1.8483270405581995,
+        "jeffreys_KL_truth_to_prediction": 1.0010127809407543,
+        "log_frequency_RMSE": 1.8483270405581995,
+        "observed_cells": 2053058
+      }
+    },
+    "hierarchical_source_response": {
+      "targeting_common_support": {
+        "conditional_count_score": {
+          "conditional_cross_entropy_per_RNA_UMI": 8.84983170726048,
+          "endpoint_RNA_UMIs": 19379726599,
+          "scored_guides": 20634
+        },
+        "designed_guides": 20634,
+        "endpoint_status": {
+          "observed": 20634
+        },
+        "macro_target": {
+          "composition_mse": 2.7314801738228946e-7,
+          "effect_sign_accuracy": 0.6817869255772152,
+          "endpoint_control_log_effect_mse": 7.024233756544081,
+          "hellinger_squared": 0.19099598270044085,
+          "log1p_10000_composition_mse": 0.10646656033556717
+        },
+        "prediction_status": {
+          "predicted": 20634
+        },
+        "scored_guides": 20634,
+        "scored_targets": 11741
+      },
+      "common_count_score": {
+        "conditional_cross_entropy_per_RNA_UMI": 8.835610975593033,
+        "endpoint_RNA_UMIs": 20243714670,
+        "scored_guides": 21487
+      },
+      "abundance": {
+        "by_source_support": {
+          "0": {
+            "guides": 4133,
+            "log_frequency_RMSE": 1.050869742531711
+          },
+          "1-19": {
+            "guides": 7825,
+            "log_frequency_RMSE": 0.9431605717176494
+          },
+          "20-99": {
+            "guides": 8968,
+            "log_frequency_RMSE": 0.4758856566165446
+          },
+          ">=100": {
+            "guides": 5578,
+            "log_frequency_RMSE": 0.36482800920371483
+          }
+        },
+        "conditional_cross_entropy_per_cell": 9.284995927269817,
+        "denominator": "complete_bound_guide_catalog",
+        "guides": 26504,
+        "interval_log_effect_RMSE": 0.7344913825313616,
+        "jeffreys_KL_truth_to_prediction": 0.09036497130940649,
+        "log_frequency_RMSE": 0.7344913825313616,
+        "observed_cells": 2053058
+      }
+    },
+    "source_persistence": {
+      "targeting_common_support": {
+        "conditional_count_score": {
+          "conditional_cross_entropy_per_RNA_UMI": 8.705511004418272,
+          "endpoint_RNA_UMIs": 19379726599,
+          "scored_guides": 20634
+        },
+        "designed_guides": 20634,
+        "endpoint_status": {
+          "observed": 20634
+        },
+        "macro_target": {
+          "composition_mse": 1.71680494097497e-8,
+          "effect_sign_accuracy": 0.695622416011951,
+          "endpoint_control_log_effect_mse": 4.796085414333691,
+          "hellinger_squared": 0.09221121795294186,
+          "log1p_10000_composition_mse": 0.06158977638806407
+        },
+        "prediction_status": {
+          "predicted": 20634
+        },
+        "scored_guides": 20634,
+        "scored_targets": 11741
+      },
+      "common_count_score": {
+        "conditional_cross_entropy_per_RNA_UMI": 8.705652582560507,
+        "endpoint_RNA_UMIs": 20243714670,
+        "scored_guides": 21487
+      },
+      "abundance": {
+        "by_source_support": {
+          "0": {
+            "guides": 4133,
+            "log_frequency_RMSE": 1.0224965995862678
+          },
+          "1-19": {
+            "guides": 7825,
+            "log_frequency_RMSE": 0.9639413915544057
+          },
+          "20-99": {
+            "guides": 8968,
+            "log_frequency_RMSE": 0.4606288742470908
+          },
+          ">=100": {
+            "guides": 5578,
+            "log_frequency_RMSE": 0.308841136590671
+          }
+        },
+        "conditional_cross_entropy_per_cell": 9.26780719709257,
+        "denominator": "complete_bound_guide_catalog",
+        "guides": 26504,
+        "interval_log_effect_RMSE": 0.7274835178648559,
+        "jeffreys_KL_truth_to_prediction": 0.07304719879450718,
+        "log_frequency_RMSE": 0.7274835178648559,
+        "observed_cells": 2053058
+      }
+    },
+    "target_endpoint_transfer": {
+      "targeting_common_support": {
+        "conditional_count_score": {
+          "conditional_cross_entropy_per_RNA_UMI": 8.472215845423877,
+          "endpoint_RNA_UMIs": 19379726599,
+          "scored_guides": 20634
+        },
+        "designed_guides": 20634,
+        "endpoint_status": {
+          "observed": 20634
+        },
+        "macro_target": {
+          "composition_mse": 5.1439018385534595e-9,
+          "effect_sign_accuracy": 0.650702296902641,
+          "endpoint_control_log_effect_mse": 4.1811861178659475,
+          "hellinger_squared": 0.03751439838997237,
+          "log1p_10000_composition_mse": 0.02467109680212368
+        },
+        "prediction_status": {
+          "predicted": 20634
+        },
+        "scored_guides": 20634,
+        "scored_targets": 11741
+      },
+      "common_count_score": {
+        "conditional_cross_entropy_per_RNA_UMI": 8.471490348235836,
+        "endpoint_RNA_UMIs": 20243714670,
+        "scored_guides": 21487
+      },
+      "abundance": {
+        "by_source_support": {
+          "0": {
+            "guides": 4133,
+            "log_frequency_RMSE": 3.319388690773066
+          },
+          "1-19": {
+            "guides": 7825,
+            "log_frequency_RMSE": 2.3482083521915293
+          },
+          "20-99": {
+            "guides": 8968,
+            "log_frequency_RMSE": 0.9978477153820369
+          },
+          ">=100": {
+            "guides": 5578,
+            "log_frequency_RMSE": 1.275019965451638
+          }
+        },
+        "conditional_cross_entropy_per_cell": 10.16688586864573,
+        "denominator": "complete_bound_guide_catalog",
+        "guides": 26504,
+        "interval_log_effect_RMSE": 2.0062906484353866,
+        "jeffreys_KL_truth_to_prediction": 0.9599602732506881,
+        "log_frequency_RMSE": 2.0062906484353866,
+        "observed_cells": 2053058
+      }
+    }
+  },
+  "changed_predictions": false,
+  "refitted": false,
+  "scoring_version": 2,
+  "external_summary": "credo_full_cohort_20260912/r48_result_review_20260913/summary.json",
+  "external_report": "credo_full_cohort_20260912/R48_SCORING_V2_REPORT.md",
+  "external_summary_sha256": "02a75d45f2dbed5cfc94fc1b8f411d39d31d4fde1ae5fe2840863416a90c1da8",
+  "external_paired_targets_sha256": "48ed4266db46988022179a915171d050949d369c03f33acf6007d583ef280fbb",
+  "external_review_script_sha256": "f3fabbfd5caba0b4d2f2dfcc5a8f85eb62857bffe476b77a62a1c4c43c0a2a3f"
+}
