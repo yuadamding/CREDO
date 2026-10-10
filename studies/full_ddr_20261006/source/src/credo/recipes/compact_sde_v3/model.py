@@ -1,0 +1,543 @@
+"""The single CREDO soft-reference dynamics model."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from dataclasses import dataclass
+from typing import Literal
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+@dataclass(frozen=True)
+class DynamicsOutput:
+    drift: torch.Tensor
+    sigma_diag: torch.Tensor
+    growth: torch.Tensor
+    programs: torch.Tensor
+
+
+def _mlp(input_dim: int, hidden_dim: int, depth: int = 2) -> nn.Sequential:
+    layers: list[nn.Module] = []
+    width = input_dim
+    for _ in range(depth):
+        layers.extend((nn.Linear(width, hidden_dim), nn.Tanh()))
+        width = hidden_dim
+    return nn.Sequential(*layers)
+
+
+class _ResidualBlock(nn.Module):
+    """Pre-normalized state/time block with a fixed depth-dependent skip scale."""
+
+    def __init__(self, width: int, depth: int) -> None:
+        super().__init__()
+        self.branch = nn.Sequential(
+            nn.LayerNorm(width),
+            nn.Linear(width, width),
+            nn.Tanh(),
+            nn.Linear(width, width),
+        )
+        self.scale = depth**-0.5
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        return hidden + self.scale * self.branch(hidden)
+
+
+def _residual_trunk(input_dim: int, hidden_dim: int, depth: int) -> nn.Sequential:
+    return nn.Sequential(
+        nn.Linear(input_dim, hidden_dim),
+        nn.Tanh(),
+        *(_ResidualBlock(hidden_dim, depth) for _ in range(depth)),
+        nn.LayerNorm(hidden_dim),
+    )
+
+
+class _TimeEmbedding(nn.Module):
+    def __init__(self, frequencies: int = 4) -> None:
+        super().__init__()
+        self.frequencies = int(frequencies)
+
+    @property
+    def output_dim(self) -> int:
+        return 1 + 2 * self.frequencies
+
+    def forward(self, tau: torch.Tensor) -> torch.Tensor:
+        tau = tau.reshape(())
+        values = [tau]
+        for frequency in range(1, self.frequencies + 1):
+            values.extend(
+                (
+                    torch.sin(frequency * torch.pi * tau),
+                    torch.cos(frequency * torch.pi * tau),
+                )
+            )
+        return torch.stack(values)
+
+
+def resolve_payoff_rank(n_programs: int, payoff_rank: int | None) -> int:
+    """Resolve the legacy default while rejecting an invalid explicit rank."""
+    programs = int(n_programs)
+    if programs < 1:
+        raise ValueError("n_programs must be positive.")
+    if payoff_rank is None:
+        return min(4, programs)
+    rank = int(payoff_rank)
+    if rank < 1:
+        raise ValueError("payoff_rank must be positive.")
+    if rank > programs:
+        raise ValueError("payoff_rank cannot exceed n_programs.")
+    return rank
+
+
+class CREDOModel(nn.Module):
+    """Soft-reference drift, diagonal diffusion, growth, and ecological payoff.
+
+    Controls are absent from the residual parameter table. Every control uses
+    one learned reference embedding exactly; noncontrols use reference plus a
+    learned residual. Ecological composition can affect growth only.
+    """
+
+    def __init__(
+        self,
+        *,
+        embedding_ids: Sequence[str],
+        control_embedding_ids: Sequence[str],
+        latent_dim: int,
+        embedding_dim: int = 8,
+        n_programs: int = 8,
+        hidden_dim: int = 128,
+        context_mode: Literal["none", "catalog_bank"] = "catalog_bank",
+        sigma_min: float = 1e-3,
+        growth_max: float = 3.0,
+        payoff_rank: int | None = None,
+        trunk_kind: Literal["mlp", "residual_mlp"] = "mlp",
+        trunk_depth: int = 2,
+    ) -> None:
+        super().__init__()
+        ids = tuple(str(value) for value in embedding_ids)
+        controls = frozenset(str(value) for value in control_embedding_ids)
+        if not ids or len(set(ids)) != len(ids):
+            raise ValueError("embedding_ids must be nonempty and unique.")
+        if not controls or not controls <= set(ids):
+            raise ValueError("control_embedding_ids must be a nonempty subset of embedding_ids.")
+        if context_mode not in {"none", "catalog_bank"}:
+            raise ValueError("context_mode must be 'none' or 'catalog_bank'.")
+        resolved_payoff_rank = resolve_payoff_rank(n_programs, payoff_rank)
+        if min(latent_dim, embedding_dim, n_programs, hidden_dim) < 1:
+            raise ValueError("Model dimensions must be positive.")
+        if sigma_min <= 0 or growth_max <= 0:
+            raise ValueError("sigma_min and growth_max must be positive.")
+        if trunk_kind not in {"mlp", "residual_mlp"}:
+            raise ValueError("trunk_kind must be 'mlp' or 'residual_mlp'.")
+        if isinstance(trunk_depth, bool) or not isinstance(trunk_depth, int) or trunk_depth < 1:
+            raise ValueError("trunk_depth must be a positive integer.")
+        self.embedding_ids = ids
+        self.control_embedding_ids = controls
+        self.noncontrol_embedding_ids = tuple(value for value in ids if value not in controls)
+        self._residual_index = {
+            value: index for index, value in enumerate(self.noncontrol_embedding_ids)
+        }
+        self._residual_index_cache: dict[tuple[tuple[str, ...], str, int | None], torch.Tensor] = {}
+        self.latent_dim = int(latent_dim)
+        self.embedding_dim = int(embedding_dim)
+        self.n_programs = int(n_programs)
+        self.hidden_dim = int(hidden_dim)
+        self.context_mode = context_mode
+        self.sigma_min = float(sigma_min)
+        self.growth_max = float(growth_max)
+        self.payoff_rank = resolved_payoff_rank
+        self.trunk_kind = trunk_kind
+        self.trunk_depth = trunk_depth
+
+        self.reference_embedding = nn.Parameter(torch.zeros(self.embedding_dim))
+        residual = torch.empty(len(self.noncontrol_embedding_ids), self.embedding_dim)
+        if residual.numel():
+            nn.init.xavier_uniform_(residual)
+        self.residual_embedding = nn.Parameter(residual)
+        self.growth_bias = nn.Parameter(torch.zeros(len(self.noncontrol_embedding_ids)))
+
+        self.program_encoder = nn.Sequential(
+            nn.Linear(self.latent_dim, self.hidden_dim),
+            nn.Tanh(),
+            nn.Linear(self.hidden_dim, self.n_programs),
+        )
+        self.time_embedding = _TimeEmbedding()
+        trunk_input = self.latent_dim + self.time_embedding.output_dim
+        trunk_factory = _mlp if trunk_kind == "mlp" else _residual_trunk
+        self.trunk = trunk_factory(trunk_input, self.hidden_dim, trunk_depth)
+
+        self.drift_reference = nn.Linear(self.hidden_dim, self.latent_dim)
+        self.drift_residual = nn.Linear(self.hidden_dim, self.latent_dim * self.embedding_dim)
+        self.sigma_reference = nn.Linear(self.hidden_dim, self.latent_dim)
+        self.sigma_residual = nn.Linear(self.hidden_dim, self.latent_dim * self.embedding_dim)
+        self.growth_reference = nn.Linear(self.hidden_dim, 1)
+        self.growth_residual = nn.Linear(self.hidden_dim, self.embedding_dim)
+
+        self.payoff_reference_left = nn.Parameter(torch.empty(self.n_programs, self.payoff_rank))
+        self.payoff_reference_right = nn.Parameter(torch.empty(self.payoff_rank, self.n_programs))
+        self.payoff_residual_left = nn.Parameter(
+            torch.zeros(self.embedding_dim, self.n_programs, self.payoff_rank)
+        )
+        self.payoff_residual_right = nn.Parameter(
+            torch.zeros(self.embedding_dim, self.payoff_rank, self.n_programs)
+        )
+        nn.init.xavier_uniform_(self.payoff_reference_left)
+        nn.init.xavier_uniform_(self.payoff_reference_right)
+        nn.init.normal_(self.payoff_residual_left, std=0.01)
+        nn.init.normal_(self.payoff_residual_right, std=0.01)
+
+        self.growth_enabled = True
+        self.context_enabled = context_mode == "catalog_bank"
+        self.assert_soft_reference()
+
+    def _residual_indices(self, embedding_ids: Sequence[str]) -> torch.Tensor:
+        ids = tuple(str(value) for value in embedding_ids)
+        device = self.reference_embedding.device
+        key = (ids, device.type, device.index)
+        cached = self._residual_index_cache.get(key)
+        if cached is not None:
+            return cached
+        indices = []
+        for value in ids:
+            if value not in self.embedding_ids:
+                raise KeyError(f"Unknown embedding_id {value!r}.")
+            indices.append(self._residual_index.get(value, -1) + 1)
+        result = torch.tensor(indices, device=device, dtype=torch.long)
+        self._residual_index_cache[key] = result
+        return result
+
+    def residuals(self, embedding_ids: Sequence[str]) -> torch.Tensor:
+        """Return exact-zero control residuals and learned noncontrol residuals."""
+        zero = self.residual_embedding.new_zeros(1, self.embedding_dim)
+        table = torch.cat((zero, self.residual_embedding), dim=0)
+        return table.index_select(0, self._residual_indices(embedding_ids))
+
+    def effective_embeddings(
+        self,
+        embedding_ids: Sequence[str],
+        residual_scale: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        residual = self.residuals(embedding_ids)
+        if residual_scale is not None:
+            scale = residual_scale.to(device=residual.device, dtype=residual.dtype).reshape(-1, 1)
+            if scale.shape[0] != residual.shape[0]:
+                raise ValueError("residual_scale must have one value per measure.")
+            residual = residual * scale
+        return self.reference_embedding.unsqueeze(0) + residual
+
+    def growth_intercepts(
+        self,
+        embedding_ids: Sequence[str],
+        residual_scale: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        table = torch.cat((self.growth_bias.new_zeros(1), self.growth_bias), dim=0)
+        output = table.index_select(0, self._residual_indices(embedding_ids))
+        if residual_scale is not None:
+            output = output * residual_scale.to(device=output.device, dtype=output.dtype)
+        return output
+
+    def programs(self, z: torch.Tensor) -> torch.Tensor:
+        return torch.softmax(self.program_encoder(z), dim=-1)
+
+    def summarize_context(
+        self,
+        z: torch.Tensor,
+        absolute_log_weight: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return per-measure log mass and within-measure program composition."""
+        if absolute_log_weight.shape != z.shape[:2]:
+            raise ValueError("absolute_log_weight must match the first two z dimensions.")
+        programs = self.programs(z)
+        absolute32 = absolute_log_weight.float()
+        log_mass = torch.logsumexp(absolute32, dim=-1)
+        normalized = torch.softmax(absolute32, dim=-1).to(dtype=z.dtype)
+        mean_program = (normalized.unsqueeze(-1) * programs).sum(dim=1)
+        return log_mass, mean_program
+
+    def compose_context(
+        self,
+        log_mass: torch.Tensor,
+        mean_program: torch.Tensor,
+        context_group_index: torch.Tensor,
+        *,
+        context_group_count: int | None = None,
+    ) -> torch.Tensor:
+        """Compose observation-derived ecological context within each group."""
+        group = context_group_index.to(device=log_mass.device, dtype=torch.long)
+        if group.ndim != 1 or len(group) != len(log_mass):
+            raise ValueError("context_group_index must have one value per measure.")
+        if context_group_count is None:
+            _, inverse = torch.unique(group, sorted=True, return_inverse=True)
+            n_groups = int(inverse.max().item()) + 1
+        else:
+            inverse = group
+            n_groups = int(context_group_count)
+            if n_groups < 1:
+                raise ValueError("context_group_count must be positive.")
+
+        if n_groups == 1:
+            frequency = torch.softmax(log_mass.float(), dim=0).to(mean_program.dtype)
+            context = (frequency.unsqueeze(-1) * mean_program).sum(0, keepdim=True)
+            return context.expand(len(log_mass), -1)
+
+        log_mass32 = log_mass.float()
+        group_max = log_mass32.new_full((n_groups,), -torch.inf).scatter_reduce(
+            0,
+            inverse,
+            log_mass32,
+            reduce="amax",
+            include_self=True,
+        )
+        unnormalized = torch.exp(log_mass32 - group_max.index_select(0, inverse))
+        normalizer = log_mass32.new_zeros(n_groups).index_add(0, inverse, unnormalized)
+        frequency = (unnormalized / normalizer.index_select(0, inverse).clamp_min(1e-30)).to(
+            mean_program.dtype
+        )
+        context_by_group = mean_program.new_zeros(n_groups, self.n_programs).index_add(
+            0,
+            inverse,
+            frequency.unsqueeze(-1) * mean_program,
+        )
+        return context_by_group[inverse]
+
+    def _modulated_head(
+        self,
+        hidden: torch.Tensor,
+        effective_embedding: torch.Tensor,
+        reference_head: nn.Linear,
+        residual_head: nn.Linear,
+        output_dim: int,
+    ) -> torch.Tensor:
+        residual_weight = residual_head.weight.reshape(
+            output_dim, self.embedding_dim, self.hidden_dim
+        )
+        effective_weight = reference_head.weight.unsqueeze(0) + torch.einsum(
+            "gr,orh->goh", effective_embedding, residual_weight
+        )
+        output = torch.bmm(hidden, effective_weight.transpose(1, 2))
+
+        if reference_head.bias is not None:
+            output = output + reference_head.bias.reshape(1, 1, output_dim)
+        if residual_head.bias is not None:
+            residual_bias = residual_head.bias.reshape(output_dim, self.embedding_dim)
+            effective_bias = torch.einsum("gr,or->go", effective_embedding, residual_bias)
+            output = output + effective_bias.unsqueeze(1)
+        return output
+
+    def _ecological_growth(
+        self,
+        programs: torch.Tensor,
+        effective_embedding: torch.Tensor,
+        context: torch.Tensor,
+    ) -> torch.Tensor:
+        reference_payoff = self.payoff_reference_left @ self.payoff_reference_right
+        residual_payoff = torch.einsum(
+            "rkp,rpj->rkj", self.payoff_residual_left, self.payoff_residual_right
+        )
+        payoff = reference_payoff.unsqueeze(0) + torch.einsum(
+            "gr,rkj->gkj", effective_embedding, residual_payoff
+        )
+        payoff_context = torch.einsum("gkj,gj->gk", payoff, context)
+        return torch.einsum("gnk,gk->gn", programs, payoff_context)
+
+    def forward(
+        self,
+        z: torch.Tensor,
+        tau: torch.Tensor,
+        embedding_ids: Sequence[str],
+        context: torch.Tensor | None = None,
+        residual_scale: torch.Tensor | None = None,
+    ) -> DynamicsOutput:
+        group_count, particle_count, _ = z.shape
+        if len(embedding_ids) != group_count:
+            raise ValueError("embedding_ids must have one value per measure.")
+        if context is None:
+            context = z.new_zeros(group_count, self.n_programs)
+        elif context.ndim == 1:
+            context = context.unsqueeze(0).expand(group_count, -1)
+        elif context.shape != (group_count, self.n_programs):
+            raise ValueError("context must have shape [n_measures, n_programs].")
+        if not self.context_enabled:
+            context = torch.zeros_like(context)
+
+        time = self.time_embedding(tau.to(device=z.device, dtype=z.dtype))
+        common = torch.cat(
+            (z, time.reshape(1, 1, -1).expand(group_count, particle_count, -1)),
+            dim=-1,
+        )
+        hidden = self.trunk(common)
+        effective = self.effective_embeddings(embedding_ids, residual_scale).to(z)
+        drift = self._modulated_head(
+            hidden,
+            effective,
+            self.drift_reference,
+            self.drift_residual,
+            self.latent_dim,
+        )
+        sigma_raw = self._modulated_head(
+            hidden,
+            effective,
+            self.sigma_reference,
+            self.sigma_residual,
+            self.latent_dim,
+        )
+        sigma_diag = F.softplus(sigma_raw) + self.sigma_min
+        programs = self.programs(z)
+        if self.growth_enabled:
+            growth_raw = self.growth_reference(hidden).squeeze(-1)
+            growth_raw = growth_raw + torch.einsum(
+                "gnr,gr->gn", self.growth_residual(hidden), effective
+            )
+            growth_raw = growth_raw + self.growth_intercepts(
+                embedding_ids, residual_scale
+            ).unsqueeze(-1)
+            if self.context_enabled:
+                growth_raw = growth_raw + self._ecological_growth(programs, effective, context)
+            growth = self.growth_max * torch.tanh(growth_raw)
+        else:
+            growth = z.new_zeros(group_count, particle_count)
+        return DynamicsOutput(drift=drift, sigma_diag=sigma_diag, growth=growth, programs=programs)
+
+    def set_trainable_tags(
+        self,
+        tags: Sequence[str],
+        *,
+        growth_enabled: bool,
+        context_enabled: bool,
+    ) -> tuple[str, ...]:
+        """Apply recipe-declared parameter groups and return trainable names."""
+        requested = tuple(str(value) for value in tags)
+        known = {
+            "reference_embedding",
+            "residual_embeddings",
+            "shared_dynamics",
+            "drift",
+            "diffusion",
+            "growth",
+            "program_encoder",
+            "ecological_payoff",
+        }
+        if unknown := set(requested) - known:
+            raise ValueError(f"Unknown compact-v3 trainable tags: {sorted(unknown)}")
+        for parameter in self.parameters():
+            parameter.requires_grad_(False)
+        self.growth_enabled = bool(growth_enabled)
+        self.context_enabled = bool(context_enabled) and self.context_mode == "catalog_bank"
+
+        if "reference_embedding" in requested:
+            self.reference_embedding.requires_grad_(True)
+        if "residual_embeddings" in requested:
+            self.residual_embedding.requires_grad_(True)
+        modules = {
+            "shared_dynamics": (self.trunk,),
+            "drift": (self.drift_reference, self.drift_residual),
+            "diffusion": (self.sigma_reference, self.sigma_residual),
+            "growth": (self.growth_reference, self.growth_residual),
+            "program_encoder": (self.program_encoder,),
+        }
+        for tag, selected in modules.items():
+            if tag in requested:
+                for module in selected:
+                    for parameter in module.parameters():
+                        parameter.requires_grad_(True)
+        if "growth" in requested:
+            self.growth_bias.requires_grad_(True)
+        if "ecological_payoff" in requested:
+            for parameter in (
+                self.payoff_reference_left,
+                self.payoff_reference_right,
+                self.payoff_residual_left,
+                self.payoff_residual_right,
+            ):
+                parameter.requires_grad_(True)
+        return tuple(name for name, parameter in self.named_parameters() if parameter.requires_grad)
+
+    def set_phase(self, phase: Literal["state", "mass", "context"]) -> None:
+        """Compatibility wrapper for the released continuation phases."""
+        phase_tags = {
+            "state": (
+                "reference_embedding",
+                "residual_embeddings",
+                "shared_dynamics",
+                "drift",
+                "diffusion",
+            ),
+            "mass": (
+                "reference_embedding",
+                "residual_embeddings",
+                "shared_dynamics",
+                "drift",
+                "diffusion",
+                "growth",
+            ),
+            "context": ("program_encoder", "ecological_payoff"),
+        }
+        if phase not in phase_tags:
+            raise ValueError(f"Unknown training phase {phase!r}.")
+        self.set_trainable_tags(
+            phase_tags[phase],
+            growth_enabled=phase != "state",
+            context_enabled=phase == "context",
+        )
+
+    def regularization(self, *, coefficient: float = 1e-4) -> torch.Tensor:
+        residual_penalty = (
+            self.residual_embedding.square().mean()
+            if self.residual_embedding.numel()
+            else self.reference_embedding.new_zeros(())
+        )
+        return float(coefficient) * (
+            self.reference_embedding.square().mean()
+            + residual_penalty
+            + self.payoff_reference_left.square().mean()
+            + self.payoff_reference_right.square().mean()
+        )
+
+    def assert_reference_branch(
+        self,
+        embedding_ids: Sequence[str],
+        reference_mask: torch.Tensor,
+    ) -> None:
+        """Assert that a reference branch removes only selected residuals."""
+        mask = reference_mask.to(device=self.reference_embedding.device, dtype=torch.bool)
+        if mask.shape != (len(embedding_ids),):
+            raise ValueError("reference_mask must have one value per embedding_id.")
+        factual = self.effective_embeddings(embedding_ids)
+        scale = (~mask).to(dtype=self.reference_embedding.dtype)
+        reference = self.effective_embeddings(embedding_ids, scale)
+        if not torch.equal(factual[~mask], reference[~mask]):
+            raise AssertionError("Reference branch changed an unselected embedding.")
+        expected = self.reference_embedding.unsqueeze(0).expand(int(mask.sum()), -1)
+        if not torch.equal(reference[mask], expected):
+            raise AssertionError("Reference branch did not remove selected residuals exactly.")
+
+    def assert_soft_reference(self) -> None:
+        controls = tuple(self.control_embedding_ids)
+        residual = self.residuals(controls)
+        if not torch.equal(residual, torch.zeros_like(residual)):
+            raise AssertionError("Control residuals must be exactly zero.")
+        effective = self.effective_embeddings(controls)
+        expected = self.reference_embedding.unsqueeze(0).expand_as(effective)
+        if not torch.equal(effective, expected):
+            raise AssertionError("All controls must share one reference embedding.")
+
+    def architecture(self) -> dict[str, object]:
+        architecture = {
+            "embedding_ids": list(self.embedding_ids),
+            "control_embedding_ids": sorted(self.control_embedding_ids),
+            "latent_dim": self.latent_dim,
+            "embedding_dim": self.embedding_dim,
+            "n_programs": self.n_programs,
+            "hidden_dim": self.hidden_dim,
+            "context_mode": self.context_mode,
+            "sigma_min": self.sigma_min,
+            "growth_max": self.growth_max,
+            "payoff_rank": self.payoff_rank,
+        }
+        # Preserve the released default checkpoint constructor identity. New
+        # structures must carry both fields so loading cannot silently use MLP2.
+        if self.trunk_kind != "mlp" or self.trunk_depth != 2:
+            architecture.update(trunk_kind=self.trunk_kind, trunk_depth=self.trunk_depth)
+        return architecture

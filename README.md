@@ -1,5 +1,10 @@
 # CREDO count-SDE v4
 
+Run-source archive: [October 2026 full-DDR study](studies/full_ddr_20261006/README.md)
+preserves the v3-derived H100 fitting and D2 forecasting code separately from
+the v4 package. It includes no biological data or trained weights and does not
+change v4 qualification or scientific claims.
+
 Current follow-up: [count-representation qualification changes](docs/review-bd2a639-count-qualification.md)
 (cross-source scheduling, objective-matched gate, explicit failed-gate stop, and CUDA tests;
 GPU execution and real-cohort calibration remain pending).
@@ -32,7 +37,8 @@ Implemented surfaces include strict hash-bound contracts, sparse count storage,
 source-only representation preparation, exact complete-denominator count
 likelihood, separate state/fitness/context channels, immutable checkpoint and
 resume, streaming inference, four-branch contrasts, one-shot evaluation, and a
-sealed aggregate. The repository contains no cohort adapter or biological data.
+sealed aggregate. The v4 package contains no cohort adapter or biological data.
+The separately authorized source-only study archive is not imported by v4.
 
 Dev27 retains the two immutable, failed T01 Hellinger candidates, passed T04
 fixed-pool particle-engine qualification, and completed T02A calibration. It

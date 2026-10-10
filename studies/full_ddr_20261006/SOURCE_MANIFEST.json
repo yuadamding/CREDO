@@ -1,0 +1,2784 @@
+{
+  "files": {
+    "architecture_fitting.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "architecture_fitting.py"
+        }
+      ],
+      "sha256": "9262d5f1eab931ba0232d3f8c2124cdd25a0c0b480bf0118fb1ddb4075226d34",
+      "size_bytes": 17606
+    },
+    "capacity_recontrol.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "capacity_recontrol.py"
+        }
+      ],
+      "sha256": "de56e96a209abc17ba5c5637b93ae627578a0fc12459bc541535f2a8a182c32c",
+      "size_bytes": 2477
+    },
+    "capacity_relaunch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "capacity_relaunch.py"
+        }
+      ],
+      "sha256": "8e1b968daeaf4143b79dbc1d1bc52e8d6dc08a4da92407ed99ea7c7f0c59eaa6",
+      "size_bytes": 4598
+    },
+    "capacity_reoperate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "capacity_reoperate.py"
+        }
+      ],
+      "sha256": "d5b2d6a4e457cdafc610670db9b2ae6dcb4484dd01bf1bc02c8368162eaa4b8a",
+      "size_bytes": 7957
+    },
+    "capacity_restatus.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "capacity_restatus.py"
+        }
+      ],
+      "sha256": "fe42448b35349b60497038a2cf3e6258043ede018942ae5d6e5ec90f0beec7d6",
+      "size_bytes": 221
+    },
+    "compiler_preflight_control.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "compiler_preflight_control.py"
+        }
+      ],
+      "sha256": "9630f45effe0c85bfd69c9be57dde5ea69906bbc90743d2958e3c9ad96b73fac",
+      "size_bytes": 6733
+    },
+    "compiler_preflight_worker.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "compiler_preflight_worker.py"
+        }
+      ],
+      "sha256": "52f631a1d9da99b6f818b6329899f10d149eafae9a285316897dc07dce088dfb",
+      "size_bytes": 1858
+    },
+    "compiler_toolchain.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "compiler_toolchain.py"
+        }
+      ],
+      "sha256": "23e3b65a0ee287aa455ef936979676df590da69c2c482e26c413587ed9f405aa",
+      "size_bytes": 12979
+    },
+    "d2_forecast.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_forecast.py"
+        }
+      ],
+      "sha256": "0c114780a6179b86e4a0385ce9caed2f21abc222441f3300406b58612fb3bf4d",
+      "size_bytes": 18233
+    },
+    "d2_forecast_control.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_forecast_control.py"
+        }
+      ],
+      "sha256": "6a7b8cdac2d8cb869a1b9bb433ae8646e418573add1a9f7dbf226bdc449ecb60",
+      "size_bytes": 12213
+    },
+    "d2_forecast_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_forecast_launch.py"
+        }
+      ],
+      "sha256": "13814c10fa1877e04b49ba3c19d799503c335573be193745f76dd73e5bf8e7c7",
+      "size_bytes": 10746
+    },
+    "d2_forecast_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_forecast_operate.py"
+        }
+      ],
+      "sha256": "0359e4aba61dacd8a0f46d7b6f834971bc68bbaaae9d2d3c94d0410e1353b474",
+      "size_bytes": 4958
+    },
+    "d2_forecast_reuse.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_forecast_reuse.py"
+        }
+      ],
+      "sha256": "506c790c44929c12a4bfbb47e9c07c3271e10efab717b2b2fbdb0b05251262ff",
+      "size_bytes": 20503
+    },
+    "d2_forecast_status.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_forecast_status.py"
+        }
+      ],
+      "sha256": "b5edc049d9f27a077c94c86b7c8143755f637c7b1d73f2503d4bdd52b4e532ab",
+      "size_bytes": 3586
+    },
+    "d2_forecast_worker.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_forecast_worker.py"
+        }
+      ],
+      "sha256": "1e12e0f373eadfe982ba7f7bcd499d6cd4c1f2d28ce9e2bf313ddca093ad8561",
+      "size_bytes": 21911
+    },
+    "d2_handoff.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "d2_handoff.py"
+        }
+      ],
+      "sha256": "67300b08f95ce986714ee19fc8c3be61335717ea3533a86b68e93cb55de4471c",
+      "size_bytes": 12560
+    },
+    "development_inputs.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "development_inputs.py"
+        }
+      ],
+      "sha256": "9e03140a153c85e02b3235466766bdc4b9761db1b0ce102b5ea62ef50a6bfad8",
+      "size_bytes": 6681
+    },
+    "encode_sources.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "encode_sources.py"
+        }
+      ],
+      "sha256": "3f66c100e1be22ef123651d7f44051ff427b3f71d1598abdbe1dc0cafe5132ba",
+      "size_bytes": 12335
+    },
+    "fitting_control.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "fitting_control.py"
+        }
+      ],
+      "sha256": "890dff0daa646306e038d51df52cd007a5ff98e9865f0a5b0bee1d334c82a95f",
+      "size_bytes": 7466
+    },
+    "fitting_gpu_stop.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "fitting_gpu_stop.py"
+        }
+      ],
+      "sha256": "fc4ee9110905f1d5fdb3d95c2bffa788f3d78c6c5ffff3c28c0169df42a8c2c0",
+      "size_bytes": 10500
+    },
+    "fitting_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "fitting_launch.py"
+        }
+      ],
+      "sha256": "4fe84d5eea66d7beb9226e755f082c60eedfe5d697611236beca3239475489e9",
+      "size_bytes": 5745
+    },
+    "fitting_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "fitting_operate.py"
+        }
+      ],
+      "sha256": "724ee1192fc4080b451f4c24a1fe90ff979be5dc62d77d8d94938a7b3075da07",
+      "size_bytes": 6006
+    },
+    "fitting_status.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "fitting_status.py"
+        }
+      ],
+      "sha256": "96d85dfad36ebf7b6c4f5bb53213ae68f6e6c4fa726e59aaaab1414c8d32d16d",
+      "size_bytes": 223
+    },
+    "fitting_worker.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "fitting_worker.py"
+        }
+      ],
+      "sha256": "05ff903ca7ab84ddfbbe1c6f2d76adfbaaf3215fdb84114345d64d527e91ec84",
+      "size_bytes": 17961
+    },
+    "frozen/d2_forecast_v5/architecture_fitting.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/architecture_fitting.py"
+        }
+      ],
+      "sha256": "9262d5f1eab931ba0232d3f8c2124cdd25a0c0b480bf0118fb1ddb4075226d34",
+      "size_bytes": 17606
+    },
+    "frozen/d2_forecast_v5/c1_contract.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/c1_contract.py"
+        }
+      ],
+      "sha256": "66538f69b302b63eab4178b6513588aaea55aa6f6874bbdbdf458bf0f0b90ac1",
+      "size_bytes": 9731
+    },
+    "frozen/d2_forecast_v5/c5_control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/c5_control.py"
+        }
+      ],
+      "sha256": "9e2b4133ba87a0bf832f6c50dd4d6c3e56eeedd4296cd3cea3d5706ca18da82b",
+      "size_bytes": 31282
+    },
+    "frozen/d2_forecast_v5/compiler_preflight_control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/compiler_preflight_control.py"
+        }
+      ],
+      "sha256": "9630f45effe0c85bfd69c9be57dde5ea69906bbc90743d2958e3c9ad96b73fac",
+      "size_bytes": 6733
+    },
+    "frozen/d2_forecast_v5/compiler_preflight_worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/compiler_preflight_worker.py"
+        }
+      ],
+      "sha256": "52f631a1d9da99b6f818b6329899f10d149eafae9a285316897dc07dce088dfb",
+      "size_bytes": 1858
+    },
+    "frozen/d2_forecast_v5/compiler_toolchain.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/compiler_toolchain.py"
+        }
+      ],
+      "sha256": "23e3b65a0ee287aa455ef936979676df590da69c2c482e26c413587ed9f405aa",
+      "size_bytes": 12979
+    },
+    "frozen/d2_forecast_v5/control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/control.py"
+        }
+      ],
+      "sha256": "6a7b8cdac2d8cb869a1b9bb433ae8646e418573add1a9f7dbf226bdc449ecb60",
+      "size_bytes": 12213
+    },
+    "frozen/d2_forecast_v5/controller/d2_forecast_control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/d2_forecast_control.py"
+        }
+      ],
+      "sha256": "6a7b8cdac2d8cb869a1b9bb433ae8646e418573add1a9f7dbf226bdc449ecb60",
+      "size_bytes": 12213
+    },
+    "frozen/d2_forecast_v5/controller/d2_forecast_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/d2_forecast_launch.py"
+        }
+      ],
+      "sha256": "13814c10fa1877e04b49ba3c19d799503c335573be193745f76dd73e5bf8e7c7",
+      "size_bytes": 10746
+    },
+    "frozen/d2_forecast_v5/controller/d2_forecast_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/d2_forecast_operate.py"
+        }
+      ],
+      "sha256": "0359e4aba61dacd8a0f46d7b6f834971bc68bbaaae9d2d3c94d0410e1353b474",
+      "size_bytes": 4958
+    },
+    "frozen/d2_forecast_v5/controller/d2_forecast_worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/d2_forecast_worker.py"
+        }
+      ],
+      "sha256": "1e12e0f373eadfe982ba7f7bcd499d6cd4c1f2d28ce9e2bf313ddca093ad8561",
+      "size_bytes": 21911
+    },
+    "frozen/d2_forecast_v5/controller/fitting_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/fitting_launch.py"
+        }
+      ],
+      "sha256": "4fe84d5eea66d7beb9226e755f082c60eedfe5d697611236beca3239475489e9",
+      "size_bytes": 5745
+    },
+    "frozen/d2_forecast_v5/controller/fitting_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/fitting_operate.py"
+        }
+      ],
+      "sha256": "724ee1192fc4080b451f4c24a1fe90ff979be5dc62d77d8d94938a7b3075da07",
+      "size_bytes": 6006
+    },
+    "frozen/d2_forecast_v5/controller/fitting_status.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/fitting_status.py"
+        }
+      ],
+      "sha256": "96d85dfad36ebf7b6c4f5bb53213ae68f6e6c4fa726e59aaaab1414c8d32d16d",
+      "size_bytes": 223
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_adam_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_adam_recovery_launch.py"
+        }
+      ],
+      "sha256": "612aea954ec8ace8af429077e1ddeabb7b07aa484a381ba7433e7c29d9d6288c",
+      "size_bytes": 9558
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_adam_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_adam_recovery_operate.py"
+        }
+      ],
+      "sha256": "6a0e9b133559a6ecba223447fb0f335eff5b3805090eb5308d88ff94bb2e688d",
+      "size_bytes": 8307
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_compiler_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_compiler_launch.py"
+        }
+      ],
+      "sha256": "41ed6e26addecd784ae5da8b07f5ceb72394a976a3f4a15fd0bd6a37fd1c91a2",
+      "size_bytes": 10028
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_compiler_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_compiler_operate.py"
+        }
+      ],
+      "sha256": "487ecac618a33df07e59f56e9793b0379ad5d61c8e0630a7eef03511935d87e4",
+      "size_bytes": 14679
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_geometry_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_geometry_recovery_launch.py"
+        }
+      ],
+      "sha256": "a393045ea1c88b8005a47930d7443999796216a78fcf866bcea0c494be3593c8",
+      "size_bytes": 10666
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_geometry_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_geometry_recovery_operate.py"
+        }
+      ],
+      "sha256": "4f8b5c1e90172e02a8cbb3a3b93e03d059156a7472e4162aef8d83c6112f37b3",
+      "size_bytes": 9273
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_recovery_launch.py"
+        }
+      ],
+      "sha256": "98e9b543f13c951acc4468e101f52302928f38ed49d12a2840e5f4fb981bac6b",
+      "size_bytes": 12449
+    },
+    "frozen/d2_forecast_v5/controller/gpu_native_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/gpu_native_recovery_operate.py"
+        }
+      ],
+      "sha256": "e8cda74b7a3876c2993c7b7a3c98844d12efc290807d439e8e80cfcb64b95895",
+      "size_bytes": 9558
+    },
+    "frozen/d2_forecast_v5/controller/prepare_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/prepare_launch.py"
+        }
+      ],
+      "sha256": "8e1ff1621245a13a850380ed9650c07c5a956f2742ee8d9db75cb4a3711f9d6d",
+      "size_bytes": 18422
+    },
+    "frozen/d2_forecast_v5/controller/prepare_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/prepare_operate.py"
+        }
+      ],
+      "sha256": "c1df140d746abc5cac4fbcaaef6b2e4a1dc713e4de056ff457989c4680b461f5",
+      "size_bytes": 16055
+    },
+    "frozen/d2_forecast_v5/controller/qualify_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/qualify_launch.py"
+        }
+      ],
+      "sha256": "fa1bcf08c10ae50a93c4d6762d5ce5116ef13bf227b15d9adc5fa8597c07309e",
+      "size_bytes": 5447
+    },
+    "frozen/d2_forecast_v5/controller/qualify_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/controller/qualify_operate.py"
+        }
+      ],
+      "sha256": "04d6d1b7894ef24149552bccd4c4563436f9beb1dad657cefff13ee916fdb899",
+      "size_bytes": 8560
+    },
+    "frozen/d2_forecast_v5/d2_forecast.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/d2_forecast.py"
+        }
+      ],
+      "sha256": "0c114780a6179b86e4a0385ce9caed2f21abc222441f3300406b58612fb3bf4d",
+      "size_bytes": 18233
+    },
+    "frozen/d2_forecast_v5/d2_forecast_reuse.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/d2_forecast_reuse.py"
+        }
+      ],
+      "sha256": "506c790c44929c12a4bfbb47e9c07c3271e10efab717b2b2fbdb0b05251262ff",
+      "size_bytes": 20503
+    },
+    "frozen/d2_forecast_v5/d2_handoff.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/d2_handoff.py"
+        }
+      ],
+      "sha256": "67300b08f95ce986714ee19fc8c3be61335717ea3533a86b68e93cb55de4471c",
+      "size_bytes": 12560
+    },
+    "frozen/d2_forecast_v5/deployment.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/deployment.py"
+        }
+      ],
+      "sha256": "1c88af69851bb00028488d714bb4fdef014cf3f3cfd20c081cd470c9d7df0ae2",
+      "size_bytes": 15744
+    },
+    "frozen/d2_forecast_v5/development_inputs.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/development_inputs.py"
+        }
+      ],
+      "sha256": "9e03140a153c85e02b3235466766bdc4b9761db1b0ce102b5ea62ef50a6bfad8",
+      "size_bytes": 6681
+    },
+    "frozen/d2_forecast_v5/encode_sources.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/encode_sources.py"
+        }
+      ],
+      "sha256": "3f66c100e1be22ef123651d7f44051ff427b3f71d1598abdbe1dc0cafe5132ba",
+      "size_bytes": 12335
+    },
+    "frozen/d2_forecast_v5/fitting_worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/fitting_worker.py"
+        }
+      ],
+      "sha256": "05ff903ca7ab84ddfbbe1c6f2d76adfbaaf3215fdb84114345d64d527e91ec84",
+      "size_bytes": 17961
+    },
+    "frozen/d2_forecast_v5/frozen_ddr.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/frozen_ddr.py"
+        }
+      ],
+      "sha256": "5de6504b0b07913aa8631b7ac0821181deeafc1fa0fef0937d87e1ae73284705",
+      "size_bytes": 5794
+    },
+    "frozen/d2_forecast_v5/full_evaluation.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/full_evaluation.py"
+        }
+      ],
+      "sha256": "a1383ed6d977f0d3e28889f995eb881d33cb634300aa4bc748d491e5f27bf165",
+      "size_bytes": 11658
+    },
+    "frozen/d2_forecast_v5/full_forecast.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/full_forecast.py"
+        }
+      ],
+      "sha256": "ea4e3436209f06d364791b5e414234af7c10e6379fa673d90c385e4b06492188",
+      "size_bytes": 22057
+    },
+    "frozen/d2_forecast_v5/geometry_evidence.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/geometry_evidence.py"
+        }
+      ],
+      "sha256": "d8f96bb62fdd1405f2da1d152a244c1a95e6d7645a9c5a893fae95279e518baa",
+      "size_bytes": 2341
+    },
+    "frozen/d2_forecast_v5/gpu_native.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/gpu_native.py"
+        }
+      ],
+      "sha256": "9aa1229b8bba69c6e3e4d49cf3c5d6cbdc23fc1097708d1ef4c92851709d1b12",
+      "size_bytes": 28704
+    },
+    "frozen/d2_forecast_v5/gpu_native_compiler_reuse.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/gpu_native_compiler_reuse.py"
+        }
+      ],
+      "sha256": "90587e790fbd65486bdf1a9dd6fd2ee81da6d4a68504df40aef9e1fca41c4267",
+      "size_bytes": 3497
+    },
+    "frozen/d2_forecast_v5/gpu_native_fitting.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/gpu_native_fitting.py"
+        }
+      ],
+      "sha256": "63f764861ad2a62bda12f14ef7c5f9ac53f40ac22f974b8958a5a97d91485e21",
+      "size_bytes": 17871
+    },
+    "frozen/d2_forecast_v5/gpu_native_inputs.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/gpu_native_inputs.py"
+        }
+      ],
+      "sha256": "b0e8d11f29a75aab100159785f19397f7c6523adaef32d681519c8a3bfae2954",
+      "size_bytes": 5478
+    },
+    "frozen/d2_forecast_v5/gpu_native_qualification.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/gpu_native_qualification.py"
+        }
+      ],
+      "sha256": "079e1fdd33d1b2e076d40676edac9774f2a7613d19585f4b237b50acd279e819",
+      "size_bytes": 27514
+    },
+    "frozen/d2_forecast_v5/gpu_v2_static.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/gpu_v2_static.py"
+        }
+      ],
+      "sha256": "0d4d597ba46815b3e146735e62d4383c004c558a057377563c70e9cd20d8c061",
+      "size_bytes": 3226
+    },
+    "frozen/d2_forecast_v5/latent_support.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/latent_support.py"
+        }
+      ],
+      "sha256": "5e89b104c9282726ba95e6af0e0f8ff81f2ee333b87bcb734aa32a3e6869189e",
+      "size_bytes": 34936
+    },
+    "frozen/d2_forecast_v5/lifecycle_core.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/lifecycle_core.py"
+        }
+      ],
+      "sha256": "3da1a0a5b0d0d26019918ee48e2ce24cd2e616272de7854f4c82ba2e37e7ebd2",
+      "size_bytes": 32932
+    },
+    "frozen/d2_forecast_v5/native_study.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/native_study.py"
+        }
+      ],
+      "sha256": "3c7e93fd0d08e406c69a469c1b191e3397892d236b5c5145c369d06f4a8c5b16",
+      "size_bytes": 22884
+    },
+    "frozen/d2_forecast_v5/neutral_admission.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/neutral_admission.py"
+        }
+      ],
+      "sha256": "f5ff6afad514228e69f889c7461f21cb3c467db1bf69a986201b7a5196401eda",
+      "size_bytes": 3791
+    },
+    "frozen/d2_forecast_v5/preparation_control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/preparation_control.py"
+        }
+      ],
+      "sha256": "af84790a084e6386720a935afa371d31adb84ceeb7f0d3a86be4ac960f704c9c",
+      "size_bytes": 8373
+    },
+    "frozen/d2_forecast_v5/prepare_manifest.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/prepare_manifest.py"
+        }
+      ],
+      "sha256": "3b475f1c1abb04daf27774cbebd3287409c12286d07ba5c6b237eb2e7bd7ce17",
+      "size_bytes": 21295
+    },
+    "frozen/d2_forecast_v5/prepare_worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/prepare_worker.py"
+        }
+      ],
+      "sha256": "0811e634bb5b577e1c1624f65932454a56c2ea6174c6e3da72ace20a8446864d",
+      "size_bytes": 24859
+    },
+    "frozen/d2_forecast_v5/publication.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/publication.py"
+        }
+      ],
+      "sha256": "f7fd535a77847be1797886850d6790b8943cc9b29b18b48e31b07c52f452cb48",
+      "size_bytes": 1166
+    },
+    "frozen/d2_forecast_v5/runtime_policy.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/runtime_policy.py"
+        }
+      ],
+      "sha256": "bbe70b8caf28f398fd939a887822df2462f5077b9cdc70ebc5a443a719485fa5",
+      "size_bytes": 1443
+    },
+    "frozen/d2_forecast_v5/selection.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/selection.py"
+        }
+      ],
+      "sha256": "0188f02883018cad61285d86cfc42486df1b90e8e1f49c1aeb1ac8c2de11ceae",
+      "size_bytes": 14008
+    },
+    "frozen/d2_forecast_v5/static_gate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/static_gate.py"
+        }
+      ],
+      "sha256": "1c11b3989fc995e5c0e5134e1b2a62b27ee77feae5a7497614e82b407a43d77e",
+      "size_bytes": 4137
+    },
+    "frozen/d2_forecast_v5/terminal_fitting.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/terminal_fitting.py"
+        }
+      ],
+      "sha256": "fd41e1ae9023a84c62a80c17dbc2721d2805e99231ba7ef7d56c258989f0825b",
+      "size_bytes": 9017
+    },
+    "frozen/d2_forecast_v5/worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/worker.py"
+        }
+      ],
+      "sha256": "1e12e0f373eadfe982ba7f7bcd499d6cd4c1f2d28ce9e2bf313ddca093ad8561",
+      "size_bytes": 21911
+    },
+    "frozen/fitting_gpu_native_v6/architecture_fitting.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/architecture_fitting.py"
+        }
+      ],
+      "sha256": "9262d5f1eab931ba0232d3f8c2124cdd25a0c0b480bf0118fb1ddb4075226d34",
+      "size_bytes": 17606
+    },
+    "frozen/fitting_gpu_native_v6/c1_contract.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/c1_contract.py"
+        }
+      ],
+      "sha256": "66538f69b302b63eab4178b6513588aaea55aa6f6874bbdbdf458bf0f0b90ac1",
+      "size_bytes": 9731
+    },
+    "frozen/fitting_gpu_native_v6/c5_control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/c5_control.py"
+        }
+      ],
+      "sha256": "9e2b4133ba87a0bf832f6c50dd4d6c3e56eeedd4296cd3cea3d5706ca18da82b",
+      "size_bytes": 31282
+    },
+    "frozen/fitting_gpu_native_v6/compiler_preflight_control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/compiler_preflight_control.py"
+        }
+      ],
+      "sha256": "9630f45effe0c85bfd69c9be57dde5ea69906bbc90743d2958e3c9ad96b73fac",
+      "size_bytes": 6733
+    },
+    "frozen/fitting_gpu_native_v6/compiler_preflight_worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/compiler_preflight_worker.py"
+        }
+      ],
+      "sha256": "52f631a1d9da99b6f818b6329899f10d149eafae9a285316897dc07dce088dfb",
+      "size_bytes": 1858
+    },
+    "frozen/fitting_gpu_native_v6/compiler_toolchain.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/compiler_toolchain.py"
+        }
+      ],
+      "sha256": "23e3b65a0ee287aa455ef936979676df590da69c2c482e26c413587ed9f405aa",
+      "size_bytes": 12979
+    },
+    "frozen/fitting_gpu_native_v6/control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/control.py"
+        }
+      ],
+      "sha256": "a429139455dde981106e0c3b093b9d03d150716baa48c7527e96280623d4d919",
+      "size_bytes": 18086
+    },
+    "frozen/fitting_gpu_native_v6/controller/fitting_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/fitting_launch.py"
+        }
+      ],
+      "sha256": "4fe84d5eea66d7beb9226e755f082c60eedfe5d697611236beca3239475489e9",
+      "size_bytes": 5745
+    },
+    "frozen/fitting_gpu_native_v6/controller/fitting_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/fitting_operate.py"
+        }
+      ],
+      "sha256": "724ee1192fc4080b451f4c24a1fe90ff979be5dc62d77d8d94938a7b3075da07",
+      "size_bytes": 6006
+    },
+    "frozen/fitting_gpu_native_v6/controller/fitting_status.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/fitting_status.py"
+        }
+      ],
+      "sha256": "96d85dfad36ebf7b6c4f5bb53213ae68f6e6c4fa726e59aaaab1414c8d32d16d",
+      "size_bytes": 223
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_adam_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_adam_recovery_launch.py"
+        }
+      ],
+      "sha256": "612aea954ec8ace8af429077e1ddeabb7b07aa484a381ba7433e7c29d9d6288c",
+      "size_bytes": 9558
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_adam_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_adam_recovery_operate.py"
+        }
+      ],
+      "sha256": "6a0e9b133559a6ecba223447fb0f335eff5b3805090eb5308d88ff94bb2e688d",
+      "size_bytes": 8307
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_compiler_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_compiler_launch.py"
+        }
+      ],
+      "sha256": "41ed6e26addecd784ae5da8b07f5ceb72394a976a3f4a15fd0bd6a37fd1c91a2",
+      "size_bytes": 10028
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_compiler_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_compiler_operate.py"
+        }
+      ],
+      "sha256": "487ecac618a33df07e59f56e9793b0379ad5d61c8e0630a7eef03511935d87e4",
+      "size_bytes": 14679
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_geometry_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_geometry_recovery_launch.py"
+        }
+      ],
+      "sha256": "a393045ea1c88b8005a47930d7443999796216a78fcf866bcea0c494be3593c8",
+      "size_bytes": 10666
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_geometry_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_geometry_recovery_operate.py"
+        }
+      ],
+      "sha256": "4f8b5c1e90172e02a8cbb3a3b93e03d059156a7472e4162aef8d83c6112f37b3",
+      "size_bytes": 9273
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_recovery_launch.py"
+        }
+      ],
+      "sha256": "98e9b543f13c951acc4468e101f52302928f38ed49d12a2840e5f4fb981bac6b",
+      "size_bytes": 12449
+    },
+    "frozen/fitting_gpu_native_v6/controller/gpu_native_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/gpu_native_recovery_operate.py"
+        }
+      ],
+      "sha256": "e8cda74b7a3876c2993c7b7a3c98844d12efc290807d439e8e80cfcb64b95895",
+      "size_bytes": 9558
+    },
+    "frozen/fitting_gpu_native_v6/controller/prepare_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/prepare_launch.py"
+        }
+      ],
+      "sha256": "8e1ff1621245a13a850380ed9650c07c5a956f2742ee8d9db75cb4a3711f9d6d",
+      "size_bytes": 18422
+    },
+    "frozen/fitting_gpu_native_v6/controller/prepare_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/prepare_operate.py"
+        }
+      ],
+      "sha256": "c1df140d746abc5cac4fbcaaef6b2e4a1dc713e4de056ff457989c4680b461f5",
+      "size_bytes": 16055
+    },
+    "frozen/fitting_gpu_native_v6/controller/qualify_launch.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/qualify_launch.py"
+        }
+      ],
+      "sha256": "fa1bcf08c10ae50a93c4d6762d5ce5116ef13bf227b15d9adc5fa8597c07309e",
+      "size_bytes": 5447
+    },
+    "frozen/fitting_gpu_native_v6/controller/qualify_operate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/controller/qualify_operate.py"
+        }
+      ],
+      "sha256": "2716dc0e3af1f16e76e3f711fc40a966a3bd4409e4c48decffe53f58989c81fc",
+      "size_bytes": 8438
+    },
+    "frozen/fitting_gpu_native_v6/deployment.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/deployment.py"
+        }
+      ],
+      "sha256": "1c88af69851bb00028488d714bb4fdef014cf3f3cfd20c081cd470c9d7df0ae2",
+      "size_bytes": 15744
+    },
+    "frozen/fitting_gpu_native_v6/development_inputs.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/development_inputs.py"
+        }
+      ],
+      "sha256": "9e03140a153c85e02b3235466766bdc4b9761db1b0ce102b5ea62ef50a6bfad8",
+      "size_bytes": 6681
+    },
+    "frozen/fitting_gpu_native_v6/encode_sources.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/encode_sources.py"
+        }
+      ],
+      "sha256": "3f66c100e1be22ef123651d7f44051ff427b3f71d1598abdbe1dc0cafe5132ba",
+      "size_bytes": 12335
+    },
+    "frozen/fitting_gpu_native_v6/fitting_worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/fitting_worker.py"
+        }
+      ],
+      "sha256": "05ff903ca7ab84ddfbbe1c6f2d76adfbaaf3215fdb84114345d64d527e91ec84",
+      "size_bytes": 17961
+    },
+    "frozen/fitting_gpu_native_v6/geometry_evidence.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/geometry_evidence.py"
+        }
+      ],
+      "sha256": "d8f96bb62fdd1405f2da1d152a244c1a95e6d7645a9c5a893fae95279e518baa",
+      "size_bytes": 2341
+    },
+    "frozen/fitting_gpu_native_v6/gpu_native.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/gpu_native.py"
+        }
+      ],
+      "sha256": "9aa1229b8bba69c6e3e4d49cf3c5d6cbdc23fc1097708d1ef4c92851709d1b12",
+      "size_bytes": 28704
+    },
+    "frozen/fitting_gpu_native_v6/gpu_native_compiler_reuse.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/gpu_native_compiler_reuse.py"
+        }
+      ],
+      "sha256": "90587e790fbd65486bdf1a9dd6fd2ee81da6d4a68504df40aef9e1fca41c4267",
+      "size_bytes": 3497
+    },
+    "frozen/fitting_gpu_native_v6/gpu_native_fitting.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/gpu_native_fitting.py"
+        }
+      ],
+      "sha256": "63f764861ad2a62bda12f14ef7c5f9ac53f40ac22f974b8958a5a97d91485e21",
+      "size_bytes": 17871
+    },
+    "frozen/fitting_gpu_native_v6/gpu_native_inputs.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/gpu_native_inputs.py"
+        }
+      ],
+      "sha256": "b0e8d11f29a75aab100159785f19397f7c6523adaef32d681519c8a3bfae2954",
+      "size_bytes": 5478
+    },
+    "frozen/fitting_gpu_native_v6/gpu_native_qualification.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/gpu_native_qualification.py"
+        }
+      ],
+      "sha256": "079e1fdd33d1b2e076d40676edac9774f2a7613d19585f4b237b50acd279e819",
+      "size_bytes": 27514
+    },
+    "frozen/fitting_gpu_native_v6/gpu_v2_static.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/gpu_v2_static.py"
+        }
+      ],
+      "sha256": "0d4d597ba46815b3e146735e62d4383c004c558a057377563c70e9cd20d8c061",
+      "size_bytes": 3226
+    },
+    "frozen/fitting_gpu_native_v6/latent_support.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/latent_support.py"
+        }
+      ],
+      "sha256": "5e89b104c9282726ba95e6af0e0f8ff81f2ee333b87bcb734aa32a3e6869189e",
+      "size_bytes": 34936
+    },
+    "frozen/fitting_gpu_native_v6/lifecycle_core.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/lifecycle_core.py"
+        }
+      ],
+      "sha256": "3da1a0a5b0d0d26019918ee48e2ce24cd2e616272de7854f4c82ba2e37e7ebd2",
+      "size_bytes": 32932
+    },
+    "frozen/fitting_gpu_native_v6/native_study.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/native_study.py"
+        }
+      ],
+      "sha256": "3c7e93fd0d08e406c69a469c1b191e3397892d236b5c5145c369d06f4a8c5b16",
+      "size_bytes": 22884
+    },
+    "frozen/fitting_gpu_native_v6/neutral_admission.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/neutral_admission.py"
+        }
+      ],
+      "sha256": "f5ff6afad514228e69f889c7461f21cb3c467db1bf69a986201b7a5196401eda",
+      "size_bytes": 3791
+    },
+    "frozen/fitting_gpu_native_v6/preparation_control.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/preparation_control.py"
+        }
+      ],
+      "sha256": "af84790a084e6386720a935afa371d31adb84ceeb7f0d3a86be4ac960f704c9c",
+      "size_bytes": 8373
+    },
+    "frozen/fitting_gpu_native_v6/prepare_manifest.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/prepare_manifest.py"
+        }
+      ],
+      "sha256": "3b475f1c1abb04daf27774cbebd3287409c12286d07ba5c6b237eb2e7bd7ce17",
+      "size_bytes": 21295
+    },
+    "frozen/fitting_gpu_native_v6/prepare_worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/prepare_worker.py"
+        }
+      ],
+      "sha256": "0811e634bb5b577e1c1624f65932454a56c2ea6174c6e3da72ace20a8446864d",
+      "size_bytes": 24859
+    },
+    "frozen/fitting_gpu_native_v6/publication.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/publication.py"
+        }
+      ],
+      "sha256": "844e8c47604fbc184ba1651e0538d779a9f9b290632d53201ad0104cecd3a82e",
+      "size_bytes": 1187
+    },
+    "frozen/fitting_gpu_native_v6/runtime_policy.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/runtime_policy.py"
+        }
+      ],
+      "sha256": "bbe70b8caf28f398fd939a887822df2462f5077b9cdc70ebc5a443a719485fa5",
+      "size_bytes": 1443
+    },
+    "frozen/fitting_gpu_native_v6/selection.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/selection.py"
+        }
+      ],
+      "sha256": "0188f02883018cad61285d86cfc42486df1b90e8e1f49c1aeb1ac8c2de11ceae",
+      "size_bytes": 14008
+    },
+    "frozen/fitting_gpu_native_v6/static_gate.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/static_gate.py"
+        }
+      ],
+      "sha256": "1c11b3989fc995e5c0e5134e1b2a62b27ee77feae5a7497614e82b407a43d77e",
+      "size_bytes": 4137
+    },
+    "frozen/fitting_gpu_native_v6/terminal_fitting.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/terminal_fitting.py"
+        }
+      ],
+      "sha256": "fd41e1ae9023a84c62a80c17dbc2721d2805e99231ba7ef7d56c258989f0825b",
+      "size_bytes": 9017
+    },
+    "frozen/fitting_gpu_native_v6/worker.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/worker.py"
+        }
+      ],
+      "sha256": "4d979d0d1fc69ad382eee84e90c40612079f09d7ad121d9e6fb83444813ca322",
+      "size_bytes": 24660
+    },
+    "frozen_ddr.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "frozen_ddr.py"
+        }
+      ],
+      "sha256": "5de6504b0b07913aa8631b7ac0821181deeafc1fa0fef0937d87e1ae73284705",
+      "size_bytes": 5794
+    },
+    "full_evaluation.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "full_evaluation.py"
+        }
+      ],
+      "sha256": "a1383ed6d977f0d3e28889f995eb881d33cb634300aa4bc748d491e5f27bf165",
+      "size_bytes": 11658
+    },
+    "full_forecast.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "full_forecast.py"
+        }
+      ],
+      "sha256": "ea4e3436209f06d364791b5e414234af7c10e6379fa673d90c385e4b06492188",
+      "size_bytes": 22057
+    },
+    "geometry_evidence.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "geometry_evidence.py"
+        }
+      ],
+      "sha256": "d8f96bb62fdd1405f2da1d152a244c1a95e6d7645a9c5a893fae95279e518baa",
+      "size_bytes": 2341
+    },
+    "gpu_native.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native.py"
+        }
+      ],
+      "sha256": "9aa1229b8bba69c6e3e4d49cf3c5d6cbdc23fc1097708d1ef4c92851709d1b12",
+      "size_bytes": 28704
+    },
+    "gpu_native_adam_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_adam_recovery_launch.py"
+        }
+      ],
+      "sha256": "612aea954ec8ace8af429077e1ddeabb7b07aa484a381ba7433e7c29d9d6288c",
+      "size_bytes": 9558
+    },
+    "gpu_native_adam_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_adam_recovery_operate.py"
+        }
+      ],
+      "sha256": "6a0e9b133559a6ecba223447fb0f335eff5b3805090eb5308d88ff94bb2e688d",
+      "size_bytes": 8307
+    },
+    "gpu_native_benchmark.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_benchmark.py"
+        }
+      ],
+      "sha256": "a25209c60c102d131c480062857f4fef4c5070669bcefc89fc529f700fa6f66b",
+      "size_bytes": 15829
+    },
+    "gpu_native_compiler_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_compiler_launch.py"
+        }
+      ],
+      "sha256": "41ed6e26addecd784ae5da8b07f5ceb72394a976a3f4a15fd0bd6a37fd1c91a2",
+      "size_bytes": 10028
+    },
+    "gpu_native_compiler_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_compiler_operate.py"
+        }
+      ],
+      "sha256": "487ecac618a33df07e59f56e9793b0379ad5d61c8e0630a7eef03511935d87e4",
+      "size_bytes": 14679
+    },
+    "gpu_native_compiler_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_compiler_recovery_launch.py"
+        }
+      ],
+      "sha256": "9ddd3b58fded39bd50bea9eb675d165c40f11aa53716030150ae6e7ebb7cfed7",
+      "size_bytes": 2502
+    },
+    "gpu_native_compiler_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_compiler_recovery_operate.py"
+        }
+      ],
+      "sha256": "2ca679602f5868564c02e74acbbe940c9bd1033c29fff0df4502cb49f20e7e45",
+      "size_bytes": 4537
+    },
+    "gpu_native_compiler_reuse.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_compiler_reuse.py"
+        }
+      ],
+      "sha256": "90587e790fbd65486bdf1a9dd6fd2ee81da6d4a68504df40aef9e1fca41c4267",
+      "size_bytes": 3497
+    },
+    "gpu_native_control.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_control.py"
+        }
+      ],
+      "sha256": "a429139455dde981106e0c3b093b9d03d150716baa48c7527e96280623d4d919",
+      "size_bytes": 18086
+    },
+    "gpu_native_fitting.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_fitting.py"
+        }
+      ],
+      "sha256": "63f764861ad2a62bda12f14ef7c5f9ac53f40ac22f974b8958a5a97d91485e21",
+      "size_bytes": 17871
+    },
+    "gpu_native_geometry_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_geometry_recovery_launch.py"
+        }
+      ],
+      "sha256": "a393045ea1c88b8005a47930d7443999796216a78fcf866bcea0c494be3593c8",
+      "size_bytes": 10666
+    },
+    "gpu_native_geometry_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_geometry_recovery_operate.py"
+        }
+      ],
+      "sha256": "4f8b5c1e90172e02a8cbb3a3b93e03d059156a7472e4162aef8d83c6112f37b3",
+      "size_bytes": 9273
+    },
+    "gpu_native_inputs.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_inputs.py"
+        }
+      ],
+      "sha256": "b0e8d11f29a75aab100159785f19397f7c6523adaef32d681519c8a3bfae2954",
+      "size_bytes": 5478
+    },
+    "gpu_native_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_launch.py"
+        }
+      ],
+      "sha256": "e3a224e318013caf0e4cc7308f27670be312a73648d37944be6d96f8282a0e2d",
+      "size_bytes": 9957
+    },
+    "gpu_native_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_operate.py"
+        }
+      ],
+      "sha256": "c9a5482b5bdbcb2de535a5cdf8195e2953d9ecc17bd4eeaf5f591c63c6d224bf",
+      "size_bytes": 6449
+    },
+    "gpu_native_qualification.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_qualification.py"
+        }
+      ],
+      "sha256": "079e1fdd33d1b2e076d40676edac9774f2a7613d19585f4b237b50acd279e819",
+      "size_bytes": 27514
+    },
+    "gpu_native_recovery_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_recovery_launch.py"
+        }
+      ],
+      "sha256": "98e9b543f13c951acc4468e101f52302928f38ed49d12a2840e5f4fb981bac6b",
+      "size_bytes": 12449
+    },
+    "gpu_native_recovery_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_recovery_operate.py"
+        }
+      ],
+      "sha256": "e8cda74b7a3876c2993c7b7a3c98844d12efc290807d439e8e80cfcb64b95895",
+      "size_bytes": 9558
+    },
+    "gpu_native_worker.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "gpu_native_worker.py"
+        }
+      ],
+      "sha256": "4d979d0d1fc69ad382eee84e90c40612079f09d7ad121d9e6fb83444813ca322",
+      "size_bytes": 24660
+    },
+    "latent_support.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "latent_support.py"
+        }
+      ],
+      "sha256": "5e89b104c9282726ba95e6af0e0f8ff81f2ee333b87bcb734aa32a3e6869189e",
+      "size_bytes": 34936
+    },
+    "memory_qualification.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "memory_qualification.py"
+        }
+      ],
+      "sha256": "63324a8019ce1c0bf6d4181b0beca7751bbf0e65762de3f6804c9579339fef95",
+      "size_bytes": 10730
+    },
+    "native_study.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "native_study.py"
+        }
+      ],
+      "sha256": "3c7e93fd0d08e406c69a469c1b191e3397892d236b5c5145c369d06f4a8c5b16",
+      "size_bytes": 22884
+    },
+    "preparation_control.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "preparation_control.py"
+        }
+      ],
+      "sha256": "af84790a084e6386720a935afa371d31adb84ceeb7f0d3a86be4ac960f704c9c",
+      "size_bytes": 8373
+    },
+    "prepare_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "prepare_launch.py"
+        }
+      ],
+      "sha256": "8e1ff1621245a13a850380ed9650c07c5a956f2742ee8d9db75cb4a3711f9d6d",
+      "size_bytes": 18422
+    },
+    "prepare_manifest.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "prepare_manifest.py"
+        }
+      ],
+      "sha256": "3b475f1c1abb04daf27774cbebd3287409c12286d07ba5c6b237eb2e7bd7ce17",
+      "size_bytes": 21295
+    },
+    "prepare_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "prepare_operate.py"
+        }
+      ],
+      "sha256": "c1df140d746abc5cac4fbcaaef6b2e4a1dc713e4de056ff457989c4680b461f5",
+      "size_bytes": 16055
+    },
+    "prepare_status.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "prepare_status.py"
+        }
+      ],
+      "sha256": "2ffcdeb7f8609adae50fbf5e39c41ede93b04365ace33a6944bc234552c4f5b4",
+      "size_bytes": 5606
+    },
+    "prepare_worker.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "prepare_worker.py"
+        }
+      ],
+      "sha256": "0811e634bb5b577e1c1624f65932454a56c2ea6174c6e3da72ace20a8446864d",
+      "size_bytes": 24859
+    },
+    "qualify_control.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "qualify_control.py"
+        }
+      ],
+      "sha256": "1efb56573bcf62219306c1cd21447db4cfb8931e7ab65a34a5801efbeb506210",
+      "size_bytes": 3479
+    },
+    "qualify_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "qualify_launch.py"
+        }
+      ],
+      "sha256": "fa1bcf08c10ae50a93c4d6762d5ce5116ef13bf227b15d9adc5fa8597c07309e",
+      "size_bytes": 5447
+    },
+    "qualify_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "qualify_operate.py"
+        }
+      ],
+      "sha256": "04d6d1b7894ef24149552bccd4c4563436f9beb1dad657cefff13ee916fdb899",
+      "size_bytes": 8560
+    },
+    "qualify_status.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "qualify_status.py"
+        }
+      ],
+      "sha256": "4095da2e165bdfe0cc42fa13864099cc12f44e8fde68d73a67a4411d34700cb8",
+      "size_bytes": 216
+    },
+    "qualify_worker.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "qualify_worker.py"
+        }
+      ],
+      "sha256": "30d75c57269da0b9d2e6927eae2ee1e7f38766b7ae9d498416f86c709c0abe30",
+      "size_bytes": 8496
+    },
+    "selection.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "selection.py"
+        }
+      ],
+      "sha256": "0188f02883018cad61285d86cfc42486df1b90e8e1f49c1aeb1ac8c2de11ceae",
+      "size_bytes": 14008
+    },
+    "source/LICENSE": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/LICENSE"
+        }
+      ],
+      "sha256": "76a97c878c9c7a8321bb395c2b44d3fe2f8d81314d219b20138ed0e2dddd5182",
+      "size_bytes": 34520
+    },
+    "source/examples/synthetic/config.yaml": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/examples/synthetic/config.yaml"
+        }
+      ],
+      "sha256": "22d1da3297ed50b78129ecdb2e1127723bde61024564800fcebce225799acc90",
+      "size_bytes": 907
+    },
+    "source/examples/synthetic/generate.py": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/examples/synthetic/generate.py"
+        }
+      ],
+      "sha256": "dbe99e6c9b259a0e2384856d106f8a70ae2fd0b52685e235d66b7eb85f8192f8",
+      "size_bytes": 5914
+    },
+    "source/pyproject.toml": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/pyproject.toml"
+        }
+      ],
+      "sha256": "c49ea2b64cc503b49320980770adc146c4886c1a227c23e8ca2a1ad244ef98f5",
+      "size_bytes": 2118
+    },
+    "source/src/credo/__init__.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/__init__.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/__init__.py"
+        }
+      ],
+      "sha256": "4bed0d08cf943f251cb9f39a9c89afeb58afcbba9907f40218c7444e5c61e8f5",
+      "size_bytes": 2300
+    },
+    "source/src/credo/artifacts.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/artifacts.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/artifacts.py"
+        }
+      ],
+      "sha256": "f8191474dccb2d5086b7558953d604ed548d18347f3fb2a34a3bee80d52579a9",
+      "size_bytes": 23092
+    },
+    "source/src/credo/cli.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/cli.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/cli.py"
+        }
+      ],
+      "sha256": "298d35ca827bc0fa98656eb24802214ce35a51dfa5f0a65fd705b36da2a7b619",
+      "size_bytes": 11407
+    },
+    "source/src/credo/contracts.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/contracts.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/contracts.py"
+        }
+      ],
+      "sha256": "119c23dd14c5c502d40dfe2a654f173cae3087bf34d6570b14808fc23e025689",
+      "size_bytes": 40142
+    },
+    "source/src/credo/counterfactual.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/counterfactual.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/counterfactual.py"
+        }
+      ],
+      "sha256": "4b18e19eda1943051a8f3e0f6abd6781e172bc6e014eaecaf9c50eb68f526af2",
+      "size_bytes": 13782
+    },
+    "source/src/credo/data/__init__.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/__init__.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/__init__.py"
+        }
+      ],
+      "sha256": "c7f35c212ccc2da823c91c2fd15480d3f419b97ea24cccefae7d40e02aad3702",
+      "size_bytes": 3978
+    },
+    "source/src/credo/data/codecs.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/codecs.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/codecs.py"
+        }
+      ],
+      "sha256": "ccc9a757d4b50c32842be2b13e47c644f0b266784985fad373c33e6d90c3882a",
+      "size_bytes": 4326
+    },
+    "source/src/credo/data/design.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/design.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/design.py"
+        }
+      ],
+      "sha256": "8ec9d972ed60602740951f004e2e9e5cba3025fff8c0aac71f3169fdc78f759b",
+      "size_bytes": 17621
+    },
+    "source/src/credo/data/legacy.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/legacy.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/legacy.py"
+        }
+      ],
+      "sha256": "00049b54778d023dabf662cf25da84878c1ec901138711781233c9e9dfb918db",
+      "size_bytes": 31096
+    },
+    "source/src/credo/data/native.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/native.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/native.py"
+        }
+      ],
+      "sha256": "b0f3da2128002e8f5e65e07a0a5e2f609b5d0ab91a97d134e3b00d67b7cd7db2",
+      "size_bytes": 29601
+    },
+    "source/src/credo/data/native_v4.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/native_v4.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/native_v4.py"
+        }
+      ],
+      "sha256": "dba3619f0ad7c671df9be8c82ca856e7a367b14688d88804c6ea864e726de35a",
+      "size_bytes": 36826
+    },
+    "source/src/credo/data/representations.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/representations.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/representations.py"
+        }
+      ],
+      "sha256": "ad786ee080389bbe850bc10aca888dc0190afb54b6f1295c7a30419f7033553c",
+      "size_bytes": 8687
+    },
+    "source/src/credo/data/splits.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/splits.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/splits.py"
+        }
+      ],
+      "sha256": "d9454ded309bb0bf88cf0ee076a8ca6f3c7c8f8ee72481f0f85665cb8f3d894e",
+      "size_bytes": 66988
+    },
+    "source/src/credo/data/study.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/study.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/study.py"
+        }
+      ],
+      "sha256": "6cf523227017781a4b3c59acfa8083cff1f716e74356b7fff02364129ad161e8",
+      "size_bytes": 56388
+    },
+    "source/src/credo/data/support.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/support.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/support.py"
+        }
+      ],
+      "sha256": "098ce1545e9f936dde9b149b21624c289c2da4f8a87dd4462404481cdcd9cd29",
+      "size_bytes": 13935
+    },
+    "source/src/credo/data/tables.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/tables.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/tables.py"
+        }
+      ],
+      "sha256": "2b48e4f7d528d31b91cd1bb3c2c9676a48d311e1c45a238e60d0193b44da3ef2",
+      "size_bytes": 34982
+    },
+    "source/src/credo/data/validation.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/data/validation.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/data/validation.py"
+        }
+      ],
+      "sha256": "ad145edda97377807f5687ec07fb4ce967846aaaeb276df209caf510452bc33a",
+      "size_bytes": 2355
+    },
+    "source/src/credo/evaluation.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/evaluation.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/evaluation.py"
+        }
+      ],
+      "sha256": "ad1fcd410b98481d17b8734d6bc2e88a7102da8f1b4a5c2995701b79072b9819",
+      "size_bytes": 9001
+    },
+    "source/src/credo/io.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/io.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/io.py"
+        }
+      ],
+      "sha256": "cda19e2893a41ee25a59e69db9cd5e4f334ce3183449ac0d1a015d864eb3a71c",
+      "size_bytes": 48973
+    },
+    "source/src/credo/lps/__init__.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/lps/__init__.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/lps/__init__.py"
+        }
+      ],
+      "sha256": "66d9e123301b4abe8bfab662c14ae73620cb88b9000da1e518484ffcd81ff15e",
+      "size_bytes": 2113
+    },
+    "source/src/credo/lps/study.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/lps/study.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/lps/study.py"
+        }
+      ],
+      "sha256": "bfe6ee4bd2d81faa08308d4fe4ee24003fd1f04d0dc058daa5bd82e89b2f0d25",
+      "size_bytes": 69101
+    },
+    "source/src/credo/model.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/model.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/model.py"
+        }
+      ],
+      "sha256": "54bfdc6828bceaea0e42a93641723c921fe8a5bb81ad2ed801276ebfea540dcf",
+      "size_bytes": 239
+    },
+    "source/src/credo/objective.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/objective.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/objective.py"
+        }
+      ],
+      "sha256": "a2687f1b749c1c978279568b19c8f0a1a74f69aaeb16d94f8819ba6b9cbb7a4f",
+      "size_bytes": 251
+    },
+    "source/src/credo/particles.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/particles.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/particles.py"
+        }
+      ],
+      "sha256": "eab90b297c6b0fbadbccb6b0cb70c1b304cba77e0fba92db16365b49a2979296",
+      "size_bytes": 257
+    },
+    "source/src/credo/problems/__init__.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/problems/__init__.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/problems/__init__.py"
+        }
+      ],
+      "sha256": "589cc287089e70404a9cbafdfef7a9629d427bf9e0af75b888ec7f15ad30d00a",
+      "size_bytes": 689
+    },
+    "source/src/credo/problems/base.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/problems/base.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/problems/base.py"
+        }
+      ],
+      "sha256": "c5eb328d0c05fa4b715067b3fa500fdb4cc8dd704866c283aca5c67267cc47a6",
+      "size_bytes": 3846
+    },
+    "source/src/credo/problems/finite_measure.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/problems/finite_measure.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/problems/finite_measure.py"
+        }
+      ],
+      "sha256": "361698eb7d146d6d1856f84c21268ca18fbdf690e37fd4af4cd4e4df9067c0da",
+      "size_bytes": 2960
+    },
+    "source/src/credo/recipes/__init__.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/__init__.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/__init__.py"
+        }
+      ],
+      "sha256": "0a4ac7caa0a9c60087d124db9a43ff40c735a1ff394a67efa13b03079702d302",
+      "size_bytes": 72
+    },
+    "source/src/credo/recipes/compact_sde_v3/__init__.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/compact_sde_v3/__init__.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/compact_sde_v3/__init__.py"
+        }
+      ],
+      "sha256": "b4422ce0b6117c966679e08a00f0a28bb960282ebe6f3f63b925acce6437299f",
+      "size_bytes": 181
+    },
+    "source/src/credo/recipes/compact_sde_v3/model.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/compact_sde_v3/model.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/compact_sde_v3/model.py"
+        }
+      ],
+      "sha256": "900d06686a14c047690855d87b147c08b0c8db1611b7957dfa57f9abfe476f24",
+      "size_bytes": 22890
+    },
+    "source/src/credo/recipes/compact_sde_v3/objective.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/compact_sde_v3/objective.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/compact_sde_v3/objective.py"
+        }
+      ],
+      "sha256": "8163aad78ddfc78c180dc91d24ed6d1ce3eebd69f67fca4805d831f9ed4facb7",
+      "size_bytes": 35833
+    },
+    "source/src/credo/recipes/compact_sde_v3/particles.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/compact_sde_v3/particles.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/compact_sde_v3/particles.py"
+        }
+      ],
+      "sha256": "c19c131635b3351066bf6a96c835b855d0857a676a1a0128f8a5ff8ca20433b5",
+      "size_bytes": 18124
+    },
+    "source/src/credo/recipes/compact_sde_v3/recipe.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/compact_sde_v3/recipe.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/compact_sde_v3/recipe.py"
+        }
+      ],
+      "sha256": "b62d57e1407414124b748f1d529d0141d082b678ec6d2f5154bcde57028e3c01",
+      "size_bytes": 22666
+    },
+    "source/src/credo/recipes/compact_sde_v3/training.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/compact_sde_v3/training.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/compact_sde_v3/training.py"
+        }
+      ],
+      "sha256": "be155ea42f77711c3f97d02fff079c8128710f9e56f89bfd9e6d2490163a2dde",
+      "size_bytes": 91443
+    },
+    "source/src/credo/recipes/compact_v3.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/compact_v3.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/compact_v3.py"
+        }
+      ],
+      "sha256": "bd5be7870dc95d64b9dd791ad37053fa4c8f9f7c5b8ba16ff47b1cf25874e1cd",
+      "size_bytes": 213
+    },
+    "source/src/credo/recipes/trajectory_compiler.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/trajectory_compiler.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/trajectory_compiler.py"
+        }
+      ],
+      "sha256": "812cfe297efc94177a42b4f252c51a07d1aff5be1a0d3e8353b652a2940bfac2",
+      "size_bytes": 50445
+    },
+    "source/src/credo/recipes/transformer_v2/__init__.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/transformer_v2/__init__.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/transformer_v2/__init__.py"
+        }
+      ],
+      "sha256": "9ebf102b9529d20212b3c232a06c4627e53ac05487823655d19a12dfd8d492d7",
+      "size_bytes": 173
+    },
+    "source/src/credo/recipes/transformer_v2/importer.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/transformer_v2/importer.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/transformer_v2/importer.py"
+        }
+      ],
+      "sha256": "da81ab92b74f18e04b4c6545a12ffe855e704ac2de584749862524cce184e41d",
+      "size_bytes": 45179
+    },
+    "source/src/credo/recipes/transformer_v2/inference.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/transformer_v2/inference.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/transformer_v2/inference.py"
+        }
+      ],
+      "sha256": "21519016a53c6ad51054ade4def28bdbe46dd9689e0cd687d6f85eef4ebb46f8",
+      "size_bytes": 13257
+    },
+    "source/src/credo/recipes/transformer_v2/model.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/transformer_v2/model.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/transformer_v2/model.py"
+        }
+      ],
+      "sha256": "ea0ae6ded412c8472ed6c78f76305bab8dce87799aa7e07e41b0c59a5107cbff",
+      "size_bytes": 39730
+    },
+    "source/src/credo/recipes/transformer_v2/recipe.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/transformer_v2/recipe.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/transformer_v2/recipe.py"
+        }
+      ],
+      "sha256": "20d7d30fcae5b2116d47c19d7d053d4f273a56d08c886407f4cb8774abddd38a",
+      "size_bytes": 20672
+    },
+    "source/src/credo/recipes/transformer_v2/vae.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/transformer_v2/vae.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/transformer_v2/vae.py"
+        }
+      ],
+      "sha256": "b665ab6d92ce0d8551a582eba6f1724f6f53ffcc928d4a616a0212a20a92c0e5",
+      "size_bytes": 2040
+    },
+    "source/src/credo/recipes/transformer_v2/weak_form.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/recipes/transformer_v2/weak_form.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/recipes/transformer_v2/weak_form.py"
+        }
+      ],
+      "sha256": "5f4c33cc3c5fab4d6fdb2640254ef1556cef81d5a4c028b680e8146c94cbc33c",
+      "size_bytes": 5342
+    },
+    "source/src/credo/registry.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/registry.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/registry.py"
+        }
+      ],
+      "sha256": "4383ea3401e5ed3420715b1b0a0a58b5964a789d3fcb3fb7b6bfebf3bb6edb72",
+      "size_bytes": 3631
+    },
+    "source/src/credo/runtime.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/runtime.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/runtime.py"
+        }
+      ],
+      "sha256": "17b57d6c2ed18ddec0c4cfe841eb69d46501d5ed546763c064e51862ed239455",
+      "size_bytes": 47079
+    },
+    "source/src/credo/training.py": {
+      "origins": [
+        {
+          "authority": "frozen_build_inventory",
+          "path": "fitting_gpu_native_v6/bundle/source/src/credo/training.py"
+        },
+        {
+          "authority": "frozen_build_inventory",
+          "path": "d2_forecast_v5/bundle/source/src/credo/training.py"
+        }
+      ],
+      "sha256": "ebca6eb8eadb296fbffa4bde281d40d90817934e56c602f532715e4629f671d2",
+      "size_bytes": 247
+    },
+    "source/tests/__init__.py": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/tests/__init__.py"
+        }
+      ],
+      "sha256": "22f0e7696ca73371c1dc3cb25a30298171ecc08be5a602d8a37174265b5f7346",
+      "size_bytes": 26
+    },
+    "source/tests/conftest.py": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/tests/conftest.py"
+        }
+      ],
+      "sha256": "bffcbeef91fcd9ecf3d63d521e506e0251d7fc67867d020acf27b6ea76918059",
+      "size_bytes": 2354
+    },
+    "source/tests/test_absolute_weight_memory.py": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/tests/test_absolute_weight_memory.py"
+        }
+      ],
+      "sha256": "69db036e0db070cc8235b46b0ac4602519823c10db80790764eb2694401dce49",
+      "size_bytes": 5672
+    },
+    "source/tests/test_categorical_count_contract.py": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/tests/test_categorical_count_contract.py"
+        }
+      ],
+      "sha256": "edb2e95dadce0b0290e5fad1c09408be5dd1cff3623732365b908d36e195766c",
+      "size_bytes": 7433
+    },
+    "source/tests/test_full_ddr_architectures.py": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/tests/test_full_ddr_architectures.py"
+        }
+      ],
+      "sha256": "f67e03b9add1e3c73d5717c245f6fdb5317f92753b0a0a215d63b0168a7ef4a3",
+      "size_bytes": 3112
+    },
+    "source/tests/test_particle_mass_increment.py": {
+      "origins": [
+        {
+          "authority": "package_test_or_build_support",
+          "path": "source/tests/test_particle_mass_increment.py"
+        }
+      ],
+      "sha256": "2b2da3e132f4db618408e0649f716a98d30c39c3667cc47bf08079705f1dcc9d",
+      "size_bytes": 7797
+    },
+    "terminal_fitting.py": {
+      "origins": [
+        {
+          "authority": "working_tree_test_support",
+          "path": "terminal_fitting.py"
+        }
+      ],
+      "sha256": "fd41e1ae9023a84c62a80c17dbc2721d2805e99231ba7ef7d56c258989f0825b",
+      "size_bytes": 9017
+    },
+    "tests/frozen_payload.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/frozen_payload.py"
+        }
+      ],
+      "sha256": "935a5fcbb9a80af608e5caeab183cc8b3f63e92236a50256ae3d02fbd0033a2c",
+      "size_bytes": 692
+    },
+    "tests/test_adam_controller.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_adam_controller.py"
+        }
+      ],
+      "sha256": "1be39812718d38641505352373154461cd9ffca11a67d8c9e101f2e640f696a7",
+      "size_bytes": 2528
+    },
+    "tests/test_adam_recovery.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_adam_recovery.py"
+        }
+      ],
+      "sha256": "c00a917d46410e1a6e79f19528feabbf7fc912a18f569a22f9e12d47ffebbaed",
+      "size_bytes": 7023
+    },
+    "tests/test_adam_recovery_packaging.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_adam_recovery_packaging.py"
+        }
+      ],
+      "sha256": "9a5c95e6061d408f57fe8807f155977c58e591561976cf22867ffd71462891cf",
+      "size_bytes": 9424
+    },
+    "tests/test_architecture_fitting.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_architecture_fitting.py"
+        }
+      ],
+      "sha256": "881e25e2ba7da5560744410186d953360dee65dd2ba3d34b5169d41adc14502a",
+      "size_bytes": 16720
+    },
+    "tests/test_capacity_recovery.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_capacity_recovery.py"
+        }
+      ],
+      "sha256": "3070b028d9a83d7338a21e933cf3fae79acfcd356518dcb84e0e27c5261b278b",
+      "size_bytes": 7677
+    },
+    "tests/test_compiler_recovery.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_compiler_recovery.py"
+        }
+      ],
+      "sha256": "d6f6beae85256fbcedbfd5e0d7548ed2822f02da565b0b478bf0b6456616fade",
+      "size_bytes": 17897
+    },
+    "tests/test_d2_deployment.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_d2_deployment.py"
+        }
+      ],
+      "sha256": "b3fc15b45c4f7235aeaa0bab806390eba6ef0624574f1b9d9457f1c567d8f5ec",
+      "size_bytes": 17925
+    },
+    "tests/test_d2_forecast_precision.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_d2_forecast_precision.py"
+        }
+      ],
+      "sha256": "310095829fd161ede4c14629e36ca35354700a5e39bbbaeba7559d343337c843",
+      "size_bytes": 12295
+    },
+    "tests/test_d2_forecast_recovery.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_d2_forecast_recovery.py"
+        }
+      ],
+      "sha256": "d1c0ef865b50ef14e7598c9cdf6d435197b9ba1e1696d2c874083fd84b6b08dd",
+      "size_bytes": 13187
+    },
+    "tests/test_d2_forecast_reuse.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_d2_forecast_reuse.py"
+        }
+      ],
+      "sha256": "d4283e816a6af6651423eae11e151c5522ac313f7f89c2ab6be5b44d58f20a1a",
+      "size_bytes": 10327
+    },
+    "tests/test_development_inputs.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_development_inputs.py"
+        }
+      ],
+      "sha256": "5199267ff323e79edde66ef20f56664740ade9631ddb62d96ada635de41107f1",
+      "size_bytes": 1588
+    },
+    "tests/test_encode_sources.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_encode_sources.py"
+        }
+      ],
+      "sha256": "670ad7d5e6047357802f45b56269c3763578aaa38cc9c8791a68c1f242d76516",
+      "size_bytes": 4366
+    },
+    "tests/test_fitting_gpu_stop.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_fitting_gpu_stop.py"
+        }
+      ],
+      "sha256": "b0b94181323044ba169e3ccf7903f69dad13879d31b5a955f0688eaeddc7efd8",
+      "size_bytes": 2333
+    },
+    "tests/test_full_evaluation.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_full_evaluation.py"
+        }
+      ],
+      "sha256": "114afd09eec6673a3dfb9054c719a304445ad3ecf62f0a4114ad8e2d543d185c",
+      "size_bytes": 7333
+    },
+    "tests/test_full_forecast.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_full_forecast.py"
+        }
+      ],
+      "sha256": "cacc74d8983c2f477da911c0eba29eec3f8e8eb50d1442aa963000bfbe7ed1ab",
+      "size_bytes": 13271
+    },
+    "tests/test_geometry_recovery.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_geometry_recovery.py"
+        }
+      ],
+      "sha256": "b9663877dab324bfa590b155b43d20a894127c4d2f8293ae5fed1abfca7098ef",
+      "size_bytes": 3931
+    },
+    "tests/test_geometry_recovery_packaging.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_geometry_recovery_packaging.py"
+        }
+      ],
+      "sha256": "9058bf0e9fbed531c999cd8924d4dc01aac61e0fb575e99535ed8bd46adeed77",
+      "size_bytes": 5572
+    },
+    "tests/test_gpu_native.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_gpu_native.py"
+        }
+      ],
+      "sha256": "8b361e84748797e1ea10e627df3cb027fa41452acaa9f24cf5786298c0ea81b6",
+      "size_bytes": 11697
+    },
+    "tests/test_gpu_native_benchmark.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_gpu_native_benchmark.py"
+        }
+      ],
+      "sha256": "834b1f1102d499964eb9a1306c4d36771295970866b1e9b0abd5ac3900659549",
+      "size_bytes": 6046
+    },
+    "tests/test_gpu_native_execution.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_gpu_native_execution.py"
+        }
+      ],
+      "sha256": "373ab1d9ac5080af114ae71dc195297d74702b070afcfc25aab14a291b920551",
+      "size_bytes": 10445
+    },
+    "tests/test_gpu_native_fitting.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_gpu_native_fitting.py"
+        }
+      ],
+      "sha256": "0c072dc1207a671352d52e9bf362495e5e83e2b4f503c08f61ea87381c020f30",
+      "size_bytes": 10357
+    },
+    "tests/test_gpu_native_recovery.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_gpu_native_recovery.py"
+        }
+      ],
+      "sha256": "3d284cfb454c1184d407f74eec50d8841b04721a33a15eb620b71d6aea1efc23",
+      "size_bytes": 7110
+    },
+    "tests/test_gpu_native_transition_contract.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_gpu_native_transition_contract.py"
+        }
+      ],
+      "sha256": "39513e2e370d8fa6af6814743c949da19713a70996cb3b359e4f4cab7e659ba5",
+      "size_bytes": 4632
+    },
+    "tests/test_latent_support.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_latent_support.py"
+        }
+      ],
+      "sha256": "6ceac7a330458dd841be9dc034bf41f700071ac3b789a5ea1553bfd256a1c50f",
+      "size_bytes": 27177
+    },
+    "tests/test_memory_qualification.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_memory_qualification.py"
+        }
+      ],
+      "sha256": "3d5078676cf19de20e9c832fdf253bafa2e7c5f9b82f853364a79aa6e7048352",
+      "size_bytes": 3534
+    },
+    "tests/test_native_study.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_native_study.py"
+        }
+      ],
+      "sha256": "544924b70cdc570f8a69fcadf6fa7622d3e1a1b3af8b070a4df77cadd221da05",
+      "size_bytes": 14466
+    },
+    "tests/test_prepare_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_prepare_launch.py"
+        }
+      ],
+      "sha256": "5f00b2dda20e8c8f75919983053ce6dbd153083cf04c3350d62824672e63e72b",
+      "size_bytes": 9091
+    },
+    "tests/test_prepare_manifest.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_prepare_manifest.py"
+        }
+      ],
+      "sha256": "c705e0a6887244e934f54912628144be5652c2736ea588877cc32cbf3c80f4c6",
+      "size_bytes": 15877
+    },
+    "tests/test_prepare_operate.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_prepare_operate.py"
+        }
+      ],
+      "sha256": "232fb26b71b86753dd13bcbfeb643432e4e2e0e37e06deae31911977b5a471d3",
+      "size_bytes": 4324
+    },
+    "tests/test_prepare_status.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_prepare_status.py"
+        }
+      ],
+      "sha256": "fae3cc1a2135799f1ef81d4b372c90245b544e10ca6ca2bc06123250ca2fd1a3",
+      "size_bytes": 1804
+    },
+    "tests/test_prepare_worker.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_prepare_worker.py"
+        }
+      ],
+      "sha256": "cebf54f96ecbbd80703bd22d4eed03ca3406e1c412a9ec2ce9cedc6f019f3a3f",
+      "size_bytes": 17407
+    },
+    "tests/test_qualify_launch.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_qualify_launch.py"
+        }
+      ],
+      "sha256": "1ee0dfd34bd6a9b48e3299aa13a4ef652e31e70e0271a054c1556ab35ef42e94",
+      "size_bytes": 6640
+    },
+    "tests/test_selection.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_selection.py"
+        }
+      ],
+      "sha256": "8d4841f30d8f48584296a94c5fc03acdc504018208304e7312f0477c2f951d68",
+      "size_bytes": 10942
+    },
+    "tests/test_successor_gate_visibility.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_successor_gate_visibility.py"
+        }
+      ],
+      "sha256": "83e21edb37e649511eaf419ee80fe96a567f55c87292a82e2017c718cd1bb3f9",
+      "size_bytes": 7169
+    },
+    "tests/test_terminal_fitting.py": {
+      "origins": [
+        {
+          "authority": "working_tree_regression_test",
+          "path": "tests/test_terminal_fitting.py"
+        }
+      ],
+      "sha256": "14817600bfecf5d13f31e0b688e4bb6ff77914743367760c867bb225c23698ba",
+      "size_bytes": 8881
+    }
+  },
+  "historical_base_commit": "6f4f57c114606476cb6e93c6d52dc34628173a4d",
+  "phases": {
+    "d2_forecast_v5": {
+      "archive_sha256": "55b1a7bc41db3c6bc14d3b93e5f4c8b3f81bafdd7a2bf320cfd0dba68f1602b5",
+      "build_sha256": "ef1b3ca74da8b90a514ce53d282139558ec9689fac3e6091cf58059e89ba89e0",
+      "plan_sha256": "cf586347035f73b8d14236f3cc33f75a37d5132f65299200e59bf9ab225f2728"
+    },
+    "fitting_gpu_native_v6": {
+      "archive_sha256": "422950064b4987cb5e0c15d1eed539d821c5dc5565eee269e101314924532348",
+      "build_sha256": "e0bf7b050b1115a4defa3a1f566efa7d225f811ffd17c77932d384b71bb007aa",
+      "plan_sha256": "5e739832d56d7bd5aeda47070d0c80ccd1af55ce9a98939762e5c86eb557461e"
+    }
+  },
+  "publication_parent": "4f7c4db177357927c9cde3fb7af708f1e750caf2",
+  "schema": "credo.full_ddr.source_publication.v1",
+  "scope": "Source only; not a dataset, run seal, portable launch authorization, GPU replay or scientific assessment."
+}

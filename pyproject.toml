@@ -62,6 +62,7 @@ fail_under = 85
 show_missing = true
 
 [tool.ruff]
+extend-exclude = ["studies/full_ddr_20261006"]
 line-length = 100
 target-version = "py311"
 
