@@ -1,0 +1,16 @@
+{
+  "scope": "changed implementation tests on fabricated in-memory observations only",
+  "device": "cpu",
+  "maximum_threads": 2,
+  "maximum_ram_gib": 8,
+  "maximum_disposable_optimizer_calls": 256,
+  "maximum_scientific_optimizer_updates": 0,
+  "maximum_fixture_laws": 64,
+  "maximum_fixture_particles_per_law": 128,
+  "maximum_output_gib": 1,
+  "real_data_reads": false,
+  "historical_checkpoint_loads": false,
+  "remote_work": false,
+  "elapsed_time_deadline": null,
+  "scientific_or_H100_qualification": false
+}

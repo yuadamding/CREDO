@@ -1,0 +1,39 @@
+{
+  "schema": "credo.frontier.abundance-head-design.v1",
+  "status": "implementation_design_not_scientific_launch_admission",
+  "purpose": "Small exact-full-catalog captured-abundance comparator; combining with a state generator creates a modular predictor, not the original DDR reaction procedure",
+  "catalog": "All ordered 26504 categories, including zero captured counts, RNA-unsupported categories, controls and unseen targets",
+  "source": {
+    "condition": "Stim8hr only",
+    "reference": "q0_g=(source_captured_count_g+0.5)/(complete_source_total+0.5*catalog_size)",
+    "features": "100 columns:48 source tanh-state means,48 variances,log(q0),log1p captured source count,log1p positive-RNA source count,positive-RNA availability indicator",
+    "missing_state": "Zero summary placeholders plus an explicit absence indicator; these do not fabricate a state law. All categories remain in the normalizer and count loss.",
+    "scaling": "Feature-wise mean/variance fitted across complete fitting catalogs with equal donor and equal category weights; exact constant columns receive unit scale",
+    "identity": "No guide-specific trainable parameter. One target intercept only for non-control targets with positive captured source support in the fitting donors; unsupported and control intercepts are exactly zero."
+  },
+  "model": {
+    "equation": "q_dg=softmax_g(log q0_dg + standardized_source_features_dg beta + target_intercept_t(g))",
+    "normalization": "Entire current-parameter catalog at every function and gradient evaluation; no inactive cache, minibatch-only denominator or probability floor",
+    "objective": "Equal-donor mean complete-catalog cross-entropy plus lambda/2 * (sum beta^2 + sum_t (1+1/n_t)*intercept_t^2), where n_t is total captured Stim8hr support for that target across fitting donors",
+    "support_policy": "n_t and intercept membership use source counts only, never endpoint support or outcome-based guide selection",
+    "regularization_grid": [0.001, 0.01, 0.1, 1.0],
+    "fit_method": "FP64 CPU L-BFGS-B with analytic gradient; zero initialization;500 iterations maximum,history10,25 line-search steps,12501 function-gradient evaluations maximum including final verification;ftol1e-12,gtol1e-8",
+    "convergence": "Report convergence, iteration count, function evaluations and gradient norm. A finite500-iteration terminal result is explicitly budget-limited, not converged. Numerical or line-search failure does not trigger retries or fallback."
+  },
+  "nested_selection": {
+    "inner": "Six fitting pairs times four strengths:24 small fits",
+    "outer_fits": "One internally selected strength refitted per outer triple:4 fits",
+    "maximum_fits": 28,
+    "selection": "Minimum equal-donor mean complete-catalog CE over exactly three permitted inner donors; exact ties choose stronger regularization",
+    "coverage": "Same complete catalog/truth/representation/source and scoring identities across strengths; no state-paired subset for abundance",
+    "outer_access": "Only source inputs before sealing the complete catalog forecast; outer counts used afterward for assessment, never penalty selection",
+    "other_channels": "Report quadratic score and component provenance; this count-only comparator cannot enter the nine-channel selector by dropping its missing capabilities"
+  },
+  "remaining_before_execution": [
+    "Exact source/count/catalog/representation input bindings and permissions",
+    "Actual optimizer numerical qualification without consuming an exhausted local disposable budget",
+    "Small-fit execution owner, CPU/RAM/output and aggregate function-evaluation admission",
+    "Complete forecast publication, release and modular-comparison bindings"
+  ],
+  "scope": "No new main configuration, no changes to the existing cached estimator, no automatic retries, no elapsed-time deadline. Local objective and analytic-gradient tests are not scientific fits."
+}

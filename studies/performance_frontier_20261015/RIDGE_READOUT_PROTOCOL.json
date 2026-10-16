@@ -1,0 +1,45 @@
+{
+  "schema": "credo.frontier.ridge-readout-design.v1",
+  "status": "implementation_design_not_scientific_launch_admission",
+  "purpose": "All-gene molecular comparator bypassing the decoder, not the fold-native encoder; no state-law, abundance or joint prediction claim",
+  "source_features": {
+    "count": 194,
+    "order": ["48 means of tanh(fold-native source states)", "48 population variances of tanh(fold-native source states)", "48 means of the same features in the positive-RNA-cell-equal source NTC pool", "48 population variances in that source NTC pool", "log positive regularized complete-catalog source frequency", "log1p positive-RNA source support"],
+    "condition": "Stim8hr only",
+    "target_identity_in_predictors": false,
+    "support_use": "Guide/target identities route rows and training reductions only. Pooled-control frequency and support are aggregated over the prespecified NTC catalog; state moments pool cells, not guide means."
+  },
+  "response": {
+    "scale": "natural log(1+10000 times equal-positive-cell mean RNA composition), all 18129 ordered genes",
+    "fitted_response": "Stim48hr readout minus Stim8hr readout",
+    "prediction": "Observed Stim8hr readout plus ridge-predicted change",
+    "pooling": "Pool NTC compositions before nonlinear transformation, exactly matching the new molecular companion",
+    "constraints": "Predicted transformed endpoints are unconstrained finite real values. No clipping, inverse transformation or renormalization into a fictitious composition. Score directly on the registered transformed scale."
+  },
+  "fitting": {
+    "rows": "Paired-support targeting guides plus exactly one pooled-control row per fitting donor",
+    "weighting": "Equal donors; within each donor, one half total weight to targeting rows and one half to its pooled-control row; targeting weight equal across represented targets and then across guides within target",
+    "standardization": "Weighted fitting-only feature mean and population variance; exact constant columns receive unit scale. No response standardization or validation-donor scaling.",
+    "objective_per_gene": "sum_i w_i (delta_y_ij - intercept_j - standardized_x_i B_j)^2 + lambda ||B_j||^2, sum_i w_i=1; intercept unpenalized",
+    "regularization_grid": [0.001, 0.01, 0.1, 1.0],
+    "solver": "FP64 positive-definite Cholesky with explicit residual check; no jitter, pseudoinverse or automatic fallback",
+    "gene_blocks": "All genes exactly once in original order, caller-bound block and workspace limits; no dense whole-cohort RNA matrix required"
+  },
+  "selection": {
+    "inner": "Six distinct fitting pairs times four strengths: 24 proposed small linear fits, shared only under exact same source bindings",
+    "outer": "One selected strength per outer selector, refit on its three fitting donors: four proposed fits",
+    "maximum_proposed_fits": 28,
+    "seeds": "Deterministic linear solve, not a three-seed neural family",
+    "risk": "Equal mean across the three permitted inner donors of 0.5*(target_endpoint_mse + pooled_control_endpoint_mse)",
+    "tie": "Exact equal risk selects stronger regularization",
+    "effect": "Report effect MSE and zero-effect comparison separately; do not choose the penalty from outer errors or insert this incomplete-capability reference into the nine-channel neural selector",
+    "forecast_release": "All source-supported targeting forecasts and pooled control sealed before outer truth access; pair support materialized afterward under the existing common-support rule"
+  },
+  "outstanding_before_execution": [
+    "Exact fitting/query rows, source summaries, composition files, feature identities and input permissions",
+    "Bound and approve the 28 small fits separately from the 28 abundance-head fits; these counts are not interchangeable",
+    "Actual linear-solver numerical qualification, aggregate operations, CPU/RAM/output allocation and publication owner",
+    "Source inventory, selected observation artifacts, forecast release and assessment integration"
+  ],
+  "current_work": "Implementation and fabricated arithmetic tests only. No real donor outcomes, numerical linear solves, optimizer calls, new GPU jobs or main-model training authorized by this file."
+}

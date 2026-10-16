@@ -1,0 +1,35 @@
+{
+  "study_id": "credo_performance_frontier_20261015_v1",
+  "objective": "Best performance found within the registered retrospective GSE314342 search, with distinct endpoint and DDR candidates and a complete supported risk frontier",
+  "user_scientific_scope": "24 configurations; nested four-donor evaluation; six inner training pairs; four outer training triples; three outer recipes and seeds 0,1,2",
+  "concurrency_amendment": {
+    "date": "2026-10-15",
+    "user_answer": "Up to 4 H100s (Recommended)",
+    "maximum_concurrent_h100": 4,
+    "gpu_per_worker": 1,
+    "distributed_training": false,
+    "effect": "Supersedes the original one-H100 concurrency ceiling only; no scientific budget increase"
+  },
+  "maximum_main_optimizer_updates": 847872,
+  "maximum_observation_model_fits": 10,
+  "maximum_updates_per_observation_model": 20000,
+  "maximum_abundance_head_fits": 28,
+  "maximum_iterations_per_abundance_head": 500,
+  "per_gpu_worker": {"cpus": 24, "ram_gib": 200, "application_threads": 8},
+  "elapsed_time_deadline": null,
+  "automatic_retries": 0,
+  "all_four_deployment_refit_authorized": false,
+  "historical_results_mutable": false,
+  "LARRY_access_authorized": false,
+  "interpretation": "Retrospective development on historically exposed donors, not independent validation or an identified global optimum",
+  "execution_status": "Implementation and scientific/resource bindings in progress; no numerical remote launch yet",
+  "unresolved_execution_bindings": [
+    "final scientific specification and source hashes",
+    "actual donor/guide/cell input identities and support",
+    "fold-native observation preparation and qualification",
+    "molecular companion estimand and selector availability",
+    "new model/training/restart numerical qualification",
+    "forecast, calibration, ensemble and diagnostic operation budgets",
+    "aggregate live storage/output cap and worker admission"
+  ]
+}

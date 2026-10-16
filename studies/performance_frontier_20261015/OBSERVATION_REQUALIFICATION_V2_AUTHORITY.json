@@ -1,0 +1,42 @@
+{
+  "schema": "credo.frontier.observation-requalification-authority.v1",
+  "recorded_at_utc": "2026-10-16T02:14:58Z",
+  "user_instruction": "run the corrected qualification",
+  "interpretation": "One corrected observation-model qualification only. Replacement scientific fits are not approved by this instruction.",
+  "run_id": "credo-frontier-obs-qual-20261015-v2",
+  "phase_directory": "observation_qualification_v2",
+  "proposal_sha256": "941d3b5964f593fc58ea44dd63a270aa99fb1354a730083f804d571fb0ce2aa4",
+  "phase_contract_sha256": "cf731f33c1863f588d53abe2958975c7515523aa02175b90c5196aa288052c3f",
+  "numerical_protocol_sha256": "5410316b98ae0cf2018b9632259088fae089e07c5ad34c7efa01b96c79b1b9c8",
+  "prelaunch_tests": {
+    "receipt": "receipts/observation_requalification_v2_prelaunch_cpu_checks.xml",
+    "sha256": "f948e845a2b00cd6a90c5b8867ebc893c72a2dcac76217becaddfa3d102e81c3",
+    "passed": 94,
+    "deselected_optimizer_bearing_cases": 2,
+    "additional_local_optimizer_calls": 0
+  },
+  "resources": {
+    "jobs": 1,
+    "H100_per_job": 1,
+    "CPUs": 24,
+    "host_memory_GiB": 200,
+    "application_threads": 8,
+    "output_cap_bytes": 17179869184,
+    "aggregate_study_H100_ceiling": 4,
+    "aggregate_study_output_cap_bytes": 412316860416,
+    "unallocated_fileset_reserve_bytes": 17179869184
+  },
+  "work": {
+    "planned_disposable_CUDA_optimizer_calls": 13,
+    "maximum_disposable_CUDA_optimizer_calls": 16,
+    "scientific_updates": 0,
+    "real_biological_payload_reads": false,
+    "historical_checkpoint_reads": false,
+    "LARRY_access": false,
+    "automatic_fit_successor": false,
+    "automatic_retry": false,
+    "elapsed_time_deadline": null
+  },
+  "source_transition": "New immutable bundle from the exact current seven observation-worker sources, including the corrected hardware compatibility check and current shared checkpoint code. No hot-patch or reuse of the old source's numerical qualification.",
+  "evidence_policy": "Retain original qualification, failed D1/D2 attempt, and all three unsubmitted fit bundles and reservations unchanged. New admission binds this entire authority object and its hash."
+}

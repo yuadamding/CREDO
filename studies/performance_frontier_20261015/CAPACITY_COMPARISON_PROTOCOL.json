@@ -1,0 +1,41 @@
+{
+  "schema": "credo.frontier.capacity-comparison.v1",
+  "status": "prospective_saved-score_analysis_not_new_fitting_authority",
+  "user_request": "Also validate whether a larger model helps",
+  "scope": "Matched128-versus256-hidden-unit comparisons already present within each of the six registered families",
+  "smaller_variant": "V1",
+  "larger_variant": "V2",
+  "common_learning_rate": 0.0001,
+  "common_weight_decay": 0.001,
+  "fixed_comparison": [
+    "same family and other architecture settings",
+    "same fitting donors and fold-specific representation",
+    "same allowed query donor and source/outcome support",
+    "same accepted-update prefix, seed and particle resolution",
+    "same objectives, normalization scales and stochastic source inputs",
+    "same declared abundance/spread calibration when directly paired"
+  ],
+  "identity_semantics": {
+    "configuration_specific": "Keep distinct checkpoint, full objective-protocol and model-parameter inventories for V1 and V2; differing artifact hashes are expected",
+    "common_objective": "Match registry-verified scientific objective fields and the exact fitting-scale binding, excluding only the configuration-specific protocol identifier",
+    "common_draws": "Match actual verified sampler draw receipts with only the configuration label excluded; retain source/fold, seed, update, generation, law support, stream and particle bindings"
+  },
+  "report": [
+    "all nine score-channel paired differences, never fitting loss alone",
+    "state proximity and spread separately",
+    "target, control and contrast errors separately",
+    "actual active parameter counts and measured inference cost",
+    "fit/update and scoring cost when measured",
+    "within-donor/representation effect sizes and capacity trade-offs",
+    "which matched longer-budget comparisons are available or unavailable"
+  ],
+  "screening_budget": "All128/256 pairs receive1024updates on all six fitting pairs before family pruning; this is a finite-budget capacity screen",
+  "later_comparisons": "Use only pairs actually continued under the existing selectors at the same budget; no resuming an eliminated recipe solely to complete a capacity table",
+  "selection_boundary": "Per-selector summaries use only that selector's permitted inner edges. No pooled all-donor capacity winner can alter an outer selector. Global retrospective summary follows all required forecast seals.",
+  "interpretation": "Larger means more active parameters within the matched family; width is not proof of equal compute. Negative screening results do not establish that larger models cannot help at longer budgets or in other families.",
+  "additional_configurations": 0,
+  "additional_scientific_updates": 0,
+  "beyond256_width": "Requires a separately bounded prospective amendment; not silently added to the24-configuration search",
+  "historical_results_changed": false,
+  "independent_validation_claimed": false
+}

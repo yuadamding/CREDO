@@ -1,0 +1,56 @@
+{
+  "schema": "credo.frontier.normalization-protocol.v1",
+  "status": "prospective_implementation_contract_not_numerical_launch_authority",
+  "objective_rules_sha256": "d490943dbd05a4a18e01bf4853f7a463ea71e6d5aeaff8aa7fae7c383a6e9ecf",
+  "scope": "One complete package per fitting pair or triple and selected observation artifact, shared across configurations and seeds",
+  "source_role": "Only the exact fitting subset; no query populations or candidate predictions",
+  "source_draws": {
+    "purpose": "scales",
+    "particles": 512,
+    "model_seed": 0,
+    "accepted_update": 0,
+    "generation": 0,
+    "configuration_in_receipt_only": "F0-V0",
+    "randomness": "Existing stateless law-scoped sampler; fixed study seed, no candidate-dependent draw or redraw",
+    "observed_endpoint": "Full equal-positive-RNA-cell law; no endpoint support truncation"
+  },
+  "training_values": {
+    "state": "Persistence Sinkhorn mean over every source/endpoint-supported donor-guide law, guide-law equal across the fitting subset",
+    "count": "Donor-equal complete-catalog CE(p,q0)-H(p)",
+    "shape": "Persistence MMD2 mean over the same paired laws/draws as state, guide-law equal across the fitting subset",
+    "endpoint": "One half of donor/target/guide-macro raw-source-persistence target MSE plus donor-equal raw-source pooled-NTC endpoint MSE",
+    "effect": "Donor/target/guide-macro raw-source-persistence target-minus-pooled-NTC contrast MSE"
+  },
+  "selection_fallback_values": {
+    "state_energy": "Donor-equal mean of guide-equal persistence energy over the fixed paired law support in each fitting donor",
+    "spread_absolute_error": "Donor-equal mean of guide-equal absolute persistence-versus-observed pairwise spread difference",
+    "shape_mmd2": "Donor-equal mean of guide-equal persistence MMD2 on the same paired support",
+    "count_ce_minus_entropy": "Donor-equal complete-catalog CE(p,q0)-H(p)",
+    "count_quadratic": "Donor-equal categorical quadratic score 1+sum(q0^2)-2*sum(p*q0) over every catalog entry; not the entropy-subtracted squared composition error",
+    "joint_mse": "Donor-equal guide-equal mean squared difference of q0*(1,E tanh Z8) and p*(1,E tanh Z48), averaging49 coordinates; retain mass and48-state channels separately",
+    "target_endpoint_mse": "Equal eligible targeting guides within target, equal targets within donor, equal fitting donors; raw mean cell composition before log1p(10000*q)",
+    "pooled_control_endpoint_mse": "One raw-source-persistence pooled-NTC endpoint per donor, donor-equal",
+    "pooled_effect_mse": "Same molecular target support/reduction as target endpoint, common pooled control retained"
+  },
+  "support": {
+    "state_shape_joint": "All actual guides with positive source and endpoint RNA, including NTCs; counts still retain the entire catalog",
+    "molecular_targets": "Non-NTC guides with positive source and endpoint RNA; no outcome-selected target filtering",
+    "pooled_controls": "Every positive-RNA cell from the fixed NTC catalog, with source and endpoint pooled separately before transformation",
+    "no_source_or_endpoint_RNA": "Explicit unavailable state/molecular support, never synthetic zero; remains in count channel",
+    "unavailable_required_donor_channel": "Fail package, no donor or channel deletion"
+  },
+  "numeric_rules": {
+    "persistence_count_forecast": "Strictly positive source count+0.5 over all26504 categories",
+    "count_truth": "Raw captured endpoint frequencies; observed zeros preserved",
+    "sinkhorn": "Retained FP32 producer; preserve raw scalar, reject below-1e-5, correct smaller negative roundoff to zero for scales only",
+    "other_nonnegative_risks": "FP64 accumulation with raw value and64*epsilon*max(1,sum_absolute_components) correction record",
+    "scale_values": "All five training and all nine selection values must be finite and strictly positive; no floor or borrowed fold",
+    "molecular_persistence": "Observed raw early means, not decoded reconstructed means; no encoder-ceiling claim",
+    "training_selection_scale_interchangeability": false
+  },
+  "publication": "Retain support identities, per-law and per-donor scores, roundoff records, sampler/producer/representation/input identities and separate14-value maps",
+  "execution": "Real calculation needs a separately admitted operation inventory, resource envelope and selected observation/cache artifacts",
+  "scientific_updates": 0,
+  "query_outcomes_used_to_define_protocol": false,
+  "historical_results_changed": false
+}

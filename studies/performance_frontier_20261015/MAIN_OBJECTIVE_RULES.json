@@ -1,0 +1,113 @@
+{
+  "schema": "credo.frontier.main-objective-rules.v1",
+  "status": "prospective_rules_bound_before_main_fits; numerical_values_and_provider_admission_pending",
+  "scope": "New 24-configuration performance search, not a factorial causal attribution experiment",
+  "historical_results_unchanged": true,
+  "main_fits_launched_at_freeze": 0,
+  "additional_configurations": 0,
+  "observation_phase_changed": false,
+  "core": {
+    "state_training": "debiased Sinkhorn, retained epsilon0.1 geometry, not assessment energy",
+    "state_coefficient": 0.5,
+    "count_coefficient": 0.5,
+    "state_reduction": "Equal observed donor-guide laws in the logical batch; not target-macro or capture weighted",
+    "count_reduction": "Equal fitting donors, each retaining the entire26504-category denominator including donors with no active sampled guide",
+    "initial_mass": "(captured_source_count+0.5)/(complete_source_capture_total+0.5*26504)",
+    "endpoint_count_truth": "Raw captured endpoint frequencies, observed zeros preserved, no endpoint pseudocount",
+    "complement": "No positive-RNA source law: fixed mass multiplier1; no synthetic source state",
+    "estimator": "Current active laws plus detached inactive fitness; full logical-batch normalizer and value-preserving sampling-scaled gradient",
+    "cache": {"refresh_before_accepted_updates": [257, 321, 385], "then_every_updates": 64, "refresh_particles": 32, "active_particles": 128, "write": "Pre-update active rollout fitness after healthy accepted optimizer step"},
+    "stabilization_updates": 256,
+    "stabilization": "State and nonreaction regularizers only; no mass, shape or molecular learning",
+    "joint_transition": "Fresh Adam exactly once; healthy promoted trajectories preserve its state afterward"
+  },
+  "family_auxiliaries": {
+    "F0": {"shape": 0.0, "both_endpoints": 0.0, "contrast": 0.0},
+    "F1": {"shape": 0.1, "both_endpoints": 0.0, "contrast": 0.0},
+    "F2": {"shape": 0.1, "both_endpoints": 0.0, "contrast": 0.0},
+    "F3": {"shape": 0.1, "both_endpoints": 0.1, "contrast": 0.1},
+    "F4": {"shape": 0.1, "both_endpoints": 0.1, "contrast": 0.1},
+    "F5": {"shape": 0.1, "both_endpoints": 0.1, "contrast": 0.1}
+  },
+  "family_interpretation": "F3 deliberately provides a molecular-supervised direct candidate beside molecular-supervised DDR. F3-versus-F1 is not an isolated target-conditioning test. F0 has no new auxiliary losses.",
+  "regularizers": {
+    "deterministic_action": 0.0001,
+    "stochastic_action": 0.00001,
+    "reaction_action": 0.0001,
+    "reference_embedding": 0.0001,
+    "target_embedding_F3_F5": 0.01,
+    "target_growth_F3_F5": 0.01,
+    "target_embedding_equation": "0.01*mean((target_codes @ target_projection)^2), before support multiplication",
+    "target_growth_equation": "0.01*mean(target_growth_intercepts^2), active only in joint stage",
+    "target_regularization_note": "New fixed shrinkage choice, not the historical embedding coefficient; penalizes the unscaled represented embedding rather than the nonidentified factor matrices separately",
+    "direct_actions": "Zero-noise anchor displacement, stochastic displacement around anchor, and particle log weight; integrate mixture actions with proposal correction rather than reaction-normalized weights",
+    "DDR_actions": "Mean squared drift, diffusion and reaction over eight steps",
+    "ecology_or_frozen_payoff_term": false
+  },
+  "target_support": {
+    "source": "Fitting-donor Stim8hr positive-RNA cells only",
+    "per_donor_guide_cell_cap": 128,
+    "target_support_equation": "n_t=sum_over_fitting_donor_guides_for_target(min(positive_RNA_source_cells,128))",
+    "factor_equation": "sqrt(n_t/(n_t+256))",
+    "rank": 4,
+    "apply_to": ["target embedding contribution", "target growth intercept"],
+    "NTC_and_unseen_target_residual": "Exactly zero",
+    "shared_response_support_scaling": false,
+    "interpretation": "Capped source support score, not an independent sample size or optimized statistical shrinkage"
+  },
+  "fold_scales": {
+    "scope": "Once per exact fitting subset and selected observation artifact; shared across all configurations and seeds on that subset",
+    "input_role": "All admitted fitting-donor positive-RNA populations; the observation model technical holdout may enter post-selection dynamics/scales but never changes observation checkpoint selection",
+    "state_S0": "Mean persistence Sinkhorn over all source/endpoint-paired fitting laws, using512 source draws and the full observed endpoint law",
+    "count_K0": "Mean over fitting donors of CE(raw_endpoint,positive_regularized_source)-H(raw_endpoint)",
+    "shape_scale": "Mean persistence weighted Gaussian-mixture MMD2 over the same paired fitting laws, same512 source draws and full endpoint law; guide-law-equal reduction",
+    "endpoint_scale": "0.5*(persistence_target_endpoint_MSE+persistence_pooled_control_endpoint_MSE)",
+    "effect_scale": "Persistence early target-minus-pooled-NTC contrast versus observed late contrast MSE",
+    "molecular_target_reduction": "Equal eligible guides within target, equal targets within fitting donor, equal donors",
+    "molecular_control_reduction": "One pooled-NTC endpoint per donor, equal donors",
+    "molecular_effect_reduction": "Same target reduction, retaining each donor's shared control dependence",
+    "molecular_endpoint_loss_equation": "lambda_R*(L_target+L_pooled_NTC)/(2*endpoint_scale)",
+    "source_draws": "Fixed scale-purpose stateless keys, reused by all candidates; never candidate-output based",
+    "scale_value_rule": "Finite and strictly positive; no silent epsilon floor, disabled loss or borrowed fold value",
+    "numerical_support_inventory": "Must be published with each computed scale; any unavailable required term blocks that subset's main fitting",
+    "negative_roundoff_rule": "Sinkhorn: preserve raw values; reject below-1e-5 and replace smaller-magnitude negatives by zero before the scale mean, retaining the historical numerical rule. FP64 MMD2/KL: preserve raw values and64*epsilon*max(1,sum_absolute_components) bound; only negative roundoff within that bound reports zero. Publish correction counts. Training losses remain unclipped.",
+    "normalizer_execution_budget": "Separate pre-launch operation inventory still required; this rule file does not launch numerical scale calculation"
+  },
+  "shape": {
+    "estimator": "Weighted biased V-statistic MMD2, including self terms",
+    "coordinate_scale": "Fold-selected standardized48-dimensional latent coordinates",
+    "distance": "RMS Euclidean",
+    "Gaussian_bandwidths": [0.25, 0.5, 1.0, 2.0],
+    "kernel_weights": [0.25, 0.25, 0.25, 0.25],
+    "bandwidth_origin": "Fixed prospective constants in standardized-coordinate units, not selected using any query outcomes",
+    "pairwise_blocking": "Exact weighted estimator evaluated in bounded blocks, no support truncation"
+  },
+  "molecular_companion": {
+    "readout": "Equal positive-RNA-cell compositions, averaged before natural log1p(10000*q); equal all-gene MSE on18129RNA features",
+    "source_control": "One pool of every positive-RNA source cell from the prespecified NTC catalog per donor, cell-equal",
+    "endpoint_control": "One pool of every positive-RNA endpoint cell from the same NTC catalog per donor, with actual endpoint RNA-cell composition",
+    "prediction": "Forecast the pooled source law with exact-zero target residual and normalize terminal particle weights across that pooled law",
+    "virtual_control_catalog_entry": false,
+    "complete_catalog_counts": "Still use actual guide entries; the molecular pool is not an additional captured category",
+    "missing_pool": "Unavailable, never imputed or replaced by an endpoint-selected guide mixture",
+    "control_loss_repetition": "Once per donor, not once per target; contrast derivatives accumulate through the same control",
+    "historical_primary_redefinition": false
+  },
+  "common_query_support": {
+    "forecast": "Every query guide with positive Stim8hr RNA support, independent of endpoint support and fitting-target membership",
+    "unseen_target": "Shared response for all families, exact-zero target residual inF3/F5",
+    "no_source_RNA": "No state forecast; fixed-persistence count complement remains in complete catalog",
+    "endpoint_missing": "Preserve forecast and count channel; explicitly unavailable state/molecular score",
+    "report": ["fitting-source-known targets", "fitting-state-supervised targets", "count-only fitting targets", "unseen targets", "endpoint support and missingness"],
+    "family_specific_denominator_selection": false
+  },
+  "launch_requirements": [
+    "Bound fold-native compiler and sampler with exact observation artifact and input identities",
+    "Computed fitting-only scales and support factors with complete inventories",
+    "Source-bound main CUDA precision, restart, memory and throughput qualification",
+    "Forecast/readout/reduction and selection operation inventory and storage contract"
+  ],
+  "raw_payloads_opened_to_choose_these_rules": false,
+  "query_outcomes_inspected_to_choose_these_rules": false,
+  "scientific_launch_authority_from_this_file_alone": false
+}

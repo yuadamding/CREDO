@@ -1,0 +1,25 @@
+{
+  "schema": "credo.frontier.observation-fit-batch-request.v1",
+  "requested_fits": [
+    {
+      "run_id": "credo-frontier-obs-d1d2-20261015-v1",
+      "phase": "observation_d1d2_v1",
+      "training_donors": ["D1", "D2"]
+    },
+    {
+      "run_id": "credo-frontier-obs-d1d3-20261015-v1",
+      "phase": "observation_d1d3_v1",
+      "training_donors": ["D1", "D3"]
+    },
+    {
+      "run_id": "credo-frontier-obs-d1d4-20261015-v1",
+      "phase": "observation_d1d4_v1",
+      "training_donors": ["D1", "D4"]
+    },
+    {
+      "run_id": "credo-frontier-obs-d2d3-20261015-v1",
+      "phase": "observation_d2d3_v1",
+      "training_donors": ["D2", "D3"]
+    }
+  ]
+}

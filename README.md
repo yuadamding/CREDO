@@ -1,5 +1,10 @@
 # CREDO count-SDE v4
 
+Latest run-source archive: [performance-frontier study](studies/performance_frontier_20261015/README.md)
+publishes the October 16 observation-training recovery and current search,
+forecast, scoring and coordination implementation. It is an isolated source
+snapshot, not completed frontier results, data, trained weights, or a v4 release.
+
 Run-source archive: [October 2026 full-DDR study](studies/full_ddr_20261006/README.md)
 preserves the v3-derived H100 fitting and D2 forecasting code separately from
 the v4 package. It includes no biological data or trained weights and does not

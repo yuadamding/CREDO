@@ -1,0 +1,45 @@
+{
+  "schema": "credo.frontier.observation-hardware-recovery-proposal.v1",
+  "status": "proposed_not_authorized_not_launched",
+  "failure": {
+    "run_id": "credo-frontier-obs-d1d2-20261015-v1",
+    "uid": "2587901f-4deb-4518-997b-2e3c80fccb09",
+    "stage": "verify_qualification before NativeInputIndex, output lease or optimizer",
+    "qualification_memory_bytes": 85028372480,
+    "worker_memory_bytes": 84929478656,
+    "difference_bytes": 98893824,
+    "same_gpu_name": "NVIDIA H100 80GB HBM3",
+    "compute_capability": [9, 0],
+    "scientific_updates": 0,
+    "real_count_payloads_opened": false,
+    "terminal_and_cleanup_verified": true,
+    "cause": "Qualification compatibility compared the entire hardware dictionary, including byte-identical usable memory. This failed before fitting despite a matching GPU model/capability.",
+    "OOM_claimed": false,
+    "cause_of_driver_reported_memory_variation_established": false
+  },
+  "prospective_fix": {
+    "keep_exact": ["GPU name", "compute capability", "FP32 precision", "deterministic algorithms", "TF32 disabled", "one visible device", "runtime versions", "numerical source/protocol identities"],
+    "memory": "Require same full 75-82 GiB device class and actual capacity above measured qualification peak reservation plus the existing 8-GiB headroom; retain each actual memory value in evidence.",
+    "numerical_tolerances_changed": false,
+    "scientific_model_or_objective_changed": false,
+    "patch_existing_bundle": false,
+    "inherit_old_qualification_as_new_source_without_check": false
+  },
+  "proposed_recovery": {
+    "corrected_qualification_workers": 1,
+    "planned_disposable_cuda_optimizer_calls": 13,
+    "maximum_disposable_cuda_optimizer_calls": 16,
+    "qualification_scientific_updates": 0,
+    "qualification_real_payload_reads": false,
+    "replacement_subsets_after_success": [["D1", "D2"], ["D1", "D3"], ["D1", "D4"], ["D2", "D3"]],
+    "maximum_concurrent_H100s": 4,
+    "scientific_updates_per_subset": 20000,
+    "additional_scientific_trajectories": 0,
+    "automatic_retry": false,
+    "elapsed_time_deadline": null,
+    "reservation_transition": "Requires an explicit source-bound recovery amendment preserving old failed/unsubmitted journal records and preventing duplicate scientific subset accounting.",
+    "storage": "Fresh exact capacity check; retain all old source and failure evidence. No historical deletion. Bind new phase reservations before staging."
+  },
+  "other_three_v1_submissions": "withheld; already published bundles remain immutable",
+  "new_user_recovery_decision_required": true
+}

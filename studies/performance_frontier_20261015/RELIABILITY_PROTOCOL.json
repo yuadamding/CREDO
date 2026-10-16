@@ -1,0 +1,53 @@
+{
+  "schema": "credo.frontier.reliability-design.v1",
+  "status": "calculation_specification_not_scientific_execution_admission",
+  "purpose": "Conditional measurement repeatability and readout diagnostics, not independent predictive evidence or an irreducible error bound",
+  "repetitions": 20,
+  "repetition_ids": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19],
+  "assignment": {
+    "default_unit": "Complete eligible captured cell, including zero-RNA cells",
+    "alternate_unit": "A declared capture unit only with a separate exact provenance binding; never infer units from a donor alias or arbitrary partition",
+    "algorithm": "SHA256 of canonical JSON [frontier-reliability-v1, population_identity, repetition, unit_id]; rank hash then unit_id; first floor(unit_count/2) units in A, remaining units in B",
+    "balance": "Across the whole population's splitting units, never separately within guides or controls",
+    "paired_channels": "Reuse the same assignment for captured counts and positive-RNA state/molecular summaries",
+    "repeatability": "Order-invariant, disjoint, exhaustive; repetitions overlap and are not independent replicates",
+    "capture_units": "Unit counts are balanced, not necessarily cell counts; disjointness does not prove independent errors"
+  },
+  "readouts": {
+    "catalog": "Every category retained in each half, including observed zeros; separate both empirical directional cross-entropies and quadratic scores",
+    "empirical_zero_forecast": "Positive observed mass against zero empirical forecast is explicitly positive infinity, never silently floored",
+    "molecular": "Equal positive-RNA-cell mean composition within guide; pooled NTC is equal over all positive-RNA NTC cells in that half; transform only after pooling",
+    "state": "Existing energy, pairwise spread and fixed multiscale MMD2 on the exact subset-native representation, with full supplied half support",
+    "joint": "Only matched state/count half populations may form a joint diagnostic; no separate per-guide balancing",
+    "missing_half_support": "Unavailable state/RNA channel with explicit half-support count; retain complete catalog and any independently available endpoint",
+    "support_tiers": ["0-15", "16-63", "64-255", "256+"],
+    "tier_axis": "Explicit supplied source support count, not selected from favorable endpoint or model scores"
+  },
+  "cross_error": {
+    "formula": "mean((prediction-half_A)*(prediction-half_B))",
+    "identity": "0.5*(MSE(prediction,half_A)+MSE(prediction,half_B)-MSE(half_A,half_B))",
+    "negative_values": "Retained without clipping",
+    "default_claim": "Descriptive split cross-error only",
+    "unbiased_noise_removal_requires": "Unbiased independent half-estimation errors for one estimand, also independent of the forecast; these are not established by disjoint cell IDs",
+    "nonlinear_transform": "log1p(10000*mean_composition) need not be an unbiased endpoint estimator",
+    "conditional_partition": "Random halves of a fixed observed population have dependent sampling errors; do not call their cross-error a conditional noise-corrected forecasting risk",
+    "shared_controls": "The same half-specific control enters every contrast; retain one control observation per split population, not one independent control per target"
+  },
+  "custody": {
+    "before_outer_release": "Only explicitly admitted fitting-donor observations may be analyzed; no outer truth or outer-derived calibration",
+    "after_outer_release": "Outer diagnostics are descriptive assessment companions only, with the same frozen forecast release as the main assessment",
+    "method_revision_from_outer_diagnostics": false,
+    "model_or_checkpoint_selection": false
+  },
+  "execution": {
+    "implementation": "frontier/reliability.py",
+    "scientific_inputs_admitted": false,
+    "scientific_launch_authorized": false,
+    "optimizer_updates": 0,
+    "remaining_bindings": [
+      "Exact populations, row/unit identities, fitting or released-assessment roles and input leases",
+      "Total repetitions times eligible populations, state-pair and gene-block operation counts",
+      "Actual resource, output and retention limits; approved scientific worker and publication path"
+    ]
+  }
+}

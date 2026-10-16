@@ -1,0 +1,1498 @@
+{
+  "base_publication_commit": "23ebdbec2e7c16ae0d560753a0f5082314e8929f",
+  "files": {
+    "ABUNDANCE_HEAD_PROTOCOL.json": {
+      "origin_relative_path": "ABUNDANCE_HEAD_PROTOCOL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "ed8868653cfc9ce477a93357abdc751e5b05c93bd2d2e46348132f701feba11a",
+      "size_bytes": 3934
+    },
+    "ASSESSMENT_SUPPORT_PROTOCOL.json": {
+      "origin_relative_path": "ASSESSMENT_SUPPORT_PROTOCOL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "2cb6ffc1cbe4931d35c8f03aa85501fb69a3e0b0892c2ce8533f089b5d92d485",
+      "size_bytes": 5195
+    },
+    "AUTHORITY.json": {
+      "origin_relative_path": "AUTHORITY.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "8f80d162a16b9be721fd06d66de14b1ebcca625e682eae395a6bd98899dccb49",
+      "size_bytes": 1921
+    },
+    "CAPACITY_COMPARISON_PROTOCOL.json": {
+      "origin_relative_path": "CAPACITY_COMPARISON_PROTOCOL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "f9504361f8c462b0f499adf46bb54243ec512dfe5679ab969c35c3ea944db868",
+      "size_bytes": 2944
+    },
+    "CONFIGURATION_MATRIX.tsv": {
+      "origin_relative_path": "CONFIGURATION_MATRIX.tsv",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "2cd9132c2cbc588018714e5a0a2e36e67997e21e37feab4d8ae8d0d301e9b585",
+      "size_bytes": 1835
+    },
+    "EXECUTION_DESIGN.json": {
+      "origin_relative_path": "EXECUTION_DESIGN.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "8e81b0fc0458602476444f54758e80c9cc9234a20cbaa2525165b2464f76fbde",
+      "size_bytes": 6972
+    },
+    "LOCAL_SYNTHETIC_SCOPE.json": {
+      "origin_relative_path": "LOCAL_SYNTHETIC_SCOPE.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "5ad0fdd1cb321864ae4c41837d908f4adbf78da5ea32d8faca64e603077cef4f",
+      "size_bytes": 516
+    },
+    "MAIN_OBJECTIVE_RULES.json": {
+      "origin_relative_path": "MAIN_OBJECTIVE_RULES.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "d490943dbd05a4a18e01bf4853f7a463ea71e6d5aeaff8aa7fae7c383a6e9ecf",
+      "size_bytes": 9188
+    },
+    "MAIN_QUALIFICATION_LAUNCH_PROPOSAL.json": {
+      "origin_relative_path": "MAIN_QUALIFICATION_LAUNCH_PROPOSAL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "b0064f8980b4db01ffa6c904ba312018907a18ff3af2352fc3d58b7e44bac4ad",
+      "size_bytes": 1893
+    },
+    "NORMALIZATION_PROTOCOL.json": {
+      "origin_relative_path": "NORMALIZATION_PROTOCOL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "a9df0ad879087b6e9538dfd4de72a6f6f8bdac52c3c03d4219c1de2f0147b587",
+      "size_bytes": 4524
+    },
+    "OBSERVATION_CONTINUATION_V3_AUTHORITY.json": {
+      "origin_relative_path": "OBSERVATION_CONTINUATION_V3_AUTHORITY.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "4d2a275df37a6db6df55afef41f46714d513432ce384ca65f229ae384e2559af",
+      "size_bytes": 1555
+    },
+    "OBSERVATION_CONTINUATION_V4_REPLACEMENT_AUTHORITY.json": {
+      "origin_relative_path": "OBSERVATION_CONTINUATION_V4_REPLACEMENT_AUTHORITY.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "3a2bd48489033a51af178fe791bc455a24d62a475e46174b608421fbe3e4947b",
+      "size_bytes": 1540
+    },
+    "OBSERVATION_FIRST_FIT_BATCH.json": {
+      "origin_relative_path": "OBSERVATION_FIRST_FIT_BATCH.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "ff11d09151ae8e6ab6607b4b4c5603de34d8f8f65dd8e0f269982190202b550b",
+      "size_bytes": 668
+    },
+    "OBSERVATION_HARDWARE_RECOVERY_PROPOSAL.json": {
+      "origin_relative_path": "OBSERVATION_HARDWARE_RECOVERY_PROPOSAL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "941d3b5964f593fc58ea44dd63a270aa99fb1354a730083f804d571fb0ce2aa4",
+      "size_bytes": 2602
+    },
+    "OBSERVATION_PHASE_CONTRACT.json": {
+      "origin_relative_path": "OBSERVATION_PHASE_CONTRACT.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "cf731f33c1863f588d53abe2958975c7515523aa02175b90c5196aa288052c3f",
+      "size_bytes": 4400
+    },
+    "OBSERVATION_PROTOCOL.json": {
+      "origin_relative_path": "OBSERVATION_PROTOCOL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "5410316b98ae0cf2018b9632259088fae089e07c5ad34c7efa01b96c79b1b9c8",
+      "size_bytes": 3261
+    },
+    "OBSERVATION_REPLACEMENT_FITS_V2_AUTHORITY.json": {
+      "origin_relative_path": "OBSERVATION_REPLACEMENT_FITS_V2_AUTHORITY.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "e6c917e7f3ad7bd6e02ba6a8af6f06eb952993acd109758f4b9f430dc3a8396e",
+      "size_bytes": 1327
+    },
+    "OBSERVATION_REPLACEMENT_FIT_BATCH_V2.json": {
+      "origin_relative_path": "OBSERVATION_REPLACEMENT_FIT_BATCH_V2.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "bb1e3178d830b33c01c7d5bd65866611d6f4e7ad26f6c869345469b212f221b3",
+      "size_bytes": 548
+    },
+    "OBSERVATION_REQUALIFICATION_V2_AUTHORITY.json": {
+      "origin_relative_path": "OBSERVATION_REQUALIFICATION_V2_AUTHORITY.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "9685dab76f64c6909552d43e4d9a22c2295bb2da168ee5dea44345f9e4d02646",
+      "size_bytes": 2148
+    },
+    "RELIABILITY_PROTOCOL.json": {
+      "origin_relative_path": "RELIABILITY_PROTOCOL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "0cd41a04c887b3f51c50996463a36cb75564d1f4a3bef332db56a3274a1fe3c7",
+      "size_bytes": 4269
+    },
+    "RIDGE_READOUT_PROTOCOL.json": {
+      "origin_relative_path": "RIDGE_READOUT_PROTOCOL.json",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "3009022636987d30f802c956d293bfd4fcf99a350f1e79937a6c15a0b8f1e42b",
+      "size_bytes": 4249
+    },
+    "deployment/README.md": {
+      "origin_relative_path": "deployment/README.md",
+      "role": "archived_specification_not_execution_authority",
+      "sha256": "e48750d1070a06fb742d9b6f273ba20f8dc1145f11f8ebc0707d95a4595acd00",
+      "size_bytes": 9546
+    },
+    "deployment/__init__.py": {
+      "origin_relative_path": "deployment/__init__.py",
+      "role": "source_or_regression",
+      "sha256": "fac2a49931bf5f8f914901d5bcfb3604f875f5c792fa27c54fcb6a26fb4be6a4",
+      "size_bytes": 83
+    },
+    "deployment/build.py": {
+      "origin_relative_path": "deployment/build.py",
+      "role": "source_or_regression",
+      "sha256": "1273b9675577caa0572facc1fde3a4a0f39a7a9bc18a15bd68bff0533112cc86",
+      "size_bytes": 19054
+    },
+    "deployment/capacity.py": {
+      "origin_relative_path": "deployment/capacity.py",
+      "role": "source_or_regression",
+      "sha256": "5dc716e2ebb38b8239a1df8c45a10df0320fa979dff74eb9d02c1ebb86d9db71",
+      "size_bytes": 3160
+    },
+    "deployment/common.py": {
+      "origin_relative_path": "deployment/common.py",
+      "role": "source_or_regression",
+      "sha256": "a65f9152650429caf19703b8df4fa39af72dc743e138fb3770735342fc5f34b4",
+      "size_bytes": 23180
+    },
+    "deployment/continuation_build.py": {
+      "origin_relative_path": "deployment/continuation_build.py",
+      "role": "source_or_regression",
+      "sha256": "de09c88cd009fd717375a97c486097ad2e060e06a2440cd199d1f19e6b736b1c",
+      "size_bytes": 10421
+    },
+    "deployment/continuation_replacement_build.py": {
+      "origin_relative_path": "deployment/continuation_replacement_build.py",
+      "role": "source_or_regression",
+      "sha256": "96530ad636b7c8aa2c987df35eac9f3aed2da58395dfa1b6440b78acb76b8bf6",
+      "size_bytes": 16349
+    },
+    "deployment/control.py": {
+      "origin_relative_path": "deployment/control.py",
+      "role": "source_or_regression",
+      "sha256": "e18119fdfce2f85a64b81ab5cf59d835d841d4d57156c74dda4d9e1d6d40b7c3",
+      "size_bytes": 20420
+    },
+    "deployment/main_qualification_build.py": {
+      "origin_relative_path": "deployment/main_qualification_build.py",
+      "role": "source_or_regression",
+      "sha256": "efc57345f1d198aafa302724e9816d95a3bbc856349ff1e45151cb22bfe5e760",
+      "size_bytes": 9075
+    },
+    "deployment/main_qualification_common.py": {
+      "origin_relative_path": "deployment/main_qualification_common.py",
+      "role": "source_or_regression",
+      "sha256": "e28bf49708e9e0ccab1436856b08206316016b45acaa194789d7f6cfb1511230",
+      "size_bytes": 8226
+    },
+    "deployment/main_qualification_control.py": {
+      "origin_relative_path": "deployment/main_qualification_control.py",
+      "role": "source_or_regression",
+      "sha256": "99569efd6ddf86d8eca2ec33f668e3d67b292309ce5a86c1759c1aa10cf93f1b",
+      "size_bytes": 13807
+    },
+    "deployment/main_qualification_entry.py": {
+      "origin_relative_path": "deployment/main_qualification_entry.py",
+      "role": "source_or_regression",
+      "sha256": "d1a51b6332bdbf0f2dc96e5cb790af004eaecdac47712e80d5abade443794c49",
+      "size_bytes": 6655
+    },
+    "deployment/main_qualification_source.py": {
+      "origin_relative_path": "deployment/main_qualification_source.py",
+      "role": "source_or_regression",
+      "sha256": "334cc16f887adb8f92eff121cd8d0002893480a5925c795c0a349037a3a49450",
+      "size_bytes": 4252
+    },
+    "deployment/main_source.py": {
+      "origin_relative_path": "deployment/main_source.py",
+      "role": "source_or_regression",
+      "sha256": "df7bfba85b0c0592491daa6354b2d51216173866e7993e9ae24630c8de4a8e30",
+      "size_bytes": 2507
+    },
+    "deployment/recovery_check_build.py": {
+      "origin_relative_path": "deployment/recovery_check_build.py",
+      "role": "source_or_regression",
+      "sha256": "c98fce5e3f1c6b1a05cd76e406cb0938ab5e4be3ce825803cef9e60db9c5f22c",
+      "size_bytes": 6246
+    },
+    "deployment/recovery_check_common.py": {
+      "origin_relative_path": "deployment/recovery_check_common.py",
+      "role": "source_or_regression",
+      "sha256": "1d43f71accee733189f202931a79c51a5f61828e8c24bd1cea352d544b68da7a",
+      "size_bytes": 6154
+    },
+    "deployment/recovery_check_control.py": {
+      "origin_relative_path": "deployment/recovery_check_control.py",
+      "role": "source_or_regression",
+      "sha256": "0aa2deb8ad8712f5abac9cdac15c00554579619d3a4933af04530829b5983861",
+      "size_bytes": 12344
+    },
+    "deployment/recovery_check_entry.py": {
+      "origin_relative_path": "deployment/recovery_check_entry.py",
+      "role": "source_or_regression",
+      "sha256": "d0c917317a3f3cdedde4708c8d8e91b04c1a8f7c1248432a00454a9e32a81906",
+      "size_bytes": 6796
+    },
+    "deployment/worker_entry.py": {
+      "origin_relative_path": "deployment/worker_entry.py",
+      "role": "source_or_regression",
+      "sha256": "d0af7d1a5ac8df1674661ccd191ab524c0dc1bf4c0160ea5061c2f039e958328",
+      "size_bytes": 6049
+    },
+    "frontier/__init__.py": {
+      "origin_relative_path": "frontier/__init__.py",
+      "role": "source_or_regression",
+      "sha256": "b86c495051d46653b8f0e36e97c73c7fc57693dfaced2f8407fde5a18ec9ce5d",
+      "size_bytes": 82
+    },
+    "frontier/abundance_head.py": {
+      "origin_relative_path": "frontier/abundance_head.py",
+      "role": "source_or_regression",
+      "sha256": "46d30298a9965ed62c98b270ea622d5c15f9334fd0403ebdbe30f4472e39add7",
+      "size_bytes": 17326
+    },
+    "frontier/assessment.py": {
+      "origin_relative_path": "frontier/assessment.py",
+      "role": "source_or_regression",
+      "sha256": "6d3bcda6c4e6c3617c64f8c70751e2fecfe72a3cd14e923d6c9a29f046a949d8",
+      "size_bytes": 24554
+    },
+    "frontier/assessment_storage.py": {
+      "origin_relative_path": "frontier/assessment_storage.py",
+      "role": "source_or_regression",
+      "sha256": "a2254d6621d35a61ec9fc0becb8c561245ba4f3fc4f2f9aaf5344e865eb27d4b",
+      "size_bytes": 30140
+    },
+    "frontier/assessment_support.py": {
+      "origin_relative_path": "frontier/assessment_support.py",
+      "role": "source_or_regression",
+      "sha256": "80341853a946bb77b980b118120d09076aaaac1cc26ed56dd3c3af8287e0b0ed",
+      "size_bytes": 12905
+    },
+    "frontier/bounded_process.py": {
+      "origin_relative_path": "frontier/bounded_process.py",
+      "role": "source_or_regression",
+      "sha256": "61320867a66c6361c90428264789c6478d8d209de5aeb2fbdaf2830df7e33f21",
+      "size_bytes": 1719
+    },
+    "frontier/cache_compiler.py": {
+      "origin_relative_path": "frontier/cache_compiler.py",
+      "role": "source_or_regression",
+      "sha256": "6c7dd7da80b71e440c915a75e1e2480cce4b5df0b09459deede437876144255a",
+      "size_bytes": 28951
+    },
+    "frontier/cache_storage.py": {
+      "origin_relative_path": "frontier/cache_storage.py",
+      "role": "source_or_regression",
+      "sha256": "b5880a0f23225da103dbd519614ab42f4a3dd0ba71dec820bef176fd4b6682ec",
+      "size_bytes": 26169
+    },
+    "frontier/calibration_view.py": {
+      "origin_relative_path": "frontier/calibration_view.py",
+      "role": "source_or_regression",
+      "sha256": "027a6627df4b3283053bfb61638f232a2d9f821e93b4a72a28d55ef62862a326",
+      "size_bytes": 12698
+    },
+    "frontier/capacity.py": {
+      "origin_relative_path": "frontier/capacity.py",
+      "role": "source_or_regression",
+      "sha256": "66e21eec461f753408c69c9dc963ef2141e0c5e6c2aab264dce88608274c5537",
+      "size_bytes": 20578
+    },
+    "frontier/checkpoints.py": {
+      "origin_relative_path": "frontier/checkpoints.py",
+      "role": "source_or_regression",
+      "sha256": "6bb28da9139e134bad03a1e9a2bd40781a58aa6741337e187726e3839bd71974",
+      "size_bytes": 25068
+    },
+    "frontier/configuration.py": {
+      "origin_relative_path": "frontier/configuration.py",
+      "role": "source_or_regression",
+      "sha256": "73f12383130a1cb22f7df0710b7392b7cbfbe4f15ab8faf6591346e1c0b5f94f",
+      "size_bytes": 2330
+    },
+    "frontier/continuation_custody.py": {
+      "origin_relative_path": "frontier/continuation_custody.py",
+      "role": "source_or_regression",
+      "sha256": "9da6730451166ff82ef4fd2bc2d836de3e7e3f74fcf696820b0ce5c2309b1382",
+      "size_bytes": 10932
+    },
+    "frontier/coordination.py": {
+      "origin_relative_path": "frontier/coordination.py",
+      "role": "source_or_regression",
+      "sha256": "fc63cc359355e297ec951f1d7a552fbf0bde88074d51403d693b1d93ed693980",
+      "size_bytes": 51343
+    },
+    "frontier/count_objective.py": {
+      "origin_relative_path": "frontier/count_objective.py",
+      "role": "source_or_regression",
+      "sha256": "92287b75c974ab01d3b0f50a7eecd3bafb34457573cead6d38faebf575a5e0f2",
+      "size_bytes": 16213
+    },
+    "frontier/ensemble_forecast.py": {
+      "origin_relative_path": "frontier/ensemble_forecast.py",
+      "role": "source_or_regression",
+      "sha256": "454fea17899508313ff1166764a86b0e390119a63d5821bdad2671c1ca1471ed",
+      "size_bytes": 19336
+    },
+    "frontier/ensemble_view.py": {
+      "origin_relative_path": "frontier/ensemble_view.py",
+      "role": "source_or_regression",
+      "sha256": "40532ac47f994e90d03278b029c41940a765e35866482d0aa19b90a7655c837b",
+      "size_bytes": 16028
+    },
+    "frontier/evaluation.py": {
+      "origin_relative_path": "frontier/evaluation.py",
+      "role": "source_or_regression",
+      "sha256": "585d4f01b7a1e4beda280040502b43ef61ac803fefa461f4bab126dd344ae0a0",
+      "size_bytes": 22307
+    },
+    "frontier/fitting_execution.py": {
+      "origin_relative_path": "frontier/fitting_execution.py",
+      "role": "source_or_regression",
+      "sha256": "6f7fcd235f287b3c36cfdec4d3698f72433e12dd68c8b75fb00dd5e192c54280",
+      "size_bytes": 9254
+    },
+    "frontier/fitting_factory.py": {
+      "origin_relative_path": "frontier/fitting_factory.py",
+      "role": "source_or_regression",
+      "sha256": "88719cc113150cb38d44c77ad41e6e6988ed0743ec8b8cd94ca3f1cbe59fd956",
+      "size_bytes": 19253
+    },
+    "frontier/fitting_inputs.py": {
+      "origin_relative_path": "frontier/fitting_inputs.py",
+      "role": "source_or_regression",
+      "sha256": "aecb4bf18cccfca9826f18268e2511f87f57311e13f2bb8654aa97deae322fae",
+      "size_bytes": 13873
+    },
+    "frontier/fitting_preparation.py": {
+      "origin_relative_path": "frontier/fitting_preparation.py",
+      "role": "source_or_regression",
+      "sha256": "b33f09572a4bf3a297d60724a50da872e6198f81d1abccd43486038eb1172857",
+      "size_bytes": 27812
+    },
+    "frontier/fitting_provider.py": {
+      "origin_relative_path": "frontier/fitting_provider.py",
+      "role": "source_or_regression",
+      "sha256": "be9f3c2bb8caf6a09a355173d9eed0f3225a312b3e551024e57ef6276eb307c4",
+      "size_bytes": 37630
+    },
+    "frontier/fitting_resources.py": {
+      "origin_relative_path": "frontier/fitting_resources.py",
+      "role": "source_or_regression",
+      "sha256": "f3a0a120b423ac0c0a997ad35f052da747a47e51d3712fc2f847cbb2d5fc82ba",
+      "size_bytes": 12229
+    },
+    "frontier/fitting_stage.py": {
+      "origin_relative_path": "frontier/fitting_stage.py",
+      "role": "source_or_regression",
+      "sha256": "4ef5dba019552c88719480647c79cd694fe1ac14ab16e522730bb467d10594c4",
+      "size_bytes": 12636
+    },
+    "frontier/forecast.py": {
+      "origin_relative_path": "frontier/forecast.py",
+      "role": "source_or_regression",
+      "sha256": "6ba02f3cd35e157ec1e4153781413f87e5b459d25c832ab94f2162552df10f99",
+      "size_bytes": 27640
+    },
+    "frontier/forecast_loader.py": {
+      "origin_relative_path": "frontier/forecast_loader.py",
+      "role": "source_or_regression",
+      "sha256": "fa491bbcc58a4cbfbac9bed4b648d790c5c2fc24e6ae6025a910950064ca253f",
+      "size_bytes": 19571
+    },
+    "frontier/forecast_seal.py": {
+      "origin_relative_path": "frontier/forecast_seal.py",
+      "role": "source_or_regression",
+      "sha256": "15e3ab5c7348784dc6c823022e1168094f2a829f1698d864803c4fad46e2c07a",
+      "size_bytes": 26317
+    },
+    "frontier/forecast_storage.py": {
+      "origin_relative_path": "frontier/forecast_storage.py",
+      "role": "source_or_regression",
+      "sha256": "b715ccc46fb58f4a0a71aa889c8f5a1d6b50373243784b742e7202953a90a97e",
+      "size_bytes": 43563
+    },
+    "frontier/geometry.py": {
+      "origin_relative_path": "frontier/geometry.py",
+      "role": "source_or_regression",
+      "sha256": "8c51314239f2151271264156ee5e59d1c1ab0f10b5f540c5a3601c5d7c808bc8",
+      "size_bytes": 17678
+    },
+    "frontier/logical_batch.py": {
+      "origin_relative_path": "frontier/logical_batch.py",
+      "role": "source_or_regression",
+      "sha256": "6bb060fa901e901b1cb1af2a9d69503b4d32c23b4fe3608440b6f2e54686032f",
+      "size_bytes": 16783
+    },
+    "frontier/main_qualification_artifacts.py": {
+      "origin_relative_path": "frontier/main_qualification_artifacts.py",
+      "role": "source_or_regression",
+      "sha256": "71bec4415fed30a0a5c783b8bbfc8e9055a2df67079fb2e160664076b13c676c",
+      "size_bytes": 14738
+    },
+    "frontier/main_qualification_contract.py": {
+      "origin_relative_path": "frontier/main_qualification_contract.py",
+      "role": "source_or_regression",
+      "sha256": "6da9c77186cb8b424b72aed7586f4e6054b4d27e596f53857f187a2449cdb301",
+      "size_bytes": 6636
+    },
+    "frontier/main_qualification_custody.py": {
+      "origin_relative_path": "frontier/main_qualification_custody.py",
+      "role": "source_or_regression",
+      "sha256": "d52a49653783c77606f95c7447931de071fa7b9e1ea57c73644397c269ba7b12",
+      "size_bytes": 9649
+    },
+    "frontier/main_qualification_dispatch.py": {
+      "origin_relative_path": "frontier/main_qualification_dispatch.py",
+      "role": "source_or_regression",
+      "sha256": "027e65dc054c7a70f2dcfbe9bf36d7f4d364b0b2e1e451daf2d253d4275876bc",
+      "size_bytes": 4948
+    },
+    "frontier/main_qualification_fixture.py": {
+      "origin_relative_path": "frontier/main_qualification_fixture.py",
+      "role": "source_or_regression",
+      "sha256": "cb8b004b4050c1bc4586451b8f7a9cd6e1cfa49e8f72bfe2be895d1cf6f5349c",
+      "size_bytes": 11616
+    },
+    "frontier/main_qualification_owner.py": {
+      "origin_relative_path": "frontier/main_qualification_owner.py",
+      "role": "source_or_regression",
+      "sha256": "2c0b4a9e5bc9df609871628c51bd41ee255022e85e3b30fb9bacabae7e393d7d",
+      "size_bytes": 11379
+    },
+    "frontier/main_qualification_plan.py": {
+      "origin_relative_path": "frontier/main_qualification_plan.py",
+      "role": "source_or_regression",
+      "sha256": "0e941919fe0a52e01ee4a5879d0e51c6da2153d3d7e37c420c2c6022b4f2069e",
+      "size_bytes": 3949
+    },
+    "frontier/main_qualification_precision.py": {
+      "origin_relative_path": "frontier/main_qualification_precision.py",
+      "role": "source_or_regression",
+      "sha256": "8fdb91da132f0f2acb79a69accc1bb0fcc30b632815a7302b043411403c68e04",
+      "size_bytes": 14906
+    },
+    "frontier/main_qualification_readback.py": {
+      "origin_relative_path": "frontier/main_qualification_readback.py",
+      "role": "source_or_regression",
+      "sha256": "72922add429806e4fea06432e8e737bd99c33e5e08543d17c9284a719dd94247",
+      "size_bytes": 9254
+    },
+    "frontier/main_qualification_sequence.py": {
+      "origin_relative_path": "frontier/main_qualification_sequence.py",
+      "role": "source_or_regression",
+      "sha256": "f9e84e6feac6ff3675d3633fd2fa66bac2c50ae538650db6e23dc545415584e4",
+      "size_bytes": 10590
+    },
+    "frontier/main_qualification_terminal.py": {
+      "origin_relative_path": "frontier/main_qualification_terminal.py",
+      "role": "source_or_regression",
+      "sha256": "91fd5eb2facc243b5daa2119be36296299db727085f00bb714da9a085d01484a",
+      "size_bytes": 22944
+    },
+    "frontier/main_qualification_worker.py": {
+      "origin_relative_path": "frontier/main_qualification_worker.py",
+      "role": "source_or_regression",
+      "sha256": "a0a4549fb6595e6f2544c7889f59ae97313687c33f37094e3eefe37e90f7be68",
+      "size_bytes": 19151
+    },
+    "frontier/main_qualification_worker_plan.py": {
+      "origin_relative_path": "frontier/main_qualification_worker_plan.py",
+      "role": "source_or_regression",
+      "sha256": "ea9691d39499b610f84591cf9fe26ac59fcc222b6ce5762d4faaf37c07f4daac",
+      "size_bytes": 2481
+    },
+    "frontier/main_worker.py": {
+      "origin_relative_path": "frontier/main_worker.py",
+      "role": "source_or_regression",
+      "sha256": "166c8c59f9679464bbae22302e96aaf8e01b11acbb030042ac4565b3d325946f",
+      "size_bytes": 17547
+    },
+    "frontier/main_worker_contract.py": {
+      "origin_relative_path": "frontier/main_worker_contract.py",
+      "role": "source_or_regression",
+      "sha256": "7d873d2934203ba2e23139b9083d8e66cc9ef1e26bc0e807c0c558bec051f72c",
+      "size_bytes": 8585
+    },
+    "frontier/main_worker_source.py": {
+      "origin_relative_path": "frontier/main_worker_source.py",
+      "role": "source_or_regression",
+      "sha256": "5c3318754b063965df262023ebf2900a1df509ae4a42eccd0ce0cf9cb6f644ed",
+      "size_bytes": 5379
+    },
+    "frontier/measure_ops.py": {
+      "origin_relative_path": "frontier/measure_ops.py",
+      "role": "source_or_regression",
+      "sha256": "a2f2a3b2dcace6e455e39f18404ff31234be9b1946db69835808d4918907015c",
+      "size_bytes": 11240
+    },
+    "frontier/models.py": {
+      "origin_relative_path": "frontier/models.py",
+      "role": "source_or_regression",
+      "sha256": "bdcb516a9b84c6926c65444c5366cfb107073694512e266b25ce0c57f4ece753",
+      "size_bytes": 24614
+    },
+    "frontier/molecular.py": {
+      "origin_relative_path": "frontier/molecular.py",
+      "role": "source_or_regression",
+      "sha256": "5e1e0299112f307dc101a44f498f79a9c4260203349708406c05e1664ef837c6",
+      "size_bytes": 7662
+    },
+    "frontier/molecular_adjoint.py": {
+      "origin_relative_path": "frontier/molecular_adjoint.py",
+      "role": "source_or_regression",
+      "sha256": "6da9ba95d497b1c3e17a46af402799d70e347a27023acb1c31ed74a573e22182",
+      "size_bytes": 6762
+    },
+    "frontier/native_inputs.py": {
+      "origin_relative_path": "frontier/native_inputs.py",
+      "role": "source_or_regression",
+      "sha256": "49fe02f41b93d65a59e83a579f2d27e824d383f876eda8d7764eb7674b48dc1f",
+      "size_bytes": 31814
+    },
+    "frontier/normalization.py": {
+      "origin_relative_path": "frontier/normalization.py",
+      "role": "source_or_regression",
+      "sha256": "b1432d2f9212febba123690a7381f007593040b23b028461bab99bc83f56d7c8",
+      "size_bytes": 14317
+    },
+    "frontier/normalizer_publication.py": {
+      "origin_relative_path": "frontier/normalizer_publication.py",
+      "role": "source_or_regression",
+      "sha256": "2b96dd6103c0210e1428a65e8a6e5f22f7de9c383d9aea8c45dba1fc7a86dbbd",
+      "size_bytes": 16359
+    },
+    "frontier/objective_registry.py": {
+      "origin_relative_path": "frontier/objective_registry.py",
+      "role": "source_or_regression",
+      "sha256": "8b2cb9b14c50750679f06528b757404cc3791015970a29b556b0039342fd6c01",
+      "size_bytes": 13524
+    },
+    "frontier/observation.py": {
+      "origin_relative_path": "frontier/observation.py",
+      "role": "source_or_regression",
+      "sha256": "0f01591b85af976a34c64d76e506e7cc85cb4f7ede8f3827d8177584cdb5605e",
+      "size_bytes": 18584
+    },
+    "frontier/observation_continuation.py": {
+      "origin_relative_path": "frontier/observation_continuation.py",
+      "role": "source_or_regression",
+      "sha256": "4113908ce988fe3599d6eea1ba8668d43ec864641ddbec96d3cd4cd30181b649",
+      "size_bytes": 21906
+    },
+    "frontier/observation_loader.py": {
+      "origin_relative_path": "frontier/observation_loader.py",
+      "role": "source_or_regression",
+      "sha256": "f32410464658b68e3df99424f980206f1be416ddd48cc8af104ea32229109fca",
+      "size_bytes": 14674
+    },
+    "frontier/observation_recovery.py": {
+      "origin_relative_path": "frontier/observation_recovery.py",
+      "role": "source_or_regression",
+      "sha256": "121c28b0cf79d92c6e94629f119a0479d10f7123f1d3016a0707761e97138adf",
+      "size_bytes": 14445
+    },
+    "frontier/observation_recovery_check.py": {
+      "origin_relative_path": "frontier/observation_recovery_check.py",
+      "role": "source_or_regression",
+      "sha256": "5c5a36f49b6e4a6a3ffb75fd8703006a8da7d582243be42476718a1b3baafc78",
+      "size_bytes": 8078
+    },
+    "frontier/observation_training.py": {
+      "origin_relative_path": "frontier/observation_training.py",
+      "role": "source_or_regression",
+      "sha256": "d926db1824e679ac0029900277f0979ae5c43f077ff9b5137a6ebe160643768e",
+      "size_bytes": 30513
+    },
+    "frontier/observation_worker.py": {
+      "origin_relative_path": "frontier/observation_worker.py",
+      "role": "source_or_regression",
+      "sha256": "a0ec8a10f02917ddc70785410a41fcb56b0b3c3c9dc048cc8546dba4b4d0363a",
+      "size_bytes": 48098
+    },
+    "frontier/planner.py": {
+      "origin_relative_path": "frontier/planner.py",
+      "role": "source_or_regression",
+      "sha256": "cb8b89db40ccac4039bbfa2ada034091fab592a59ecee8f3fe38992e431339ba",
+      "size_bytes": 23782
+    },
+    "frontier/prediction_plan.py": {
+      "origin_relative_path": "frontier/prediction_plan.py",
+      "role": "source_or_regression",
+      "sha256": "87f2436c12719103e44ed315cbd77380ecfcd78faddcefa840cdca88619f1fa2",
+      "size_bytes": 14350
+    },
+    "frontier/qualification_inventory.py": {
+      "origin_relative_path": "frontier/qualification_inventory.py",
+      "role": "source_or_regression",
+      "sha256": "79cb95f6c5839145c66fe8757cc44227315ae602ff20e044737c748a1354d5b1",
+      "size_bytes": 4650
+    },
+    "frontier/query_compiler.py": {
+      "origin_relative_path": "frontier/query_compiler.py",
+      "role": "source_or_regression",
+      "sha256": "87d4c7e953e33daf067c74c5553457b839f020523bc0191705089670fa8f024a",
+      "size_bytes": 5755
+    },
+    "frontier/reference_model_storage.py": {
+      "origin_relative_path": "frontier/reference_model_storage.py",
+      "role": "source_or_regression",
+      "sha256": "2bf493000f80a645df5ae80c288f57aed0bb0e13c69b1487f3dd50c4d6d9eff5",
+      "size_bytes": 18027
+    },
+    "frontier/reliability.py": {
+      "origin_relative_path": "frontier/reliability.py",
+      "role": "source_or_regression",
+      "sha256": "880ae0e4926b4d8c5717e59fec5c585b13b09f67bcac4354e691ae19e331dc03",
+      "size_bytes": 22200
+    },
+    "frontier/retention.py": {
+      "origin_relative_path": "frontier/retention.py",
+      "role": "source_or_regression",
+      "sha256": "650fc971c28fd5cd62052af6c9ec36f98fef86e3edd6c1d5c25230beafc59617",
+      "size_bytes": 19385
+    },
+    "frontier/retention_canary.py": {
+      "origin_relative_path": "frontier/retention_canary.py",
+      "role": "source_or_regression",
+      "sha256": "3698b30e0beced413cc3e8883efe72dbd73d90924578dd97d7e0b3c214be0d00",
+      "size_bytes": 3931
+    },
+    "frontier/ridge_readout.py": {
+      "origin_relative_path": "frontier/ridge_readout.py",
+      "role": "source_or_regression",
+      "sha256": "957b749fd2999e7b3fec10251731b93bd0b1be6506df05bbbef7f11398e515f8",
+      "size_bytes": 19466
+    },
+    "frontier/sampling.py": {
+      "origin_relative_path": "frontier/sampling.py",
+      "role": "source_or_regression",
+      "sha256": "bcdd6fb2b2449edb44831b09377fa9958c6fdf6adb22e93587dcd8e3ac212e45",
+      "size_bytes": 17957
+    },
+    "frontier/selection.py": {
+      "origin_relative_path": "frontier/selection.py",
+      "role": "source_or_regression",
+      "sha256": "9afa55f89940692e2dd85b081251103bbdbb2994f9b1828bc7e4f62dc2034b20",
+      "size_bytes": 7112
+    },
+    "frontier/selection_evidence.py": {
+      "origin_relative_path": "frontier/selection_evidence.py",
+      "role": "source_or_regression",
+      "sha256": "4dc670c36a02971ecb441d9c88d0c08f276f55eca2c29d7be04fabc951dcdd73",
+      "size_bytes": 27287
+    },
+    "frontier/selector_contract.py": {
+      "origin_relative_path": "frontier/selector_contract.py",
+      "role": "source_or_regression",
+      "sha256": "0b0fbee7a7a776ca98be49c33c61977eb08ced263a04ea62fc72c30b48a737c9",
+      "size_bytes": 15122
+    },
+    "frontier/simple_reference_inputs.py": {
+      "origin_relative_path": "frontier/simple_reference_inputs.py",
+      "role": "source_or_regression",
+      "sha256": "163d5210d4318e16f06f0017a2f9b0102201a808d96d46830b13535e8e05a76e",
+      "size_bytes": 13624
+    },
+    "frontier/training_objective.py": {
+      "origin_relative_path": "frontier/training_objective.py",
+      "role": "source_or_regression",
+      "sha256": "7d5de10401b6eaf6ce66c79b628bdb27a1aa5e0e8b0b967e4a565c75a1962077",
+      "size_bytes": 33024
+    },
+    "frontier/training_owner.py": {
+      "origin_relative_path": "frontier/training_owner.py",
+      "role": "source_or_regression",
+      "sha256": "7ab50290aee6419c9b490e9d485b0459f6261c354f2a7b56006846f65dd93ecc",
+      "size_bytes": 34595
+    },
+    "frontier/truth_compiler.py": {
+      "origin_relative_path": "frontier/truth_compiler.py",
+      "role": "source_or_regression",
+      "sha256": "fd2ef084fa169bc0196e85ca680f324c846d8ca5bc279e6d0538c355f7286ae6",
+      "size_bytes": 7531
+    },
+    "inspect_native_metadata.py": {
+      "origin_relative_path": "inspect_native_metadata.py",
+      "role": "source_or_regression",
+      "sha256": "0a3319b129ae148a89212e2761bc62ec56803b346571c9a0f3674072e0c9e2b8",
+      "size_bytes": 4327
+    },
+    "operations/accept_observation.py": {
+      "origin_relative_path": "operations/accept_observation.py",
+      "role": "source_or_regression",
+      "sha256": "3b1344034feab2a4497c9758fa2c374783fb586749ab2f0aee9858cfb9b097ca",
+      "size_bytes": 24425
+    },
+    "operations/accept_observation_continuation.py": {
+      "origin_relative_path": "operations/accept_observation_continuation.py",
+      "role": "source_or_regression",
+      "sha256": "4572d80e6dc0f3db624df111715192fe5360aab1325abcbf41ba052887a66b58",
+      "size_bytes": 20870
+    },
+    "operations/continue_observation.py": {
+      "origin_relative_path": "operations/continue_observation.py",
+      "role": "source_or_regression",
+      "sha256": "cf2b83192cc072f4bd2288bcfa769865fda266b8e943697ab45c95aeffd8e5ae",
+      "size_bytes": 8292
+    },
+    "operations/intake_observation_continuation.py": {
+      "origin_relative_path": "operations/intake_observation_continuation.py",
+      "role": "source_or_regression",
+      "sha256": "35dad9e6d0040de7039c728ed34d53edfd498253719d8ac8f99bc411212191d7",
+      "size_bytes": 4502
+    },
+    "operations/intake_retention_recovery.py": {
+      "origin_relative_path": "operations/intake_retention_recovery.py",
+      "role": "source_or_regression",
+      "sha256": "e1fb9267d211fdee7697ded950c0ab8667203cc15f609932e1a6154f5b9e4bfe",
+      "size_bytes": 7451
+    },
+    "operations/main_qualification.py": {
+      "origin_relative_path": "operations/main_qualification.py",
+      "role": "source_or_regression",
+      "sha256": "4a411fa229f9bbc6605ba96ee0b21afa8b1d4d7a174f81e102083de863515b52",
+      "size_bytes": 4376
+    },
+    "operations/observation.py": {
+      "origin_relative_path": "operations/observation.py",
+      "role": "source_or_regression",
+      "sha256": "775f6203c0f33ddfb3cacdc60215ede74f34baada40c01e4e954d1863e0df967",
+      "size_bytes": 19620
+    },
+    "operations/observation_progress.py": {
+      "origin_relative_path": "operations/observation_progress.py",
+      "role": "source_or_regression",
+      "sha256": "86c9c03b1b77a93140ff5334a88e685d9541ab27ee127dded02b5da54e6da344",
+      "size_bytes": 7136
+    },
+    "operations/recover_observation_fits.py": {
+      "origin_relative_path": "operations/recover_observation_fits.py",
+      "role": "source_or_regression",
+      "sha256": "027fd6e6170d5fb8d498280ab641aba93745ed3acd70618fd53721d1b82c4c73",
+      "size_bytes": 13003
+    },
+    "operations/recovery_check.py": {
+      "origin_relative_path": "operations/recovery_check.py",
+      "role": "source_or_regression",
+      "sha256": "07c9b730b1b2f10f783434eb37aae8e0918670ee65df36b8809262d77d83d216",
+      "size_bytes": 3666
+    },
+    "operations/replace_observation_continuation.py": {
+      "origin_relative_path": "operations/replace_observation_continuation.py",
+      "role": "source_or_regression",
+      "sha256": "a7dc2330f11fd73d163866bee438fc365d8dc40e75022d28ca9a3f595a5dc3b0",
+      "size_bytes": 13813
+    },
+    "operations/reserve_main_qualification.py": {
+      "origin_relative_path": "operations/reserve_main_qualification.py",
+      "role": "source_or_regression",
+      "sha256": "93bc0c879d2aca4db86a574a428dce3cde9d8a031cac37d51b95992f8e033fab",
+      "size_bytes": 3903
+    },
+    "operations/reserve_observation.py": {
+      "origin_relative_path": "operations/reserve_observation.py",
+      "role": "source_or_regression",
+      "sha256": "a65f901147a4ae02c37bceb49fa51877e16df451ac5b55a56987d982794bf193",
+      "size_bytes": 3718
+    },
+    "operations/reserve_observation_fits.py": {
+      "origin_relative_path": "operations/reserve_observation_fits.py",
+      "role": "source_or_regression",
+      "sha256": "88630224b4476d64b464ee085d75d7d8270e7d94f849b0a3dee356f97553495b",
+      "size_bytes": 29034
+    },
+    "operations/reserve_recovery_check.py": {
+      "origin_relative_path": "operations/reserve_recovery_check.py",
+      "role": "source_or_regression",
+      "sha256": "2232ddb1acc4dfd9be3efabdd300ec375e4f68399bc2df0b2fd22a833b11089d",
+      "size_bytes": 3043
+    },
+    "operations/status_observation.py": {
+      "origin_relative_path": "operations/status_observation.py",
+      "role": "source_or_regression",
+      "sha256": "ceea8e1250f6b17d7fe370d23fde12e8c7c9e4864fdb4a2a2120cd1d0118d2cb",
+      "size_bytes": 5129
+    },
+    "operations/status_recovery_check.py": {
+      "origin_relative_path": "operations/status_recovery_check.py",
+      "role": "source_or_regression",
+      "sha256": "0c82cf2041b9ed2d88795a0e28f01d8e990c56a07f4cb3d7366ccc6b05d225b0",
+      "size_bytes": 1687
+    },
+    "operations/transport.py": {
+      "origin_relative_path": "operations/transport.py",
+      "role": "source_or_regression",
+      "sha256": "2a3b248c6182b4c660400ea037a4c590570678f6d07a423e41fa2cac34d6babc",
+      "size_bytes": 6156
+    },
+    "tests/test_abundance_head.py": {
+      "origin_relative_path": "tests/test_abundance_head.py",
+      "role": "source_or_regression",
+      "sha256": "531b0df029a36a5cf08c93d0a8ebb395b3d11ffd0c6baf20edf366555d0dfedd",
+      "size_bytes": 12500
+    },
+    "tests/test_assessment.py": {
+      "origin_relative_path": "tests/test_assessment.py",
+      "role": "source_or_regression",
+      "sha256": "5b661b4b40138f4753cdafa79003eb108445ed7c7039aacfdc9bc878f7ce3f19",
+      "size_bytes": 23565
+    },
+    "tests/test_assessment_storage.py": {
+      "origin_relative_path": "tests/test_assessment_storage.py",
+      "role": "source_or_regression",
+      "sha256": "57a3b9b44c84696bb893492ed522bee76c170457a468e9e7b48bf8e3d660973f",
+      "size_bytes": 14552
+    },
+    "tests/test_assessment_support.py": {
+      "origin_relative_path": "tests/test_assessment_support.py",
+      "role": "source_or_regression",
+      "sha256": "3131efa627ff064f65b9b2b8ffa587eaa578aab8566db7b649a9f74cac6cf69d",
+      "size_bytes": 18027
+    },
+    "tests/test_bounded_process.py": {
+      "origin_relative_path": "tests/test_bounded_process.py",
+      "role": "source_or_regression",
+      "sha256": "96a9bd43dea0bfb8256f72a81cc3da2aa8a738d8b7d00e32a40b4fef75219638",
+      "size_bytes": 1515
+    },
+    "tests/test_cache_compiler.py": {
+      "origin_relative_path": "tests/test_cache_compiler.py",
+      "role": "source_or_regression",
+      "sha256": "3ebe6422c751db60f7276b94ca4f7cbdc51b9268e84b581afefaca3f5ad77629",
+      "size_bytes": 17799
+    },
+    "tests/test_cache_storage.py": {
+      "origin_relative_path": "tests/test_cache_storage.py",
+      "role": "source_or_regression",
+      "sha256": "9a26c4741cc88960c84649cc6531ef933270d5edf2f13627357b160ed2d02eb2",
+      "size_bytes": 16446
+    },
+    "tests/test_calibration_view.py": {
+      "origin_relative_path": "tests/test_calibration_view.py",
+      "role": "source_or_regression",
+      "sha256": "fb6455612f12fcebfaf0ed6fe6afb69214cff86b647dff1c17f9fce500f25473",
+      "size_bytes": 12570
+    },
+    "tests/test_capacity.py": {
+      "origin_relative_path": "tests/test_capacity.py",
+      "role": "source_or_regression",
+      "sha256": "69d8df60f76ca15cd96c5592cfb0e7afd045a3357d61d8aadaa2ffa40366a24d",
+      "size_bytes": 14685
+    },
+    "tests/test_checkpoint_limits.py": {
+      "origin_relative_path": "tests/test_checkpoint_limits.py",
+      "role": "source_or_regression",
+      "sha256": "ab0f74e9d7bb3cc7c052bdd6422ff69c5b301ad8210396c9e60469c48f1f1aa9",
+      "size_bytes": 5211
+    },
+    "tests/test_checkpoint_phase.py": {
+      "origin_relative_path": "tests/test_checkpoint_phase.py",
+      "role": "source_or_regression",
+      "sha256": "601f382a4246b4c1a2eacc758f35069a53df9b8d7f3d968c3f8baf05a8d4c5af",
+      "size_bytes": 7689
+    },
+    "tests/test_checkpoints.py": {
+      "origin_relative_path": "tests/test_checkpoints.py",
+      "role": "source_or_regression",
+      "sha256": "d122bf538e53b03421e289a209555d26197f9fd25fac4d734b13f4eb91ca8b88",
+      "size_bytes": 10718
+    },
+    "tests/test_continuation_build.py": {
+      "origin_relative_path": "tests/test_continuation_build.py",
+      "role": "source_or_regression",
+      "sha256": "fb158dfd5534356b17dfc1fc2ab18447d87d39bdd87c8a831634a1a3fdad2d52",
+      "size_bytes": 18769
+    },
+    "tests/test_continuation_custody.py": {
+      "origin_relative_path": "tests/test_continuation_custody.py",
+      "role": "source_or_regression",
+      "sha256": "001081ccccb4c3517db2d525d4b41cac884abfcf0567c8ef25dcd6fe18277526",
+      "size_bytes": 8490
+    },
+    "tests/test_continuation_lifecycle.py": {
+      "origin_relative_path": "tests/test_continuation_lifecycle.py",
+      "role": "source_or_regression",
+      "sha256": "86692a2f06fd86762b126e970ebe57cdaf4205dacb0e80689ff002bdf8046afc",
+      "size_bytes": 10522
+    },
+    "tests/test_continuation_replacement_build.py": {
+      "origin_relative_path": "tests/test_continuation_replacement_build.py",
+      "role": "source_or_regression",
+      "sha256": "6dd6e3660876e3cc3456209546faf3128ce3430827cfb80ab60d8be01d57a746",
+      "size_bytes": 10067
+    },
+    "tests/test_continuation_replacement_operator.py": {
+      "origin_relative_path": "tests/test_continuation_replacement_operator.py",
+      "role": "source_or_regression",
+      "sha256": "d7824b063afd81d9e6f725546123ffbe23ef157935425debe83aa350d407813f",
+      "size_bytes": 9146
+    },
+    "tests/test_coordination.py": {
+      "origin_relative_path": "tests/test_coordination.py",
+      "role": "source_or_regression",
+      "sha256": "0ed173f6cf08dc1f9b8837dceda333bdeb03db390169fed030da54ed6139d075",
+      "size_bytes": 14332
+    },
+    "tests/test_count_objective.py": {
+      "origin_relative_path": "tests/test_count_objective.py",
+      "role": "source_or_regression",
+      "sha256": "2604652b0007ee74b39172189b1c9d20562cc9586dcdff6c8d0db350c0e23494",
+      "size_bytes": 14571
+    },
+    "tests/test_ensemble_assessment.py": {
+      "origin_relative_path": "tests/test_ensemble_assessment.py",
+      "role": "source_or_regression",
+      "sha256": "30c67365cc32314434e9f7b170362a6792c5cc352cf5724d6ab2f1c4355a8882",
+      "size_bytes": 11123
+    },
+    "tests/test_ensemble_forecast.py": {
+      "origin_relative_path": "tests/test_ensemble_forecast.py",
+      "role": "source_or_regression",
+      "sha256": "8fa96bf658fd832b8f5ecfcc2697e230cacb209b02a0f0906272b518398f8216",
+      "size_bytes": 16296
+    },
+    "tests/test_ensemble_view.py": {
+      "origin_relative_path": "tests/test_ensemble_view.py",
+      "role": "source_or_regression",
+      "sha256": "82a305d8c4494ba2fa13c4203932ecda87c584c459983bb8012fb1c2deb4474e",
+      "size_bytes": 12656
+    },
+    "tests/test_evaluation.py": {
+      "origin_relative_path": "tests/test_evaluation.py",
+      "role": "source_or_regression",
+      "sha256": "61e0decaf5d04cbf0b25521a69c0a98b45985ab7592aff3d08a20aa0bf9227f8",
+      "size_bytes": 17021
+    },
+    "tests/test_fitting_execution.py": {
+      "origin_relative_path": "tests/test_fitting_execution.py",
+      "role": "source_or_regression",
+      "sha256": "b4084495f74b1e38a51a0643879a8e135b67732a59435ebc4334228d78189b10",
+      "size_bytes": 9747
+    },
+    "tests/test_fitting_factory.py": {
+      "origin_relative_path": "tests/test_fitting_factory.py",
+      "role": "source_or_regression",
+      "sha256": "253757e72ca054432d51fd1d601cff4a2a2c1aff99ad031527af686be517d02a",
+      "size_bytes": 14760
+    },
+    "tests/test_fitting_inputs.py": {
+      "origin_relative_path": "tests/test_fitting_inputs.py",
+      "role": "source_or_regression",
+      "sha256": "60d8915ab3228fc50bfa5ed89c01f647f00e12d6140049ce6089bf6c22718c6c",
+      "size_bytes": 14368
+    },
+    "tests/test_fitting_preparation.py": {
+      "origin_relative_path": "tests/test_fitting_preparation.py",
+      "role": "source_or_regression",
+      "sha256": "7b8ec753b874a999ad00a49d6f173b804479f105de1ca6f50ba6674b875c17cc",
+      "size_bytes": 13410
+    },
+    "tests/test_fitting_provider.py": {
+      "origin_relative_path": "tests/test_fitting_provider.py",
+      "role": "source_or_regression",
+      "sha256": "ed4830023303bd3316ef85148b54427dbaf3be3a86076fd8ac73a892317f0075",
+      "size_bytes": 19547
+    },
+    "tests/test_fitting_resources.py": {
+      "origin_relative_path": "tests/test_fitting_resources.py",
+      "role": "source_or_regression",
+      "sha256": "5ba7ebca08ad78916034cf9da6f1bdccc4a12c2d5f113baa7d8d98d6d0fc219e",
+      "size_bytes": 10489
+    },
+    "tests/test_fitting_stage.py": {
+      "origin_relative_path": "tests/test_fitting_stage.py",
+      "role": "source_or_regression",
+      "sha256": "22a32c4028ae90ef23f5c67ffb049464eb58b4ff90f413285310a2e6c6a9856d",
+      "size_bytes": 12019
+    },
+    "tests/test_forecast.py": {
+      "origin_relative_path": "tests/test_forecast.py",
+      "role": "source_or_regression",
+      "sha256": "a72148e4feb3614b85b7a3f98674e614633e27a6abf0c5cf8f9970ee2781d16d",
+      "size_bytes": 15851
+    },
+    "tests/test_forecast_loader.py": {
+      "origin_relative_path": "tests/test_forecast_loader.py",
+      "role": "source_or_regression",
+      "sha256": "d8e302160bfb11b5db12f3de4988bba53ef3ad5135cd032a8f561b1a7c7fc0ae",
+      "size_bytes": 15307
+    },
+    "tests/test_forecast_seal.py": {
+      "origin_relative_path": "tests/test_forecast_seal.py",
+      "role": "source_or_regression",
+      "sha256": "ced17d6f2366bc9bc8958d44390a6857adcae3e4e659e00814d0018e71d6e886",
+      "size_bytes": 27457
+    },
+    "tests/test_forecast_storage.py": {
+      "origin_relative_path": "tests/test_forecast_storage.py",
+      "role": "source_or_regression",
+      "sha256": "2b8386674fe82e6183f6115692661c182717f95229794b57f21b208aa144190c",
+      "size_bytes": 16096
+    },
+    "tests/test_geometry.py": {
+      "origin_relative_path": "tests/test_geometry.py",
+      "role": "source_or_regression",
+      "sha256": "a88eebafbae08da71566541efadd372e258065d1021ef1d45ca876f4a12d128d",
+      "size_bytes": 10879
+    },
+    "tests/test_logical_batch.py": {
+      "origin_relative_path": "tests/test_logical_batch.py",
+      "role": "source_or_regression",
+      "sha256": "7235506b6f7933b5c19bf470e2fbdcf04e6613062dc65c21791cc32f65f14465",
+      "size_bytes": 14576
+    },
+    "tests/test_main_qualification.py": {
+      "origin_relative_path": "tests/test_main_qualification.py",
+      "role": "source_or_regression",
+      "sha256": "ba6fb13c8a95d47256b44281456541ebb9c85fe0bb879f17d296757fb98613d4",
+      "size_bytes": 11695
+    },
+    "tests/test_main_qualification_artifacts.py": {
+      "origin_relative_path": "tests/test_main_qualification_artifacts.py",
+      "role": "source_or_regression",
+      "sha256": "4e3d5357a585c8b6c6dd57690b9d3859e4d22058d2d6abfb23bb901833d9c7b1",
+      "size_bytes": 4242
+    },
+    "tests/test_main_qualification_custody.py": {
+      "origin_relative_path": "tests/test_main_qualification_custody.py",
+      "role": "source_or_regression",
+      "sha256": "e09c2c03634f75df9e65ffb8cf891e42ddb9cadda753ef5ff7c6781d88c85d91",
+      "size_bytes": 4980
+    },
+    "tests/test_main_qualification_deployment.py": {
+      "origin_relative_path": "tests/test_main_qualification_deployment.py",
+      "role": "source_or_regression",
+      "sha256": "eac8d345329b61bda6d643c01018730308f84cc2b8e7cac0effd7dd407d7a18d",
+      "size_bytes": 24230
+    },
+    "tests/test_main_qualification_input_path.py": {
+      "origin_relative_path": "tests/test_main_qualification_input_path.py",
+      "role": "source_or_regression",
+      "sha256": "6caa48a829ff2c6bfe4bc409ba5a7cc8889035a063e88028f068e39e398cee3c",
+      "size_bytes": 4735
+    },
+    "tests/test_main_qualification_precision.py": {
+      "origin_relative_path": "tests/test_main_qualification_precision.py",
+      "role": "source_or_regression",
+      "sha256": "89d4a0b511a297701d2250f0a7a629264149db92f30a47a9b8e3ab329e7b352f",
+      "size_bytes": 8767
+    },
+    "tests/test_main_qualification_readback.py": {
+      "origin_relative_path": "tests/test_main_qualification_readback.py",
+      "role": "source_or_regression",
+      "sha256": "b9f3e2946032834117c0e7f7cee3b414f85af98e36e9e65800b5015dad4df2d2",
+      "size_bytes": 10176
+    },
+    "tests/test_main_qualification_sequence.py": {
+      "origin_relative_path": "tests/test_main_qualification_sequence.py",
+      "role": "source_or_regression",
+      "sha256": "02f829f63aee7629fb250c882cae57b259e725e129323d61ef249b947a2e60fb",
+      "size_bytes": 5954
+    },
+    "tests/test_main_qualification_source.py": {
+      "origin_relative_path": "tests/test_main_qualification_source.py",
+      "role": "source_or_regression",
+      "sha256": "f81b3cc22137dfc92185cd155d09924c22bcad0742c9bab6cfe7b3d144999e0e",
+      "size_bytes": 3664
+    },
+    "tests/test_main_qualification_terminal.py": {
+      "origin_relative_path": "tests/test_main_qualification_terminal.py",
+      "role": "source_or_regression",
+      "sha256": "2783f042c1e2eff1d8caedeb2c233816a91bbea9c6ebacb0c18195a464b837c6",
+      "size_bytes": 15124
+    },
+    "tests/test_main_qualification_worker.py": {
+      "origin_relative_path": "tests/test_main_qualification_worker.py",
+      "role": "source_or_regression",
+      "sha256": "ad3ecc8b81b100afb27928834b93d59aa18ab15fae77b1c3936c4de3deadd321",
+      "size_bytes": 14554
+    },
+    "tests/test_main_worker.py": {
+      "origin_relative_path": "tests/test_main_worker.py",
+      "role": "source_or_regression",
+      "sha256": "a1e5e4b11413031c4aaa5b1626b1efbfdc6c9a695bed928b39f91a1d8d3c8c9b",
+      "size_bytes": 18985
+    },
+    "tests/test_main_worker_qualification.py": {
+      "origin_relative_path": "tests/test_main_worker_qualification.py",
+      "role": "source_or_regression",
+      "sha256": "21972aa8d6606cbf93c412acfbf69a83cb6eef5011076668d46f336e1433504b",
+      "size_bytes": 15934
+    },
+    "tests/test_main_worker_source.py": {
+      "origin_relative_path": "tests/test_main_worker_source.py",
+      "role": "source_or_regression",
+      "sha256": "ce59950246473b2a404218ca53284cc5b21fe21d942907f6e7dee1d0c33baa08",
+      "size_bytes": 4368
+    },
+    "tests/test_measure_ops.py": {
+      "origin_relative_path": "tests/test_measure_ops.py",
+      "role": "source_or_regression",
+      "sha256": "7ea58df7e371985911b1c1122d18952ec3fc55135b3ff19bbb3eff3bd7d7db55",
+      "size_bytes": 7021
+    },
+    "tests/test_models.py": {
+      "origin_relative_path": "tests/test_models.py",
+      "role": "source_or_regression",
+      "sha256": "9d5fa3567f8d91bd3de32f719cb629cc8a253e2ca8733aa857c02d2cc116c5ae",
+      "size_bytes": 22338
+    },
+    "tests/test_molecular.py": {
+      "origin_relative_path": "tests/test_molecular.py",
+      "role": "source_or_regression",
+      "sha256": "1e6cf615a0fff48fdf1c633403fa48d2ec02bb75fa51bf6cb04bc61688ee47ac",
+      "size_bytes": 3661
+    },
+    "tests/test_molecular_adjoint.py": {
+      "origin_relative_path": "tests/test_molecular_adjoint.py",
+      "role": "source_or_regression",
+      "sha256": "9e27634327580b8636d2924ab06cdb44379a3fed6e48f3f9642eacc4a17ebe0f",
+      "size_bytes": 3802
+    },
+    "tests/test_native_inputs.py": {
+      "origin_relative_path": "tests/test_native_inputs.py",
+      "role": "source_or_regression",
+      "sha256": "bf1472d50a487a0634a9ab8a8f2aa15c7d34e4e3c9d5499ff74bc4f263688401",
+      "size_bytes": 16661
+    },
+    "tests/test_normalization.py": {
+      "origin_relative_path": "tests/test_normalization.py",
+      "role": "source_or_regression",
+      "sha256": "8e783c082dd2d7d8247097c53ee8dcb68d558fccb1f30bf6c339fc35fd97f4d6",
+      "size_bytes": 5924
+    },
+    "tests/test_normalizer_publication.py": {
+      "origin_relative_path": "tests/test_normalizer_publication.py",
+      "role": "source_or_regression",
+      "sha256": "ec7d2c933f5cd8ebe891bcbe7b4f0395f89da58c4b47016102129bda4346198d",
+      "size_bytes": 9850
+    },
+    "tests/test_objective_registry.py": {
+      "origin_relative_path": "tests/test_objective_registry.py",
+      "role": "source_or_regression",
+      "sha256": "53b2ff8e4090fdf2cee0fc4ad162a1f4ec5ffc1e5a2fe2f4574a13e15a4aecb8",
+      "size_bytes": 9426
+    },
+    "tests/test_observation.py": {
+      "origin_relative_path": "tests/test_observation.py",
+      "role": "source_or_regression",
+      "sha256": "e2ee9eb86a0f4402030715022fd238f52d01fd44027fb5d33ed0843ae3c05589",
+      "size_bytes": 9957
+    },
+    "tests/test_observation_acceptance.py": {
+      "origin_relative_path": "tests/test_observation_acceptance.py",
+      "role": "source_or_regression",
+      "sha256": "2bfc9d61864e1a0df75ac86e2cdbc02be89b6c758c71def0b8960af48260b3f3",
+      "size_bytes": 19564
+    },
+    "tests/test_observation_continuation.py": {
+      "origin_relative_path": "tests/test_observation_continuation.py",
+      "role": "source_or_regression",
+      "sha256": "86f1625980e9792b212f5e187051dbf46a00f0306a98480da6bffe4c447c5e38",
+      "size_bytes": 16130
+    },
+    "tests/test_observation_continuation_acceptance.py": {
+      "origin_relative_path": "tests/test_observation_continuation_acceptance.py",
+      "role": "source_or_regression",
+      "sha256": "af6d4ccd0ce6b713f578201c146ccfbd2ccfe82535fdff9a4a4d9bd77e36f8c2",
+      "size_bytes": 19280
+    },
+    "tests/test_observation_continuation_journal.py": {
+      "origin_relative_path": "tests/test_observation_continuation_journal.py",
+      "role": "source_or_regression",
+      "sha256": "8fea025953a8badd1610b1574f8a27fbb5a851f21da93dada1b93144b7c52347",
+      "size_bytes": 13336
+    },
+    "tests/test_observation_deployment.py": {
+      "origin_relative_path": "tests/test_observation_deployment.py",
+      "role": "source_or_regression",
+      "sha256": "6345a8782232453a7c3afcd0f9e19cfa9d36605c3ea65657a733040d78b2e0bc",
+      "size_bytes": 18428
+    },
+    "tests/test_observation_fit_admission.py": {
+      "origin_relative_path": "tests/test_observation_fit_admission.py",
+      "role": "source_or_regression",
+      "sha256": "38fc8236c4411564b6879eb09ebfcfe4112624a53d094d5e5dc24b349d77d197",
+      "size_bytes": 31781
+    },
+    "tests/test_observation_loader.py": {
+      "origin_relative_path": "tests/test_observation_loader.py",
+      "role": "source_or_regression",
+      "sha256": "c12c3c2e6791bd40dffcc89be2705e59e684812ed65cd43decefe31ae6c0a186",
+      "size_bytes": 11070
+    },
+    "tests/test_observation_operations.py": {
+      "origin_relative_path": "tests/test_observation_operations.py",
+      "role": "source_or_regression",
+      "sha256": "1d6079bc5c24dc84e51cc991cc24e69ff851ca18a1036cc430a00f9e7cf0c484",
+      "size_bytes": 10418
+    },
+    "tests/test_observation_progress.py": {
+      "origin_relative_path": "tests/test_observation_progress.py",
+      "role": "source_or_regression",
+      "sha256": "be3b0ad3cdc9c12aa155d8eac93c57adf93d8fe0860e2491561c817550b8b833",
+      "size_bytes": 6988
+    },
+    "tests/test_observation_qualification_compatibility.py": {
+      "origin_relative_path": "tests/test_observation_qualification_compatibility.py",
+      "role": "source_or_regression",
+      "sha256": "4fe465b28a3a548cbb8b00eae4b18f6479dfb6c1246fc788909434643c4cfaaf",
+      "size_bytes": 10977
+    },
+    "tests/test_observation_recovery_journal.py": {
+      "origin_relative_path": "tests/test_observation_recovery_journal.py",
+      "role": "source_or_regression",
+      "sha256": "a03610cafa8fc2ab9e62d43f5fe08ad518bfd295f7be29d74abd07c8dce81d3f",
+      "size_bytes": 4967
+    },
+    "tests/test_observation_recovery_operations.py": {
+      "origin_relative_path": "tests/test_observation_recovery_operations.py",
+      "role": "source_or_regression",
+      "sha256": "124b2d23cc1138581aaa2b5fa195ae57f1987e452ffd0fa25fc42c3fe4c264e2",
+      "size_bytes": 4530
+    },
+    "tests/test_observation_source_import.py": {
+      "origin_relative_path": "tests/test_observation_source_import.py",
+      "role": "source_or_regression",
+      "sha256": "c6569051ecc5a399f2e9c779ccabbb1cfb2ff425a719a7e2510e8ab8638d0cb5",
+      "size_bytes": 12645
+    },
+    "tests/test_observation_training.py": {
+      "origin_relative_path": "tests/test_observation_training.py",
+      "role": "source_or_regression",
+      "sha256": "8e5fcc9aa4ff9d9a11d8e03e1fcb80c8b336630282abf983d1a13bd68049062b",
+      "size_bytes": 10204
+    },
+    "tests/test_observation_worker.py": {
+      "origin_relative_path": "tests/test_observation_worker.py",
+      "role": "source_or_regression",
+      "sha256": "f46ee4044df92bdeda027da008ca32c730e85d02efd6c58fcf5d17bfb833da95",
+      "size_bytes": 15752
+    },
+    "tests/test_planner.py": {
+      "origin_relative_path": "tests/test_planner.py",
+      "role": "source_or_regression",
+      "sha256": "8e510f864876bec2c2a2075d9496559624e2c3ff8e0298b070d0b353078f0a18",
+      "size_bytes": 13993
+    },
+    "tests/test_prediction_plan.py": {
+      "origin_relative_path": "tests/test_prediction_plan.py",
+      "role": "source_or_regression",
+      "sha256": "b100e1daff2e705e204cac4130d9334ade83bfc3aea5f8663ae45cb3eb32f29a",
+      "size_bytes": 10114
+    },
+    "tests/test_query_compiler.py": {
+      "origin_relative_path": "tests/test_query_compiler.py",
+      "role": "source_or_regression",
+      "sha256": "82d5a1b2547ac4a639e853cabfb549c8ac8003e550c372ebbbe3dec2e4b32083",
+      "size_bytes": 6591
+    },
+    "tests/test_reference_model_storage.py": {
+      "origin_relative_path": "tests/test_reference_model_storage.py",
+      "role": "source_or_regression",
+      "sha256": "3e4566e657b890543ca91d40457aaf6f059c20ccac1ba25e08b5eba7bc58a744",
+      "size_bytes": 10841
+    },
+    "tests/test_reliability.py": {
+      "origin_relative_path": "tests/test_reliability.py",
+      "role": "source_or_regression",
+      "sha256": "cd210f73d4c0dbefd25d85d368e1caacf4128c11dd665e2c03334af6ef45002d",
+      "size_bytes": 12623
+    },
+    "tests/test_retention.py": {
+      "origin_relative_path": "tests/test_retention.py",
+      "role": "source_or_regression",
+      "sha256": "344dcd542ab1639aefa024107856a065d04c69c8bfb9bc23afc3830c98fbb55f",
+      "size_bytes": 11419
+    },
+    "tests/test_retention_canary.py": {
+      "origin_relative_path": "tests/test_retention_canary.py",
+      "role": "source_or_regression",
+      "sha256": "1a618767774881a0cbc5796ee7c5782567a311509c28211a2e5a7ba97791974f",
+      "size_bytes": 779
+    },
+    "tests/test_retention_check_deployment.py": {
+      "origin_relative_path": "tests/test_retention_check_deployment.py",
+      "role": "source_or_regression",
+      "sha256": "bb7b1f7c33ae72adf0c4cc4836a516bcee8cc2c35776c769a755047855118704",
+      "size_bytes": 6515
+    },
+    "tests/test_retention_unlink.py": {
+      "origin_relative_path": "tests/test_retention_unlink.py",
+      "role": "source_or_regression",
+      "sha256": "982cb258eda7d7939aff13802300c7c87a9d45ad1ae822a78449c7a674dc9720",
+      "size_bytes": 7380
+    },
+    "tests/test_ridge_readout.py": {
+      "origin_relative_path": "tests/test_ridge_readout.py",
+      "role": "source_or_regression",
+      "sha256": "963da005a910afc748812f2d5e2da2d3bebceff3b563f3df994ce0c14853f248",
+      "size_bytes": 13756
+    },
+    "tests/test_sampling.py": {
+      "origin_relative_path": "tests/test_sampling.py",
+      "role": "source_or_regression",
+      "sha256": "de596b4400da83b0d0b476031f1ea676f54514315d5f25b91f4e216f71d33c64",
+      "size_bytes": 11232
+    },
+    "tests/test_scale_sampling.py": {
+      "origin_relative_path": "tests/test_scale_sampling.py",
+      "role": "source_or_regression",
+      "sha256": "c4f7463790fc3a28d64a0edfaf458436fbc47d04950337d2f7f6343b1854dfbe",
+      "size_bytes": 2445
+    },
+    "tests/test_selection.py": {
+      "origin_relative_path": "tests/test_selection.py",
+      "role": "source_or_regression",
+      "sha256": "1b42e2786cc3393dc3587af5c9151f0b6d4b74daec9abe0bfc7f21bb78fadeae",
+      "size_bytes": 3758
+    },
+    "tests/test_selection_checkpoint_limit.py": {
+      "origin_relative_path": "tests/test_selection_checkpoint_limit.py",
+      "role": "source_or_regression",
+      "sha256": "1e82d293ba0a18c41ee8c4000ee9cb81889c721f6e6da5bf6813f18d9e591145",
+      "size_bytes": 4282
+    },
+    "tests/test_selection_evidence.py": {
+      "origin_relative_path": "tests/test_selection_evidence.py",
+      "role": "source_or_regression",
+      "sha256": "603325fb6b15d443f15189ce3295d4f64f9892f48e82d2a9bf16a843f541d0a2",
+      "size_bytes": 22503
+    },
+    "tests/test_selector_contract.py": {
+      "origin_relative_path": "tests/test_selector_contract.py",
+      "role": "source_or_regression",
+      "sha256": "779ede89cebe5635cb751d592240cc12bc010328ffb92ea00970d8a702332777",
+      "size_bytes": 11773
+    },
+    "tests/test_simple_reference_inputs.py": {
+      "origin_relative_path": "tests/test_simple_reference_inputs.py",
+      "role": "source_or_regression",
+      "sha256": "7e324a41f3909f1894fd5a03463a9bfc6796dcddee9f89c4599e21b63936de9c",
+      "size_bytes": 12585
+    },
+    "tests/test_streamed_forecast.py": {
+      "origin_relative_path": "tests/test_streamed_forecast.py",
+      "role": "source_or_regression",
+      "sha256": "f56b300823f6305eb701a9dbceca8f2477b0ccf7a1457709519b4fd65575a0e6",
+      "size_bytes": 7019
+    },
+    "tests/test_training_objective.py": {
+      "origin_relative_path": "tests/test_training_objective.py",
+      "role": "source_or_regression",
+      "sha256": "bd0ed2dc6ea02f1809f54bc731654b074815195874ab58c2ea8f16afba40034e",
+      "size_bytes": 23726
+    },
+    "tests/test_training_owner.py": {
+      "origin_relative_path": "tests/test_training_owner.py",
+      "role": "source_or_regression",
+      "sha256": "121bc0c85fd3ee16c785073eb6de70e572c0ecf24b1c1b4eed3f669dd3c52a6d",
+      "size_bytes": 14955
+    },
+    "tests/test_truth_compiler.py": {
+      "origin_relative_path": "tests/test_truth_compiler.py",
+      "role": "source_or_regression",
+      "sha256": "5f47db46a24d9bdf6dd339039f1bea3e03b19615263e2a5c31bf07bf38c721ec",
+      "size_bytes": 5973
+    },
+    "tests/test_worker_visible_dependencies.py": {
+      "origin_relative_path": "tests/test_worker_visible_dependencies.py",
+      "role": "source_or_regression",
+      "sha256": "75762ec217aa5e425ae2830eb761e6c6a812ef041497aeb0b9768d765f1b5ed5",
+      "size_bytes": 9305
+    },
+    "tests/test_zero_work_continuation_replacement.py": {
+      "origin_relative_path": "tests/test_zero_work_continuation_replacement.py",
+      "role": "source_or_regression",
+      "sha256": "4983f49b8fea56ba2d7594a5236412f4e180fd6cffa1e79f0cc20f86e0bc0a39",
+      "size_bytes": 11264
+    }
+  },
+  "observation_v4_bundle_checks": {
+    "D1D2": {
+      "continuation_source_matches_snapshot": true,
+      "continuation_sources": {
+        "frontier/observation_continuation.py": "4113908ce988fe3599d6eea1ba8668d43ec864641ddbec96d3cd4cd30181b649",
+        "frontier/observation_recovery.py": "121c28b0cf79d92c6e94629f119a0479d10f7123f1d3016a0707761e97138adf"
+      },
+      "deployment_common_sha256": "a65f9152650429caf19703b8df4fa39af72dc743e138fb3770735342fc5f34b4",
+      "source_manifest_sha256": "d15446a6cf23283883547deb05ff6fe9ab6ebac009a8d761cef73afbc60b2c67",
+      "worker_source_files": {
+        "frontier/__init__.py": "b86c495051d46653b8f0e36e97c73c7fc57693dfaced2f8407fde5a18ec9ce5d",
+        "frontier/checkpoints.py": "6bb28da9139e134bad03a1e9a2bd40781a58aa6741337e187726e3839bd71974",
+        "frontier/native_inputs.py": "49fe02f41b93d65a59e83a579f2d27e824d383f876eda8d7764eb7674b48dc1f",
+        "frontier/observation.py": "0f01591b85af976a34c64d76e506e7cc85cb4f7ede8f3827d8177584cdb5605e",
+        "frontier/observation_training.py": "d926db1824e679ac0029900277f0979ae5c43f077ff9b5137a6ebe160643768e",
+        "frontier/observation_worker.py": "a0ec8a10f02917ddc70785410a41fcb56b0b3c3c9dc048cc8546dba4b4d0363a",
+        "frontier/retention.py": "650fc971c28fd5cd62052af6c9ec36f98fef86e3edd6c1d5c25230beafc59617"
+      },
+      "worker_source_matches_snapshot": true
+    },
+    "D1D3": {
+      "continuation_source_matches_snapshot": true,
+      "continuation_sources": {
+        "frontier/observation_continuation.py": "4113908ce988fe3599d6eea1ba8668d43ec864641ddbec96d3cd4cd30181b649",
+        "frontier/observation_recovery.py": "121c28b0cf79d92c6e94629f119a0479d10f7123f1d3016a0707761e97138adf"
+      },
+      "deployment_common_sha256": "a65f9152650429caf19703b8df4fa39af72dc743e138fb3770735342fc5f34b4",
+      "source_manifest_sha256": "d15446a6cf23283883547deb05ff6fe9ab6ebac009a8d761cef73afbc60b2c67",
+      "worker_source_files": {
+        "frontier/__init__.py": "b86c495051d46653b8f0e36e97c73c7fc57693dfaced2f8407fde5a18ec9ce5d",
+        "frontier/checkpoints.py": "6bb28da9139e134bad03a1e9a2bd40781a58aa6741337e187726e3839bd71974",
+        "frontier/native_inputs.py": "49fe02f41b93d65a59e83a579f2d27e824d383f876eda8d7764eb7674b48dc1f",
+        "frontier/observation.py": "0f01591b85af976a34c64d76e506e7cc85cb4f7ede8f3827d8177584cdb5605e",
+        "frontier/observation_training.py": "d926db1824e679ac0029900277f0979ae5c43f077ff9b5137a6ebe160643768e",
+        "frontier/observation_worker.py": "a0ec8a10f02917ddc70785410a41fcb56b0b3c3c9dc048cc8546dba4b4d0363a",
+        "frontier/retention.py": "650fc971c28fd5cd62052af6c9ec36f98fef86e3edd6c1d5c25230beafc59617"
+      },
+      "worker_source_matches_snapshot": true
+    },
+    "D1D4": {
+      "continuation_source_matches_snapshot": true,
+      "continuation_sources": {
+        "frontier/observation_continuation.py": "4113908ce988fe3599d6eea1ba8668d43ec864641ddbec96d3cd4cd30181b649",
+        "frontier/observation_recovery.py": "121c28b0cf79d92c6e94629f119a0479d10f7123f1d3016a0707761e97138adf"
+      },
+      "deployment_common_sha256": "a65f9152650429caf19703b8df4fa39af72dc743e138fb3770735342fc5f34b4",
+      "source_manifest_sha256": "d15446a6cf23283883547deb05ff6fe9ab6ebac009a8d761cef73afbc60b2c67",
+      "worker_source_files": {
+        "frontier/__init__.py": "b86c495051d46653b8f0e36e97c73c7fc57693dfaced2f8407fde5a18ec9ce5d",
+        "frontier/checkpoints.py": "6bb28da9139e134bad03a1e9a2bd40781a58aa6741337e187726e3839bd71974",
+        "frontier/native_inputs.py": "49fe02f41b93d65a59e83a579f2d27e824d383f876eda8d7764eb7674b48dc1f",
+        "frontier/observation.py": "0f01591b85af976a34c64d76e506e7cc85cb4f7ede8f3827d8177584cdb5605e",
+        "frontier/observation_training.py": "d926db1824e679ac0029900277f0979ae5c43f077ff9b5137a6ebe160643768e",
+        "frontier/observation_worker.py": "a0ec8a10f02917ddc70785410a41fcb56b0b3c3c9dc048cc8546dba4b4d0363a",
+        "frontier/retention.py": "650fc971c28fd5cd62052af6c9ec36f98fef86e3edd6c1d5c25230beafc59617"
+      },
+      "worker_source_matches_snapshot": true
+    },
+    "D2D3": {
+      "continuation_source_matches_snapshot": true,
+      "continuation_sources": {
+        "frontier/observation_continuation.py": "4113908ce988fe3599d6eea1ba8668d43ec864641ddbec96d3cd4cd30181b649",
+        "frontier/observation_recovery.py": "121c28b0cf79d92c6e94629f119a0479d10f7123f1d3016a0707761e97138adf"
+      },
+      "deployment_common_sha256": "a65f9152650429caf19703b8df4fa39af72dc743e138fb3770735342fc5f34b4",
+      "source_manifest_sha256": "d15446a6cf23283883547deb05ff6fe9ab6ebac009a8d761cef73afbc60b2c67",
+      "worker_source_files": {
+        "frontier/__init__.py": "b86c495051d46653b8f0e36e97c73c7fc57693dfaced2f8407fde5a18ec9ce5d",
+        "frontier/checkpoints.py": "6bb28da9139e134bad03a1e9a2bd40781a58aa6741337e187726e3839bd71974",
+        "frontier/native_inputs.py": "49fe02f41b93d65a59e83a579f2d27e824d383f876eda8d7764eb7674b48dc1f",
+        "frontier/observation.py": "0f01591b85af976a34c64d76e506e7cc85cb4f7ede8f3827d8177584cdb5605e",
+        "frontier/observation_training.py": "d926db1824e679ac0029900277f0979ae5c43f077ff9b5137a6ebe160643768e",
+        "frontier/observation_worker.py": "a0ec8a10f02917ddc70785410a41fcb56b0b3c3c9dc048cc8546dba4b4d0363a",
+        "frontier/retention.py": "650fc971c28fd5cd62052af6c9ec36f98fef86e3edd6c1d5c25230beafc59617"
+      },
+      "worker_source_matches_snapshot": true
+    }
+  },
+  "publication_date_local": "2026-10-16",
+  "schema": "credo.frontier.source-publication.v1",
+  "scientific_execution_performed_for_publication": false,
+  "source_workspace_name": "credo_performance_frontier_20261015_v1",
+  "time_zone": "America/Chicago"
+}

@@ -1,0 +1,76 @@
+{
+  "schema": "credo.frontier.assessment-support.v1",
+  "recorded_at_utc": "2026-10-15 23:37:55 UTC",
+  "status": "prospective_common_support_rule_bound_before_scientific_main_fitting_or_assessment",
+  "authority": {
+    "user_choice": "Use common paired-support scores with full coverage reporting (Recommended)",
+    "scope": "New performance-frontier study only; historical U/R/C, full-DDR and comparator dispositions unchanged",
+    "GPU_recovery_approval": false,
+    "scientific_launch_authority_from_this_file_alone": false
+  },
+  "population": {
+    "query": "One exact held-out donor/fitting subset/selected representation/complete catalog",
+    "forecast": "Every positive-RNA Stim8hr guide, irrespective of endpoint support or fitted target membership",
+    "paired": "Positive-RNA Stim8hr AND positive-RNA Stim48hr in the same ordered catalog; identical for every candidate, calibration and seed on this fold/query",
+    "rule_frozen_before_outcomes": true,
+    "actual_membership_materialized_only_after_verified_complete_forecast_release": true,
+    "model_output_used_to_choose_support": false,
+    "zero_counts_are_not_missing_state_imputation": true,
+    "unseen_targets": "Remain included under the same rule; target residual handling follows the frozen model",
+    "comparison_across_representations": "Within a fold-native representation first; retain normalized outer comparison, no raw latent-risk pooling"
+  },
+  "reductions": {
+    "state_energy": "Equal paired donor-guide laws, including NTC guides",
+    "spread_absolute_error": "Same equal paired guide laws",
+    "shape_mmd2": "Same equal paired guide laws",
+    "joint_mse": "Same equal paired guide laws, with unrenormalized COMPLETE-catalog predicted/observed frequencies and 49 registered moments",
+    "target_endpoint_mse": "Paired targeting guides only; equal guides within each target and equal represented targets within this query donor",
+    "pooled_effect_mse": "Same targeting-guide reduction; requires one common valid predicted and observed pooled NTC endpoint",
+    "pooled_control_endpoint_mse": "Exactly one standalone pooled NTC per query donor, not one independent control per target",
+    "count_ce_minus_entropy": "One complete ordered26504-category captured catalog per query donor, observed zeros retained",
+    "count_quadratic": "Same complete catalog, no paired-panel renormalization",
+    "donors": "Keep donor scores separate; later prospective selector/donor aggregation is unchanged",
+    "seed_scores": "Arithmetic mean of all prescribed seed scores; not a predictive ensemble"
+  },
+  "missingness": {
+    "no_paired_guides": "State/spread/MMD/joint channels unavailable, not zero",
+    "no_paired_targeting_guides": "Target endpoint and effect channels unavailable",
+    "missing_control_pool": "Control/effect channels unavailable; retain valid targeting endpoint scores",
+    "source_or_endpoint_NTC_pool": "All positive-RNA cells from prespecified NTC catalog at the relevant time, cell-equal; never substitute captured-guide weights",
+    "candidate_missing_prediction": "Keep the guide's common fixed weight and mark its required score unavailable; never shrink denominator by candidate",
+    "missing_endpoint": "Keep original forecast and complete-catalog counts; exclude from paired state/RNA score by this common predeclared rule and report explicit missing-support reason",
+    "invalid_nonfinite_prediction": "Numerical failure, not a removable guide or favorable complete case",
+    "no_capture_total": "Catalog score unavailable/failure under existing evaluator; do not synthesize an endpoint distribution"
+  },
+  "reporting": {
+    "all_catalog_guides": "Guide/target/control identity, source+endpoint captured and positive-RNA counts, source-only/paired/endpoint-only/neither flags, per-channel eligibility and exclusion reasons",
+    "control": "Source and endpoint positive-RNA pool size plus guide-count coverage; pooled control remains separate from abundance catalog",
+    "counts": "All26504categories and source/endpoint captured-zero counts retained",
+    "coverage": "Numerator/denominator, paired guides/targets, and missing support disclosed beside every comparison",
+    "claim": "State and molecular performance conditional on common measured paired support; not prediction accuracy for unobserved endpoint laws"
+  },
+  "implementation": {
+    "module": "frontier/assessment_support.py",
+    "row_ids": {
+      "guide": "guide:<ordered_catalog_index>",
+      "catalog": "catalog",
+      "control": "pooled_control"
+    },
+    "scoring_kernel": "frontier/evaluation.py",
+    "required_channels": [
+      "state_energy",
+      "spread_absolute_error",
+      "shape_mmd2",
+      "count_ce_minus_entropy",
+      "count_quadratic",
+      "joint_mse",
+      "target_endpoint_mse",
+      "pooled_control_endpoint_mse",
+      "pooled_effect_mse"
+    ],
+    "missing_required_score_rule": "Existing reduce_scores makes channel unavailable; no change to scoring arithmetic or selection score",
+    "new_optimizer_updates": 0,
+    "new_configurations": 0,
+    "operation_inventory_and_worker_admission": "Still separately required before scientific execution"
+  }
+}
